@@ -13,9 +13,9 @@
 #include "systemstub.h"
 #include "util.h"
 
-Game::Game(SystemStub *stub, FileSystem *fs, const char *savePath, int level, ResourceType ver, Language lang, WidescreenMode widescreenMode, bool autoSave, int midiDriver, uint32_t cheats)
+Game::Game(SystemStub *stub, FileSystem *fs, const char *savePath, int level, ResourceType ver, Language lang, WidescreenMode widescreenMode, bool autoSave, const PrfMidiDriver *midiDriver, const char *midiSoundFont, uint32_t cheats)
 	: _cut(&_res, stub, &_vid), _menu(&_res, stub, &_vid),
-	_mix(fs, stub, midiDriver), _res(fs, ver, lang), _seq(stub, &_mix), _vid(&_res, stub, widescreenMode),
+	_mix(fs, stub, midiDriver, midiSoundFont), _res(fs, ver, lang), _seq(stub, &_mix), _vid(&_res, stub, widescreenMode),
 	_stub(stub), _fs(fs), _savePath(savePath) {
 	_stateSlot = 1;
 	_inp_demPos = 0;
@@ -168,6 +168,10 @@ void Game::run() {
 				_skillLevel = kSkillNormal;
 				_currentLevel = _demoInputs[_demoBin].level;
 				_randSeed = 0;
+				if (_res.isMac()) {
+					_demoRandCounter = 0;
+					_demoRandRange = _demoInputsMac[_demoBin].rnd;
+				}
 			} else {
 				_demoBin = -1;
 				_skillLevel = _menu._skill;
@@ -315,7 +319,7 @@ void Game::resetGameState() {
 	_loadMap = true;
 	pge_resetMessages();
 	_blinkingConradCounter = 0;
-	_pge_processOBJ = false;
+	_pge_deathAck = false;
 	_pge_opGunVar = 0;
 	_textToDisplay = 0xFFFF;
 	_pge_zoomPiegeNum = 0;
@@ -372,8 +376,8 @@ void Game::mainLoop() {
 		_pge_opGunVar = 0;
 		return;
 	}
-	if (_currentLevel == 3 && _cut._id == 50) {
-		// do not draw next room when boarding taxi
+	if (_cut._id != 0xFFFF) {
+		// do not draw room level background when switching between cutscenes
 		return;
 	}
 	if (_loadMap) {
@@ -1004,7 +1008,7 @@ void Game::prepareAnims() {
 		if (pge_room >= 0 && pge_room < 0x40) {
 			pge = _pge_liveTable1[pge_room];
 			while (pge) {
-				if ((pge->init_PGE->object_type != 10 && pge->pos_y > 176) || (pge->init_PGE->object_type == 10 && pge->pos_y > 216)) {
+				if ((pge->init_PGE->object_type != kObjectTypeMonster && pge->pos_y > 176) || (pge->init_PGE->object_type == kObjectTypeMonster && pge->pos_y > 216)) {
 					prepareAnimsHelper(pge, 0, -216);
 				}
 				pge = pge->next_PGE_in_room;
@@ -1124,7 +1128,7 @@ void Game::prepareAnimsHelper(LivePGE *pge, int16_t dx, int16_t dy) {
 		}
 		const int16_t xpos = dx + pge->pos_x + 8;
 		const int16_t ypos = dy + pge->pos_y + 2;
-		if (pge->init_PGE->object_type == 11) {
+		if (pge->init_PGE->object_type == kObjectTypeRenderAbove) {
 			_animBuffers.addState(3, xpos, ypos, dataPtr, pge);
 		} else if (pge->flags & 0x10) {
 			_animBuffers.addState(2, xpos, ypos, dataPtr, pge);
@@ -1464,7 +1468,7 @@ void Game::drawCharacter(const uint8_t *dataPtr, int16_t pos_x, int16_t pos_y, u
 int Game::loadMonsterSprites(LivePGE *pge) {
 	debug(DBG_GAME, "Game::loadMonsterSprites()");
 	const InitPGE *init_pge = pge->init_PGE;
-	if (init_pge->obj_node_number != 0x49 && init_pge->object_type != 10) {
+	if (init_pge->obj_node_number != 0x49 && init_pge->object_type != kObjectTypeMonster) {
 		return 0xFFFF;
 	}
 	if (init_pge->obj_node_number == _curMonsterFrame) {
@@ -1488,9 +1492,10 @@ int Game::loadMonsterSprites(LivePGE *pge) {
 		case kResourceTypeAmiga:
 		case kResourceTypeSega: {
 				_res.load(_monsterNames[1][_curMonsterNum], Resource::OT_SPM);
-				const int offset = _vid._mapPalSlot3 * 16 + (_curMonsterNum & 1) * 8;
+				const int dst_offset = Video::PALETTE_INDEX_MONSTER * 16;
+				const int src_offset = _vid._mapPalSlot3 * 16 + (_curMonsterNum & 1) * 8;
 				for (int i = 0; i < 8; ++i) {
-					_vid.setPaletteColorBE(0x50 + i, offset + i);
+					_vid.setPaletteColorBE(dst_offset + i, src_offset + i);
 				}
 			}
 			break;
@@ -1499,16 +1504,15 @@ int Game::loadMonsterSprites(LivePGE *pge) {
 				const char *name = _monsterNames[0][_curMonsterNum];
 				_res.load(name, Resource::OT_SPRM);
 				_res.load_SPR_OFF(name, _res._sprm);
-				_vid.setPaletteSlotLE(5, _monsterPals[_curMonsterNum]);
+				_vid.setPaletteSlotLE(Video::PALETTE_INDEX_MONSTER, _monsterPals[_curMonsterNum]);
 			}
 			break;
 		case kResourceTypeMac: {
-				Color palette[256];
-				_res.MAC_loadMonsterData(_monsterNames[0][_curMonsterNum], palette);
-				static const int kMonsterPalette = 5;
+				Color palette[16];
+				_res.MAC_loadMonsterData(_monsterNames[0][_curMonsterNum], palette, _currentLevel);
+				const int offset = Video::PALETTE_INDEX_MONSTER * 16;
 				for (int i = 0; i < 16; ++i) {
-					const int color = kMonsterPalette * 16 + i;
-					_stub->setPaletteEntry(color, &palette[color]);
+					_stub->setPaletteEntry(offset + i, &palette[i]);
 				}
 			}
 			break;
@@ -1747,7 +1751,12 @@ void Game::loadLevelData() {
 
 	if (_demoBin != -1) {
 		_cut._id = 0xFFFF;
-		if (_demoInputs[_demoBin].room != 255) {
+		if (_res.isMac()) {
+			_pgeLive[0].room_location = _demoInputsMac[_demoBin].room;
+			_pgeLive[0].pos_x = _demoInputsMac[_demoBin].x;
+			_pgeLive[0].pos_y = _demoInputsMac[_demoBin].y;
+			_inp_demPos = 0;
+		} else if (_demoInputs[_demoBin].room != 255) {
 			_pgeLive[0].room_location = _demoInputs[_demoBin].room;
 			_pgeLive[0].pos_x = _demoInputs[_demoBin].x;
 			_pgeLive[0].pos_y = _demoInputs[_demoBin].y;
@@ -1885,10 +1894,11 @@ void Game::changeLevel() {
 }
 
 void Game::handleInventory() {
+	const int soundNum = _res.isMac() ? 52 : 66;
 	LivePGE *selected_pge = 0;
 	LivePGE *pge = &_pgeLive[0];
 	if (pge->life > 0 && pge->current_inventory_PGE != 0xFF) {
-		playSound(66, 0);
+		playSound(soundNum, 0);
 		InventoryItem items[24];
 		int num_items = 0;
 		uint8_t inv_pge = pge->current_inventory_PGE;
@@ -2023,7 +2033,7 @@ void Game::handleInventory() {
 			if (_stub->_pi.dirMask & PlayerInput::DIR_LEFT) {
 				_stub->_pi.dirMask &= ~PlayerInput::DIR_LEFT;
 				if (current_item > 0) {
-					int item_num = current_item % 4;
+					const int item_num = current_item % 4;
 					if (item_num > 0) {
 						--current_item;
 					}
@@ -2032,7 +2042,7 @@ void Game::handleInventory() {
 			if (_stub->_pi.dirMask & PlayerInput::DIR_RIGHT) {
 				_stub->_pi.dirMask &= ~PlayerInput::DIR_RIGHT;
 				if (current_item < num_items - 1) {
-					int item_num = current_item % 4;
+					const int item_num = current_item % 4;
 					if (item_num < 3) {
 						++current_item;
 					}
@@ -2048,7 +2058,7 @@ void Game::handleInventory() {
 		if (selected_pge) {
 			pge_setCurrentInventoryObject(selected_pge);
 		}
-		playSound(66, 0);
+		playSound(soundNum, 0);
 	}
 }
 
@@ -2187,10 +2197,10 @@ void Game::saveState(File *f) {
 		} else {
 			f->writeUint32BE(cs2->next_slot - &_col_slots2[0]);
 		}
-		if (cs2->unk2 == 0) {
+		if (cs2->collision_grid_ptr == 0) {
 			f->writeUint32BE(0xFFFFFFFF);
 		} else {
-			f->writeUint32BE(cs2->unk2 - &_res._ctData[0x100]);
+			f->writeUint32BE(cs2->collision_grid_ptr - &_res._ctData[0x100]);
 		}
 		f->writeByte(cs2->data_size);
 		f->write(cs2->data_buf, 0x10);
@@ -2257,9 +2267,9 @@ void Game::loadState(File *f, int version) {
 		}
 		off = f->readUint32BE();
 		if (off == 0xFFFFFFFF) {
-			cs2->unk2 = 0;
+			cs2->collision_grid_ptr = 0;
 		} else {
-			cs2->unk2 = &_res._ctData[0x100] + off;
+			cs2->collision_grid_ptr = &_res._ctData[0x100] + off;
 		}
 		cs2->data_size = f->readByte();
 		f->read(cs2->data_buf, 0x10);

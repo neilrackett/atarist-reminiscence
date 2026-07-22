@@ -69,7 +69,7 @@ void Game::pge_loadForCurrentLevel(uint16_t idx) {
 	live_pge->room_location = init_pge->init_room;
 
 	live_pge->life = init_pge->life;
-	if (_skillLevel >= 2 && init_pge->object_type == 10) {
+	if (_skillLevel >= 2 && init_pge->object_type == kObjectTypeMonster) {
 		live_pge->life *= 2;
 	}
 	live_pge->counter_value = 0;
@@ -119,7 +119,7 @@ void Game::pge_process(LivePGE *pge) {
 	_pge_currentPiegeRoom = pge->room_location;
 	MessagePGE *le = _pge_messagesTable[pge->index];
 	if (le) {
-		pge_setupNextAnimFrame(pge, le);
+		pge_messageAck(pge, le);
 	}
 	const uint8_t *anim_data = _res.getAniData(pge->obj_type);
 	if (_res._readUint16(anim_data) <= pge->anim_seq) {
@@ -132,7 +132,13 @@ void Game::pge_process(LivePGE *pge) {
 				pge_clearMessages(pge->index);
 				return;
 			}
-			uint16_t _ax = pge_execute(pge, init_pge, obj);
+			if (_res.isMac()) {
+				if (_currentLevel == 5 && _currentRoom == 10 && pge->index == 57) {
+					// workaround for demo inputs
+					_pge_currentPiegeFacingDir = 1;
+				}
+			}
+			const uint16_t _ax = pge_execute(pge, init_pge, obj);
 			if (_res.isDOS()) {
 				if (_currentLevel == 6 && (_currentRoom == 50 || _currentRoom == 51)) {
 					if (pge->index == 79 && _ax == 0xFFFF && obj->opcode1 == 0x60 && obj->opcode2 == 0 && obj->opcode3 == 0) {
@@ -159,16 +165,16 @@ void Game::pge_process(LivePGE *pge) {
 	pge_clearMessages(pge->index);
 }
 
-void Game::pge_setupNextAnimFrame(LivePGE *pge, MessagePGE *le) {
+void Game::pge_messageAck(LivePGE *pge, MessagePGE *le) {
 	const InitPGE *init_pge = pge->init_PGE;
 	assert(init_pge->obj_node_number < _res._numObjectNodes);
 	ObjectNode *on = _res._objectNodesMap[init_pge->obj_node_number];
 	Object *obj = &on->objects[pge->first_obj_number];
 	int i = pge->first_obj_number;
 	while (i < on->num_objects && pge->obj_type == obj->type) {
-		MessagePGE *next_le = le;
-		while (next_le) {
-			uint16_t msgNum = next_le->msg_num;
+		MessagePGE *cur_le = le;
+		while (cur_le) {
+			uint16_t msgNum = cur_le->msg_num;
 			if (obj->opcode2 == 0x6B) { // pge_op_isMessageReceived
 				if (obj->opcode_arg2 == 0) {
 					if (msgNum == 1 || msgNum == 2) goto set_anim;
@@ -177,7 +183,7 @@ void Game::pge_setupNextAnimFrame(LivePGE *pge, MessagePGE *le) {
 					if (msgNum == 3 || msgNum == 4) goto set_anim;
 				}
 			} else if (msgNum == obj->opcode_arg2) {
-				if (obj->opcode2 == 0x22 || obj->opcode2 == 0x6F) goto set_anim;
+				if (obj->opcode2 == 0x22 || obj->opcode2 == 0x6F) goto set_anim; // pge_hasPiegeSentMessage, pge_op_testAndAckMessage
 			}
 			if (obj->opcode1 == 0x6B) { // pge_op_isMessageReceived
 				if (obj->opcode_arg1 == 0) {
@@ -187,9 +193,9 @@ void Game::pge_setupNextAnimFrame(LivePGE *pge, MessagePGE *le) {
 					if (msgNum == 3 || msgNum == 4) goto set_anim;
 				}
 			} else if (msgNum == obj->opcode_arg1) {
-				if (obj->opcode1 == 0x22 || obj->opcode1 == 0x6F) goto set_anim;
+				if (obj->opcode1 == 0x22 || obj->opcode1 == 0x6F) goto set_anim; // pge_hasPiegeSentMessage, pge_op_testAndAckMessage
 			}
-			next_le = next_le->next_entry;
+			cur_le = cur_le->next_entry;
 		}
 		++obj;
 		++i;
@@ -315,12 +321,12 @@ int Game::pge_execute(LivePGE *live_pge, const InitPGE *init_pge, const Object *
 	}
 	if (obj->flags & 2) {
 		--live_pge->life;
-		if (init_pge->object_type == 1) {
-			_pge_processOBJ = true;
+		if (init_pge->object_type == kObjectTypeConrad) {
+			_pge_deathAck = true;
 			if (_cheats & kCheatLifeCounter) {
 				++live_pge->life;
 			}
-		} else if (init_pge->object_type == 10) {
+		} else if (init_pge->object_type == kObjectTypeMonster) {
 			_score += 100;
 			if (_cheats & kCheatOneHitKill) {
 				live_pge->life = 0;
@@ -341,11 +347,11 @@ int Game::pge_execute(LivePGE *live_pge, const InitPGE *init_pge, const Object *
 	}
 	live_pge->pos_y += obj->dy;
 
-	if (_pge_processOBJ) {
-		if (init_pge->object_type == 1) {
-			if (pge_processOBJ(live_pge) != 0) {
+	if (_pge_deathAck) {
+		if (init_pge->object_type == kObjectTypeConrad) {
+			if (pge_deathAck(live_pge) != 0) {
 				_blinkingConradCounter = 60;
-				_pge_processOBJ = false;
+				_pge_deathAck = false;
 			}
 		}
 	}
@@ -397,18 +403,18 @@ void Game::pge_setupDefaultAnim(LivePGE *pge) {
 	}
 }
 
-uint16_t Game::pge_processOBJ(LivePGE *pge) {
+uint16_t Game::pge_deathAck(LivePGE *pge) {
 	const InitPGE *init_pge = pge->init_PGE;
 	assert(init_pge->obj_node_number < _res._numObjectNodes);
 	ObjectNode *on = _res._objectNodesMap[init_pge->obj_node_number];
 	Object *obj = &on->objects[pge->first_obj_number];
 	int i = pge->first_obj_number;
 	while (i < on->num_objects && pge->obj_type == obj->type) {
-		if (obj->opcode2 == 0x6B) return 0xFFFF;
-		if (obj->opcode2 == 0x22 && obj->opcode_arg2 <= 4) return 0xFFFF;
+		if (obj->opcode2 == 0x6B) return 0xFFFF; // pge_op_isMessageReceived
+		if (obj->opcode2 == 0x22 && obj->opcode_arg2 <= 4) return 0xFFFF; // pge_hasPiegeSentMessage
 
-		if (obj->opcode1 == 0x6B) return 0xFFFF;
-		if (obj->opcode1 == 0x22 && obj->opcode_arg1 <= 4) return 0xFFFF;
+		if (obj->opcode1 == 0x6B) return 0xFFFF; // pge_op_isMessageReceived
+		if (obj->opcode1 == 0x22 && obj->opcode_arg1 <= 4) return 0xFFFF; // pge_hasPiegeSentMessage
 
 		++obj;
 		++i;
@@ -437,7 +443,7 @@ void Game::pge_setupOtherPieges(LivePGE *pge, const InitPGE *init_pge) {
 			room = room_ct_data[room];
 			pge->room_location = room;
 		}
-		if (init_pge->object_type == 1) {
+		if (init_pge->object_type == kObjectTypeConrad) {
 			_currentRoom = room;
 			col_prepareRoomState();
 			_loadMap = true;
@@ -454,7 +460,7 @@ void Game::pge_setupOtherPieges(LivePGE *pge, const InitPGE *init_pge) {
 				if (room >= 0 && room < 0x40) {
 					pge_it = _pge_liveTable1[room];
 					while (pge_it) {
-						if (pge_it->init_PGE->object_type != 10 && pge_it->pos_y >= 48 && (pge_it->init_PGE->flags & 4)) {
+						if (pge_it->init_PGE->object_type != kObjectTypeMonster && pge_it->pos_y >= 48 && (pge_it->init_PGE->flags & 4)) {
 							_pge_liveTable2[pge_it->index] = pge_it;
 							pge_it->flags |= 4;
 						}
@@ -465,7 +471,7 @@ void Game::pge_setupOtherPieges(LivePGE *pge, const InitPGE *init_pge) {
 				if (room >= 0 && room < 0x40) {
 					pge_it = _pge_liveTable1[room];
 					while (pge_it) {
-						if (pge_it->init_PGE->object_type != 10 && pge_it->pos_y >= 176 && (pge_it->init_PGE->flags & 4)) {
+						if (pge_it->init_PGE->object_type != kObjectTypeMonster && pge_it->pos_y >= 176 && (pge_it->init_PGE->flags & 4)) {
 							_pge_liveTable2[pge_it->index] = pge_it;
 							pge_it->flags |= 4;
 						}
@@ -840,7 +846,7 @@ int Game::pge_op_sendMessageData3(ObjectOpcodeArgs *args) {
 int Game::pge_op_isPiegeDead(ObjectOpcodeArgs *args) {
 	LivePGE *pge = args->pge;
 	if (pge->life <= 0) {
-		if (pge->init_PGE->object_type == 10) {
+		if (pge->init_PGE->object_type == kObjectTypeMonster) {
 			_score += 100;
 		}
 		return 1;
@@ -876,15 +882,15 @@ int Game::pge_op_collides1o1u(ObjectOpcodeArgs *args) {
 }
 
 int Game::pge_o_unk0x2B(ObjectOpcodeArgs *args) {
-	return pge_ZOrder(args->pge, args->a, &Game::pge_ZOrderIfTypeAndDifferentDirection, 0);
+	return pge_collideTest(args->pge, args->a, &Game::pge_collideTestIfTypeAndDifferentDirection, 0);
 }
 
 int Game::pge_o_unk0x2C(ObjectOpcodeArgs *args) {
-	return pge_ZOrder(args->pge, args->a, &Game::pge_ZOrderIfTypeAndSameDirection, 0);
+	return pge_collideTest(args->pge, args->a, &Game::pge_collideTestIfTypeAndSameDirection, 0);
 }
 
 int Game::pge_o_unk0x2D(ObjectOpcodeArgs *args) {
-	return pge_ZOrder(args->pge, args->a, &Game::pge_ZOrderByObj, 0) ^ 1;
+	return pge_collideTest(args->pge, args->a, &Game::pge_collideTestByObj, 0) ^ 1;
 }
 
 int Game::pge_op_nop(ObjectOpcodeArgs *args) {
@@ -906,7 +912,7 @@ int Game::pge_op_addItemToInventory(ObjectOpcodeArgs *args) {
 	return 0xFFFF;
 }
 
-int Game::pge_op_copyPiege(ObjectOpcodeArgs *args) {
+int Game::pge_op_dropObject(ObjectOpcodeArgs *args) {
 	LivePGE *src = &_pgeLive[args->a];
 	LivePGE *dst = args->pge;
 
@@ -983,11 +989,11 @@ int Game::pge_hasMessageData3(ObjectOpcodeArgs *args) {
 }
 
 int Game::pge_o_unk0x3C(ObjectOpcodeArgs *args) {
-	return pge_ZOrder(args->pge, args->a, &Game::pge_ZOrderByAnimYIfType, args->b);
+	return pge_collideTest(args->pge, args->a, &Game::pge_collideTestByAnimYIfType, args->b);
 }
 
 int Game::pge_o_unk0x3D(ObjectOpcodeArgs *args) {
-	return pge_ZOrder(args->pge, args->a, &Game::pge_ZOrderByAnimY, 0);
+	return pge_collideTest(args->pge, args->a, &Game::pge_collideTestByAnimY, 0);
 }
 
 int Game::pge_op_setPiegeCounter(ObjectOpcodeArgs *args) {
@@ -1030,8 +1036,8 @@ int Game::pge_o_unk0x40(ObjectOpcodeArgs *args) {
 			if (_cx > 0x10) {
 				_cx = 0x10;
 			}
-			int8_t *var2 = &_res._ctData[0x100] + pge_room * 0x70 + grid_pos_y * 2 + 0x10 + grid_pos_x;
-			uint8_t *var4 = _col_activeCollisionSlots + col_area * 0x30 + grid_pos_y + grid_pos_x;
+			const int8_t *var2 = &_res._ctData[0x100] + pge_room * 0x70 + grid_pos_y * 2 + 0x10 + grid_pos_x;
+			const uint8_t *var4 = _col_activeCollisionSlots + col_area * 0x30 + grid_pos_y + grid_pos_x;
 			int16_t var12 = grid_pos_x;
 			--_cx;
 			do {
@@ -1067,8 +1073,8 @@ int Game::pge_o_unk0x40(ObjectOpcodeArgs *args) {
 			if (_cx > 0x10) {
 				_cx = 0x10;
 			}
-			int8_t *var2 = &_res._ctData[0x101] + pge_room * 0x70 + grid_pos_y * 2 + 0x10 + grid_pos_x;
-			uint8_t *var4 = _col_activeCollisionSlots + 1 + col_area * 0x30 + grid_pos_y + grid_pos_x;
+			const int8_t *var2 = &_res._ctData[0x101] + pge_room * 0x70 + grid_pos_y * 2 + 0x10 + grid_pos_x;
+			const uint8_t *var4 = _col_activeCollisionSlots + 1 + col_area * 0x30 + grid_pos_y + grid_pos_x;
 			int16_t var12 = grid_pos_x;
 			--_cx;
 			do {
@@ -1156,18 +1162,18 @@ int Game::pge_op_loadPiegeCounter(ObjectOpcodeArgs *args) {
 }
 
 int Game::pge_o_unk0x45(ObjectOpcodeArgs *args) {
-	return pge_ZOrder(args->pge, args->a, &Game::pge_ZOrderByNumber, 0);
+	return pge_collideTest(args->pge, args->a, &Game::pge_collideTestByNumber, 0);
 }
 
 int Game::pge_o_unk0x46(ObjectOpcodeArgs *args) {
 	_pge_compareVar1 = 0;
-	pge_ZOrder(args->pge, args->a, &Game::pge_ZOrderIfDifferentDirection, 0);
+	pge_collideTest(args->pge, args->a, &Game::pge_collideTestIfDifferentDirection, 0);
 	return _pge_compareVar1;
 }
 
 int Game::pge_o_unk0x47(ObjectOpcodeArgs *args) {
 	_pge_compareVar2 = 0;
-	pge_ZOrder(args->pge, args->a, &Game::pge_ZOrderIfSameDirection, 0);
+	pge_collideTest(args->pge, args->a, &Game::pge_collideTestIfSameDirection, 0);
 	return _pge_compareVar2;
 }
 
@@ -1182,7 +1188,7 @@ int Game::pge_o_unk0x48(ObjectOpcodeArgs *args) {
 }
 
 int Game::pge_o_unk0x49(ObjectOpcodeArgs *args) {
-	return pge_ZOrder(&_pgeLive[0], args->a, &Game::pge_ZOrderIfIndex, args->pge->init_PGE->data[0]);
+	return pge_collideTest(&_pgeLive[0], args->a, &Game::pge_collideTestIfIndex, args->pge->init_PGE->data[0]);
 }
 
 int Game::pge_op_killInventoryPiege(ObjectOpcodeArgs *args) {
@@ -1209,7 +1215,7 @@ int Game::pge_op_killPiege(ObjectOpcodeArgs *args) {
 	pge->room_location = 0xFE;
 	pge->flags &= ~4;
 	_pge_liveTable2[pge->index] = 0;
-	if (pge->init_PGE->object_type == 10) {
+	if (pge->init_PGE->object_type == kObjectTypeMonster) {
 		_score += 200;
 	}
 	return 0xFFFF;
@@ -1243,7 +1249,7 @@ int Game::pge_op_playDefaultDeathCutscene(ObjectOpcodeArgs *args) {
 }
 
 int Game::pge_o_unk0x50(ObjectOpcodeArgs *args) {
-	return pge_ZOrder(args->pge, args->a, &Game::pge_ZOrderByObj, 0);
+	return pge_collideTest(args->pge, args->a, &Game::pge_collideTestByObj, 0);
 }
 
 int Game::pge_o_unk0x52(ObjectOpcodeArgs *args) {
@@ -1275,7 +1281,7 @@ int Game::pge_op_setPiegeDefaultAnim(ObjectOpcodeArgs *args) {
 	assert(args->a >= 0 && args->a < 4);
 	const InitPGE *init_pge = args->pge->init_PGE;
 	args->pge->room_location = init_pge->data[args->a];
-	if (init_pge->object_type == 1) {
+	if (init_pge->object_type == kObjectTypeConrad) {
 		_loadMap = true;
 	}
 	pge_setupDefaultAnim(args->pge);
@@ -1366,13 +1372,13 @@ int Game::pge_o_unk0x5F(ObjectOpcodeArgs *args) {
 	return 0;
 }
 
-int Game::pge_op_findAndCopyPiege(ObjectOpcodeArgs *args) {
+int Game::pge_op_locateMessage(ObjectOpcodeArgs *args) {
 	MessagePGE *le = _pge_messagesTable[args->pge->index];
 	while (le) {
 		if (le->msg_num == args->a) {
 			args->a = le->src_pge;
 			args->b = 0;
-			pge_op_copyPiege(args);
+			pge_op_dropObject(args);
 			return 1;
 		}
 		le = le->next_entry;
@@ -1383,6 +1389,14 @@ int Game::pge_op_findAndCopyPiege(ObjectOpcodeArgs *args) {
 int Game::pge_op_isInRandomRange(ObjectOpcodeArgs *args) {
 	uint16_t n = args->a;
 	if (n != 0) {
+		if (_demoBin != -1 && _res.isMac()) {
+			const int x = _demoRandCounter;
+			++_demoRandCounter;
+			if (_demoRandCounter >= _demoRandRange) {
+				_demoRandCounter = 0;
+			}
+			return (x % n) == 0 ? 1 : 0;
+		}
 		if ((getRandomNumber() % n) == 0) {
 			return 1;
 		}
@@ -1445,7 +1459,7 @@ int Game::pge_o_unk0x6A(ObjectOpcodeArgs *args) {
 	if (pge_room < 0 || pge_room >= 0x40) return 0;
 	int8_t _bl;
 	int col_area = 0;
-	int8_t *ct_data;
+	const int8_t *ct_data;
 	if (_currentRoom == pge_room) {
 		col_area = 1;
 	} else if (_col_currentLeftRoom == pge_room) {
@@ -1468,7 +1482,7 @@ int Game::pge_o_unk0x6A(ObjectOpcodeArgs *args) {
 				_cx = 0x10;
 			}
 			ct_data = &_res._ctData[0x100] + pge_room * 0x70 + grid_pos_y * 2 + 0x10 + grid_pos_x;
-			uint8_t *var4 = _col_activeCollisionSlots + col_area * 0x30 + grid_pos_y + grid_pos_x;
+			const uint8_t *var4 = _col_activeCollisionSlots + col_area * 0x30 + grid_pos_y + grid_pos_x;
 			++var4;
 			++ct_data;
 			int16_t varA = grid_pos_x;
@@ -1490,7 +1504,7 @@ int Game::pge_o_unk0x6A(ObjectOpcodeArgs *args) {
 					do {
 						_si = collision_slot->live_pge;
 						if (args->pge != _si && (_si->flags & 4) && _si->life >= 0) {
-							if (_si->init_PGE->object_type == 1 || _si->init_PGE->object_type == 10) {
+							if (_si->init_PGE->object_type == kObjectTypeConrad || _si->init_PGE->object_type == kObjectTypeMonster) {
 								return 1;
 							}
 						}
@@ -1508,7 +1522,7 @@ int Game::pge_o_unk0x6A(ObjectOpcodeArgs *args) {
 				_cx = 0x10;
 			}
 			ct_data = &_res._ctData[0x101] + pge_room * 0x70 + grid_pos_y * 2 + 0x10 + grid_pos_x;
-			uint8_t *var4 = _col_activeCollisionSlots + 1 + col_area * 0x30 + grid_pos_y + grid_pos_x;
+			const uint8_t *var4 = _col_activeCollisionSlots + 1 + col_area * 0x30 + grid_pos_y + grid_pos_x;
 			int16_t varA = grid_pos_x;
 			goto loc_0_15446;
 			do {
@@ -1530,7 +1544,7 @@ loc_0_15446:
 					do {
 						_si = collision_slot->live_pge;
 						if (args->pge != _si && (_si->flags & 4) && _si->life >= 0) {
-							if (_si->init_PGE->object_type == 1 || _si->init_PGE->object_type == 10) {
+							if (_si->init_PGE->object_type == kObjectTypeConrad || _si->init_PGE->object_type == kObjectTypeMonster) {
 								return 1;
 							}
 						}
@@ -1591,7 +1605,7 @@ int Game::pge_op_isCollidingObject(ObjectOpcodeArgs *args) {
 }
 
 // elevator
-int Game::pge_o_unk0x6E(ObjectOpcodeArgs *args) {
+int Game::pge_op_enterInvMessage(ObjectOpcodeArgs *args) {
 	MessagePGE *le = _pge_messagesTable[args->pge->index];
 	while (le) {
 		if (args->a == le->msg_num) {
@@ -1604,12 +1618,12 @@ int Game::pge_o_unk0x6E(ObjectOpcodeArgs *args) {
 }
 
 
-int Game::pge_o_unk0x6F(ObjectOpcodeArgs *args) {
+int Game::pge_op_testAndAckMessage(ObjectOpcodeArgs *args) {
 	LivePGE *pge = args->pge;
 	MessagePGE *le = _pge_messagesTable[pge->index];
 	while (le) {
 		if (args->a == le->msg_num) {
-			pge_sendMessage(pge->index, le->src_pge, 0xC);
+			pge_sendMessage(pge->index, le->src_pge, 12);
 			return 1;
 		}
 		le = le->next_entry;
@@ -1627,7 +1641,7 @@ int Game::pge_o_unk0x70(ObjectOpcodeArgs *args) {
 }
 
 // elevator
-int Game::pge_o_unk0x71(ObjectOpcodeArgs *args) {
+int Game::pge_op_exitInvMessage(ObjectOpcodeArgs *args) {
 	LivePGE *pge = args->pge;
 	MessagePGE *le = _pge_messagesTable[pge->index];
 	while (le) {
@@ -1641,7 +1655,7 @@ int Game::pge_o_unk0x71(ObjectOpcodeArgs *args) {
 }
 
 int Game::pge_o_unk0x72(ObjectOpcodeArgs *args) {
-	int8_t *grid_data = &_res._ctData[0x100] + args->pge->room_location * 0x70;
+	const int8_t *grid_data = &_res._ctData[0x100] + args->pge->room_location * 0x70;
 	int16_t pge_pos_y = ((args->pge->pos_y / 36) & ~1) + args->a;
 	int16_t pge_pos_x = (args->pge->pos_x + 8) >> 4;
 	grid_data += pge_pos_y * 16 + pge_pos_x;
@@ -1649,11 +1663,11 @@ int Game::pge_o_unk0x72(ObjectOpcodeArgs *args) {
 	CollisionSlot2 *_di = _col_slots2Next;
 	int count = 256; // ARRAYSIZE(_col_slots2)
 	while (_di && count != 0) {
-		if (_di->unk2 != grid_data) {
+		if (_di->collision_grid_ptr != grid_data) {
 			_di = _di->next_slot;
 			--count;
 		} else {
-			memcpy(_di->unk2, _di->data_buf, _di->data_size + 1);
+			memcpy(_di->collision_grid_ptr, _di->data_buf, _di->data_size + 1);
 			break;
 		}
 	}
@@ -1714,7 +1728,7 @@ int Game::pge_op_isAboveConrad(ObjectOpcodeArgs *args) {
 	return 0;
 }
 
-int Game::pge_op_isNotFacingConrad(ObjectOpcodeArgs *args) {
+int Game::pge_op_testConradLeft(ObjectOpcodeArgs *args) {
 	LivePGE *pge = args->pge;
 	LivePGE *pge_conrad = &_pgeLive[0];
 	if (pge->pos_y / 72 == (pge_conrad->pos_y - 8) / 72) { // same grid cell
@@ -1755,7 +1769,7 @@ int Game::pge_op_isNotFacingConrad(ObjectOpcodeArgs *args) {
 	return 0;
 }
 
-int Game::pge_op_isFacingConrad(ObjectOpcodeArgs *args) {
+int Game::pge_op_testConradRight(ObjectOpcodeArgs *args) {
 	LivePGE *pge = args->pge;
 	LivePGE *pge_conrad = &_pgeLive[0];
 	if (pge->pos_y / 72 == (pge_conrad->pos_y - 8) / 72) {
@@ -1836,7 +1850,7 @@ int Game::pge_op_playSound(ObjectOpcodeArgs *args) {
 
 int Game::pge_o_unk0x7E(ObjectOpcodeArgs *args) {
 	_pge_compareVar1 = 0;
-	pge_ZOrder(args->pge, args->a, &Game::pge_ZOrderByIndex, 0);
+	pge_collideTest(args->pge, args->a, &Game::pge_collideTestByIndex, 0);
 	return _pge_compareVar1;
 }
 
@@ -1848,7 +1862,7 @@ int Game::pge_o_unk0x7F(ObjectOpcodeArgs *args) {
 		CollisionSlot *slot = _col_slotsTable[var4];
 		while (slot) {
 			if (slot->live_pge != args->pge) {
-				if (slot->live_pge->init_PGE->object_type == 3 && var2 != slot->live_pge->ref_inventory_PGE) {
+				if (slot->live_pge->init_PGE->object_type == kObjectTypeCollectible && var2 != slot->live_pge->ref_inventory_PGE) {
 					return 0;
 				}
 			}
@@ -1923,7 +1937,7 @@ int Game::pge_op_changeRoom(ObjectOpcodeArgs *args) {
 			}
 			live_pge_2->first_obj_number = i;
 		}
-		if (init_pge_2->object_type == 1) {
+		if (init_pge_2->object_type == kObjectTypeConrad) {
 			if (_currentRoom != live_pge_2->room_location) {
 				_currentRoom = live_pge_2->room_location;
 				loadLevelRoom();
@@ -2076,7 +2090,7 @@ int Game::pge_updateCollisionState(LivePGE *pge, int16_t pge_dy, uint8_t value) 
 			grid_data -= i;
 		}
 		while (slot1) {
-			if (slot1->unk2 == grid_data) {
+			if (slot1->collision_grid_ptr == grid_data) {
 				slot1->data_size = pge_collision_data_len - 1;
 				assert(pge_collision_data_len < 0x70);
 				memset(grid_data, value, pge_collision_data_len);
@@ -2105,7 +2119,7 @@ int Game::pge_updateCollisionState(LivePGE *pge, int16_t pge_dy, uint8_t value) 
 		}
 		if (_col_slots2Cur < &_col_slots2[255]) {
 			slot1 = _col_slots2Cur;
-			slot1->unk2 = grid_data;
+			slot1->collision_grid_ptr = grid_data;
 			slot1->data_size = pge_collision_data_len - 1;
 			uint8_t *dst = &slot1->data_buf[0];
 			int8_t *src = grid_data;
@@ -2123,7 +2137,7 @@ int Game::pge_updateCollisionState(LivePGE *pge, int16_t pge_dy, uint8_t value) 
 	return 1;
 }
 
-int Game::pge_ZOrder(LivePGE *pge, int16_t num, pge_ZOrderCallback compare, uint16_t unk) {
+int Game::pge_collideTest(LivePGE *pge, int16_t num, pge_CollideTestCallback compare, uint16_t unk) {
 	uint8_t slot = pge->collision_slot;
 	while (slot != 0xFF) {
 		CollisionSlot *cs = _col_slotsTable[slot];
@@ -2198,7 +2212,7 @@ void Game::pge_removeFromInventory(LivePGE *pge1, LivePGE *pge2, LivePGE *pge3) 
 	}
 }
 
-int Game::pge_ZOrderByAnimY(LivePGE *pge1, LivePGE *pge2, uint8_t comp, uint8_t comp2) {
+int Game::pge_collideTestByAnimY(LivePGE *pge1, LivePGE *pge2, uint8_t comp, uint8_t comp2) {
 	if (pge1 != pge2) {
 		if (_res.getAniData(pge1->obj_type)[3] == comp) {
 			return 1;
@@ -2207,7 +2221,7 @@ int Game::pge_ZOrderByAnimY(LivePGE *pge1, LivePGE *pge2, uint8_t comp, uint8_t 
 	return 0;
 }
 
-int Game::pge_ZOrderByAnimYIfType(LivePGE *pge1, LivePGE *pge2, uint8_t comp, uint8_t comp2) {
+int Game::pge_collideTestByAnimYIfType(LivePGE *pge1, LivePGE *pge2, uint8_t comp, uint8_t comp2) {
 	if (pge1->init_PGE->object_type == comp2) {
 		if (_res.getAniData(pge1->obj_type)[3] == comp) {
 			return 1;
@@ -2216,7 +2230,7 @@ int Game::pge_ZOrderByAnimYIfType(LivePGE *pge1, LivePGE *pge2, uint8_t comp, ui
 	return 0;
 }
 
-int Game::pge_ZOrderIfIndex(LivePGE *pge1, LivePGE *pge2, uint8_t comp, uint8_t comp2) {
+int Game::pge_collideTestIfIndex(LivePGE *pge1, LivePGE *pge2, uint8_t comp, uint8_t comp2) {
 	if (pge1->index != comp2) {
 		pge_sendMessage(pge2->index, pge1->index, comp);
 		return 1;
@@ -2224,7 +2238,7 @@ int Game::pge_ZOrderIfIndex(LivePGE *pge1, LivePGE *pge2, uint8_t comp, uint8_t 
 	return 0;
 }
 
-int Game::pge_ZOrderByIndex(LivePGE *pge1, LivePGE *pge2, uint8_t comp, uint8_t comp2) {
+int Game::pge_collideTestByIndex(LivePGE *pge1, LivePGE *pge2, uint8_t comp, uint8_t comp2) {
 	if (pge1 != pge2) {
 		pge_sendMessage(pge2->index, pge1->index, comp);
 		_pge_compareVar1 = 0xFFFF;
@@ -2232,7 +2246,7 @@ int Game::pge_ZOrderByIndex(LivePGE *pge1, LivePGE *pge2, uint8_t comp, uint8_t 
 	return 0;
 }
 
-int Game::pge_ZOrderByObj(LivePGE *pge1, LivePGE *pge2, uint8_t comp, uint8_t comp2) {
+int Game::pge_collideTestByObj(LivePGE *pge1, LivePGE *pge2, uint8_t comp, uint8_t comp2) {
 	if (comp == 10) {
 		if (pge1->init_PGE->object_type == comp && pge1->life >= 0) {
 			return 1;
@@ -2245,7 +2259,7 @@ int Game::pge_ZOrderByObj(LivePGE *pge1, LivePGE *pge2, uint8_t comp, uint8_t co
 	return 0;
 }
 
-int Game::pge_ZOrderIfDifferentDirection(LivePGE *pge1, LivePGE *pge2, uint8_t comp, uint8_t comp2) {
+int Game::pge_collideTestIfDifferentDirection(LivePGE *pge1, LivePGE *pge2, uint8_t comp, uint8_t comp2) {
 	if (pge1 != pge2) {
 		if ((pge1->flags & 1) != (pge2->flags & 1)) {
 			_pge_compareVar1 = 1;
@@ -2258,7 +2272,7 @@ int Game::pge_ZOrderIfDifferentDirection(LivePGE *pge1, LivePGE *pge2, uint8_t c
 	return 0;
 }
 
-int Game::pge_ZOrderIfSameDirection(LivePGE *pge1, LivePGE *pge2, uint8_t comp, uint8_t comp2) {
+int Game::pge_collideTestIfSameDirection(LivePGE *pge1, LivePGE *pge2, uint8_t comp, uint8_t comp2) {
 	if (pge1 != pge2) {
 		if ((pge1->flags & 1) == (pge2->flags & 1)) {
 			_pge_compareVar2 = 1;
@@ -2271,7 +2285,7 @@ int Game::pge_ZOrderIfSameDirection(LivePGE *pge1, LivePGE *pge2, uint8_t comp, 
 	return 0;
 }
 
-int Game::pge_ZOrderIfTypeAndSameDirection(LivePGE *pge1, LivePGE *pge2, uint8_t comp, uint8_t comp2) {
+int Game::pge_collideTestIfTypeAndSameDirection(LivePGE *pge1, LivePGE *pge2, uint8_t comp, uint8_t comp2) {
 	if (pge1->init_PGE->object_type == comp) {
 		if ((pge1->flags & 1) == (pge2->flags & 1)) {
 			return 1;
@@ -2280,7 +2294,7 @@ int Game::pge_ZOrderIfTypeAndSameDirection(LivePGE *pge1, LivePGE *pge2, uint8_t
 	return 0;
 }
 
-int Game::pge_ZOrderIfTypeAndDifferentDirection(LivePGE *pge1, LivePGE *pge2, uint8_t comp, uint8_t comp2) {
+int Game::pge_collideTestIfTypeAndDifferentDirection(LivePGE *pge1, LivePGE *pge2, uint8_t comp, uint8_t comp2) {
 	if (pge1->init_PGE->object_type == comp) {
 		if ((pge1->flags & 1) != (pge2->flags & 1)) {
 			return 1;
@@ -2289,7 +2303,7 @@ int Game::pge_ZOrderIfTypeAndDifferentDirection(LivePGE *pge1, LivePGE *pge2, ui
 	return 0;
 }
 
-int Game::pge_ZOrderByNumber(LivePGE *pge1, LivePGE *pge2, uint8_t comp, uint8_t comp2) {
+int Game::pge_collideTestByNumber(LivePGE *pge1, LivePGE *pge2, uint8_t comp, uint8_t comp2) {
 	return pge1 - pge2;
 }
 

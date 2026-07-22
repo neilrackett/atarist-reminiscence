@@ -3,10 +3,8 @@
 #include <stdint.h>
 #include "midi_driver.h"
 
-#define MT32EMU_API_TYPE 1
+#define MT32EMU_API_TYPE 3
 #include <mt32emu.h>
-
-static const bool _isCM32L = false;
 
 static const char *CM32L_CONTROL_FILENAME = "CM32L_CONTROL.ROM";
 static const char *CM32L_PCM_FILENAME = "CM32L_PCM.ROM";
@@ -18,24 +16,30 @@ static uint32_t msg(int cmd, int param1 = 0, int param2 = 0) {
 }
 
 struct MidiDriver_mt32emu: MidiDriver {
+	int loadRom(const char *control_rom, const char *pcm_rom) {
+		if (mt32emu_add_rom_file(_context, control_rom) != MT32EMU_RC_ADDED_CONTROL_ROM) {
+			return -1;
+		}
+		if (mt32emu_add_rom_file(_context, pcm_rom) != MT32EMU_RC_ADDED_PCM_ROM) {
+			return -1;
+		}
+		return 0;
+	}
+
 	virtual int init() {
 		mt32emu_report_handler_i report = { 0 };
 		_context = mt32emu_create_context(report, this);
-		const char *control = _isCM32L ? CM32L_CONTROL_FILENAME : MT32_CONTROL_FILENAME;
-		if (mt32emu_add_rom_file(_context, control) != MT32EMU_RC_ADDED_CONTROL_ROM) {
-			fprintf(stdout, "WARNING: Failed to add MT32 rom file '%s'", control);
-			return -1;
-		}
-		const char *pcm = _isCM32L ? CM32L_PCM_FILENAME : MT32_PCM_FILENAME;
-		if (mt32emu_add_rom_file(_context, pcm) != MT32EMU_RC_ADDED_PCM_ROM) {
-			fprintf(stdout, "WARNING: Failed to add MT32 rom file '%s'", pcm);
-			return -1;
+		if (loadRom(MT32_CONTROL_FILENAME, MT32_PCM_FILENAME) < 0) {
+			if (loadRom(CM32L_CONTROL_FILENAME, CM32L_PCM_FILENAME) < 0) {
+				fprintf(stdout, "WARNING: Failed to load MT32 PCM and control rom files");
+				return -1;
+			}
 		}
 		mt32emu_rom_info romInfo;
 		mt32emu_get_rom_info(_context, &romInfo);
 		fprintf(stdout, "mt32emu version %s\n", mt32emu_get_library_version_string());
-		//fprintf(stdout, "control rom %s %s\n", romInfo.control_rom_id, romInfo.control_rom_description);
-		//fprintf(stdout, "pcm rom %s %s\n", romInfo.pcm_rom_id, romInfo.pcm_rom_description);
+		fprintf(stdout, "mt32 control rom id:%s '%s'\n", romInfo.control_rom_id, romInfo.control_rom_description);
+		fprintf(stdout, "mt32 pcm rom id:%s '%s'\n", romInfo.pcm_rom_id, romInfo.pcm_rom_description);
 
 		mt32emu_set_midi_delay_mode(_context, MT32EMU_MDM_IMMEDIATE);
 		return 0;
@@ -48,10 +52,13 @@ struct MidiDriver_mt32emu: MidiDriver {
 	}
 	virtual void reset(int rate) {
 		mt32emu_set_stereo_output_samplerate(_context, rate);
+		mt32emu_set_samplerate_conversion_quality(_context, MT32EMU_SRCQ_FASTEST);
+		mt32emu_select_renderer_type(_context, MT32EMU_RT_BIT16S);
 		if (mt32emu_is_open(_context)) {
 			mt32emu_close_synth(_context);
 		}
 		mt32emu_open_synth(_context);
+		// const int output_rate = mt32emu_get_actual_stereo_output_samplerate(_context);
 	}
 
 	virtual void noteOff(int channel, int note, int velocity) {

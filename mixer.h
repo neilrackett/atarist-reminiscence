@@ -15,7 +15,7 @@
 #include "sfx_player.h"
 
 struct MixerChannel {
-	uint8_t active;
+	bool active;
 	uint8_t volume;
 	const uint8_t *soundData;
 	uint32_t soundSize;
@@ -24,6 +24,7 @@ struct MixerChannel {
 };
 
 struct FileSystem;
+struct PrfMidiDriver;
 struct SystemStub;
 
 struct Mixer {
@@ -59,7 +60,7 @@ struct Mixer {
 	SfxPlayer _sfx;
 	int _musicTrack;
 
-	Mixer(FileSystem *fs, SystemStub *stub, int midiDriver);
+	Mixer(FileSystem *fs, SystemStub *stub, const PrfMidiDriver *midiDriver, const char *midiSoundFont);
 	void init();
 	void free();
 	void setPremixHook(PremixHook premixHook, void *userData);

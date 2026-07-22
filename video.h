@@ -21,7 +21,9 @@ struct Video {
 		SCREENBLOCK_W = 8,
 		SCREENBLOCK_H = 8,
 		CHAR_W = 8,
-		CHAR_H = 8
+		CHAR_H = 8,
+		PALETTE_INDEX_CONRAD = 4,
+		PALETTE_INDEX_MONSTER = 5,
 	};
 
 	static const uint8_t _conradPal1[];

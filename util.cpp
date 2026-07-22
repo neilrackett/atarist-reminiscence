@@ -24,7 +24,7 @@ void debug(uint32_t cm, const char *msg, ...) {
 	if (cm & g_debugMask) {
 		va_list va;
 		va_start(va, msg);
-		vsprintf(buf, msg, va);
+		vsnprintf(buf, sizeof(buf), msg, va);
 		va_end(va);
 		fprintf(stdout, "%s\n", buf);
 		fflush(stdout);
@@ -67,7 +67,7 @@ void info(const char *msg, ...) {
 	char buf[1024];
 	va_list va;
 	va_start(va, msg);
-	vsprintf(buf, msg, va);
+	vsnprintf(buf, sizeof(buf), msg, va);
 	va_end(va);
 	fprintf(stdout, "%s\n", buf);
 	fflush(stdout);

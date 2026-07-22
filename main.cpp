@@ -11,6 +11,7 @@
 #include "file.h"
 #include "fs.h"
 #include "game.h"
+#include "midi_driver.h"
 #include "scaler.h"
 #include "systemstub.h"
 #include "util.h"
@@ -26,7 +27,8 @@ static const char *USAGE =
 	"  --scaler=NAME@X   Graphics scaler (default 'scale@3')\n"
 	"  --language=LANG   Language (fr,en,de,sp,it,jp)\n"
 	"  --autosave        Save game state automatically\n"
-	"  --mididriver=MIDI Driver (adlib, mt32)\n"
+	"  --mididriver=MIDI Driver (adlib, fluidsynth, mt32)\n"
+	"  --soundfont=PATH  PAth to sound font (fluidsynth)\n"
 ;
 
 static const Features kFeaturesAmiga     = { false /* extended_intro */, true  /* bigendian */, 1, true  /* copy_protection */ };
@@ -61,7 +63,7 @@ static int detectVersion(FileSystem *fs) {
 	for (int i = 0; table[i].filename; ++i) {
 		File f;
 		if (f.open(table[i].filename, "rb", fs)) {
-			info("Detected %s version", table[i].name);
+			info("Found %s data files", table[i].name);
 			g_features = table[i].features;
 			return table[i].type;
 		}
@@ -91,7 +93,7 @@ static Language detectLanguage(FileSystem *fs) {
 			return table[i].language;
 		}
 	}
-	warning("Unable to detect language, using English");
+	// warning("Unable to detect language, using English");
 	return LANG_EN;
 }
 
@@ -208,6 +210,19 @@ static WidescreenMode parseWidescreen(const char *mode) {
 	return kWidescreenBlur;
 }
 
+static const PrfMidiDriver _prfMidiDrivers[] = {
+#ifdef USE_MIDI_DRIVER
+	{ MODE_ADLIB, TIMER_ADLIB_HZ, &midi_driver_adlib },
+#ifdef USE_MT32EMU
+	{ MODE_MT32, TIMER_MT32_HZ, &midi_driver_mt32 },
+#endif
+#ifdef USE_FLUIDSYNTH
+	{ MODE_MT32, TIMER_MT32_HZ, &midi_driver_fluidsynth },
+#endif
+#endif
+	{ -1, 0, 0 }
+};
+
 int main(int argc, char *argv[]) {
 	const char *dataPath = "DATA";
 	const char *savePath = ".";
@@ -219,7 +234,9 @@ int main(int argc, char *argv[]) {
 	WidescreenMode widescreen = kWidescreenNone;
 	ScalerParameters scalerParameters = ScalerParameters::defaults();
 	int forcedLanguage = -1;
-	int midiDriver = MODE_ADLIB;
+	const PrfMidiDriver *midiDriverPrf = 0;
+	int outputRate = 0;
+	const char *midiSoundFont = 0;
 	g_debugMask = 0; // DBG_CUT | DBG_VIDEO | DBG_RES | DBG_MENU | DBG_PGE | DBG_GAME | DBG_UNPACK | DBG_COL | DBG_MOD | DBG_SFX | DBG_FILE;
 	if (argc == 2) {
 		// data path as the only command line argument
@@ -242,6 +259,8 @@ int main(int argc, char *argv[]) {
 			{ "mididriver", required_argument, 0, 10 },
 			{ "debug",      required_argument, 0, 11 },
 			{ "maximized",  no_argument,       0, 12 },
+			{ "outputrate", required_argument, 0, 13 },
+			{ "soundfont",  required_argument, 0, 14 },
 			{ 0, 0, 0, 0 }
 		};
 		int index;
@@ -300,22 +319,14 @@ int main(int argc, char *argv[]) {
 			cheats = atoi(optarg);
 			break;
 		case 10: {
-				static const struct {
-					int mode;
-					const char *str;
-				} drivers[] = {
-					{ MODE_ADLIB, "adlib" },
-					{ MODE_MT32, "mt32" },
-					{ -1, 0 }
-				};
 				int i = 0;
-				for (; drivers[i].str; ++i) {
-					if (strcasecmp(drivers[i].str, optarg) == 0) {
-						midiDriver = drivers[i].mode;
+				for (; _prfMidiDrivers[i].info; ++i) {
+					if (strcasecmp(_prfMidiDrivers[i].info->name, optarg) == 0) {
+						midiDriverPrf = &_prfMidiDrivers[i];
 						break;
 					}
 				}
-				if (!drivers[i].str) {
+				if (!_prfMidiDrivers[i].info) {
 					warning("Invalid MIDI driver '%s'", optarg);
 				}
 			}
@@ -325,6 +336,12 @@ int main(int argc, char *argv[]) {
 			break;
 		case 12:
 			maximizedWindow = true;
+			break;
+		case 13:
+			outputRate = atoi(optarg);
+			break;
+		case 14:
+			midiSoundFont = strdup(optarg);
 			break;
 		default:
 			printf(USAGE, argv[0]);
@@ -341,8 +358,8 @@ int main(int argc, char *argv[]) {
 	assert(g_features);
 	const Language language = (forcedLanguage == -1) ? detectLanguage(&fs) : (Language)forcedLanguage;
 	SystemStub *stub = SystemStub_SDL_create();
-	Game *g = new Game(stub, &fs, savePath, levelNum, (ResourceType)version, language, widescreen, autoSave, midiDriver, cheats);
-	stub->init(g_caption, g->_vid._w, g->_vid._h, fullscreen, widescreen, maximizedWindow, &scalerParameters);
+	Game *g = new Game(stub, &fs, savePath, levelNum, (ResourceType)version, language, widescreen, autoSave, midiDriverPrf, midiSoundFont, cheats);
+	stub->init(g_caption, g->_vid._w, g->_vid._h, fullscreen, widescreen, maximizedWindow, &scalerParameters, outputRate);
 	g->run();
 	delete g;
 	stub->destroy();

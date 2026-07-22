@@ -14,37 +14,23 @@
 #include "prf_player.h"
 #include "util.h"
 
-static const struct {
-	int mode;
-	int hz;
-	const MidiDriverInfo *info;
-} _midiDrivers[] = {
-#ifdef USE_MIDI_DRIVER
-	{ MODE_ADLIB, TIMER_ADLIB_HZ, &midi_driver_adlib },
-	{ MODE_MT32, TIMER_MT32_HZ, &midi_driver_mt32 },
-#endif
-	{ -1, 0, 0 }
-};
-
 static const int kMusicVolume = 63;
 
-PrfPlayer::PrfPlayer(Mixer *mix, FileSystem *fs, int mode)
-	: _playing(false), _mixer(mix), _fs(fs), _mode(mode), _driver(0) {
-	for (int i = 0; _midiDrivers[i].info; ++i) {
-		if (_midiDrivers[i].mode == mode) {
-			_timerHz = _midiDrivers[i].hz;
-			_driver = _midiDrivers[i].info->create();
-			assert(_driver);
-			if (_driver->init() < 0) {
-				warning("Failed to initialize MIDI driver %s", _midiDrivers[i].info->name);
-				_driver = 0;
-			} else {
-				_driver->fixExRegisterAddress(g_options.fix_fmopl_e0_reg);
-			}
-			return;
+PrfPlayer::PrfPlayer(Mixer *mix, FileSystem *fs, const PrfMidiDriver *midiDriver, const char *midiSoundFont)
+	: _playing(false), _mixer(mix), _fs(fs), _driver(0) {
+	if (midiDriver) {
+		_mode = midiDriver->mode;
+		_timerHz = midiDriver->hz;
+		_driver = midiDriver->info->create();
+		assert(_driver);
+		_driver->fixExRegisterAddress(g_options.fix_fmopl_e0_reg);
+		_driver->setSoundFont(midiSoundFont);
+		if (_driver->init() < 0) {
+			warning("Failed to initialize MIDI driver %s", midiDriver->info->name);
+			_driver = 0;
 		}
+		return;
 	}
-	warning("no midi driver for mode %d", mode);
 }
 
 PrfPlayer::~PrfPlayer() {
@@ -180,7 +166,7 @@ void PrfPlayer::play() {
 	}
 	_timerTick = _musicTick = 0;
 	_samplesLeft = 0;
-	_samplesPerTick = _mixer->getSampleRate() / _timerHz;
+	_samplesPerTick = (_mixer->getSampleRate() / _timerHz) * _prfData.timerTicks;
 	_playing = true;
 	_mixer->setPremixHook(mixCallback, this);
 }
@@ -250,6 +236,11 @@ void PrfPlayer::handleTick() {
 			--current_track->counter;
 			continue;
 		}
+		updateTrack(track_index, track, current_track);
+	}
+}
+
+void PrfPlayer::updateTrack(int track_index, MidiTrack *track, PrfTrack *current_track) {
 	while (1) {
 		const MidiEvent &ev = track->event;
 		switch (ev.command & 0xF0) {
@@ -259,12 +250,7 @@ void PrfPlayer::handleTick() {
 				if (_mode == MODE_MT32) {
 					note += _prfData.mt32Notes[current_track->instrument_num];
 					velocity += _prfData.mt32Velocities[current_track->instrument_num];
-					if (velocity < 0) {
-						velocity = 0;
-					} else if (velocity > 127) {
-						velocity = 127;
-					}
-					mt32NoteOff(track_index, note, velocity);
+					mt32NoteOff(track_index, note, CLIP(velocity, 0, 127));
 				} else {
 					if (_prfData.adlibDoNotesLookup) {
 						note += _prfData.adlibNotes[current_track->instrument_num];
@@ -276,12 +262,7 @@ void PrfPlayer::handleTick() {
 					} else {
 						velocity += _prfData.adlibVelocities[track_index];
 					}
-					if (velocity < 0) {
-						velocity = 0;
-					} else if (velocity > 127) {
-						velocity = 127;
-					}
-					adlibNoteOff(track_index, note, velocity);
+					adlibNoteOff(track_index, note, CLIP(velocity, 0, 127));
 				}
 			}
 			break;
@@ -295,12 +276,7 @@ void PrfPlayer::handleTick() {
 						break;
 					}
 					velocity += _prfData.mt32Velocities[current_track->instrument_num];
-					if (velocity < 0) {
-						velocity = 0;
-					} else if (velocity > 127) {
-						velocity = 127;
-					}
-					mt32NoteOn(track_index, note, velocity);
+					mt32NoteOn(track_index, note, CLIP(velocity, 0, 127));
 				} else {
 					assert(_mode == MODE_ADLIB);
 					if (_prfData.adlibDoNotesLookup) {
@@ -317,12 +293,7 @@ void PrfPlayer::handleTick() {
 					} else {
 						velocity += _prfData.adlibVelocities[track_index];
 					}
-					if (velocity < 0) {
-						velocity = 0;
-					} else if (velocity > 127) {
-						velocity = 127;
-					}
-					adlibNoteOn(track_index, note, velocity);
+					adlibNoteOn(track_index, note, CLIP(velocity, 0, 127));
 				}
 			}
 			break;
@@ -381,40 +352,81 @@ void PrfPlayer::handleTick() {
 			break;
 		}
 	}
-	}
 }
 
 bool PrfPlayer::end() const {
 	return (_prfData.totalDurationTicks != 0) && _musicTick > _prfData.totalDurationTicks;
 }
 
-int PrfPlayer::readSamples(int16_t *samples, int count) {
+int PrfPlayer::tryBatch(int16_t *samples, int count) {
+	uint32_t minCounter = 0xFFFFFFFF;
+	bool anyActive = false;
+	for (int i = 0; i < _parser._tracksCount; ++i) {
+		if (!_parser._tracks[i].endOfTrack) {
+			anyActive = true;
+			if (_tracks[i].counter < minCounter) {
+				minCounter = _tracks[i].counter;
+			}
+		}
+	}
+	if (!anyActive || minCounter == 0) {
+		return 0;
+	}
+
+	int maxBatchTicks = MIN((int)minCounter, count / _samplesPerTick);
+	if (maxBatchTicks == 0) {
+		return 0;
+	}
+
+	int batchSamples = maxBatchTicks * _samplesPerTick;
+	_driver->readSamples(samples, batchSamples);
+
+	for (int i = 0; i < _parser._tracksCount; ++i) {
+		if (!_parser._tracks[i].endOfTrack) {
+			_tracks[i].counter -= maxBatchTicks;
+		}
+	}
+	if (_prfData.totalDurationTicks != 0) {
+		const uint32_t prev = _musicTick;
+		_musicTick += maxBatchTicks;
+		if (prev <= _prfData.totalDurationTicks && _musicTick > _prfData.totalDurationTicks) {
+			debug(DBG_PRF, "End of music");
+		}
+	}
+	return batchSamples;
+}
+
+int PrfPlayer::mix(int16_t *samples, int count) {
 	const int total = count;
 	while (count != 0) {
 		if (_samplesLeft == 0) {
 			handleTick();
+			_samplesLeft = _samplesPerTick;
+
+			const int batchSamples = tryBatch(samples, count);
+			if (batchSamples > 0) {
+				count -= batchSamples;
+				samples += batchSamples * 2;
+				_samplesLeft = 0;
+				continue;
+			}
+
 			if (_prfData.totalDurationTicks != 0) {
 				++_musicTick;
 				if (_musicTick == _prfData.totalDurationTicks + 1) {
 					debug(DBG_PRF, "End of music");
 				}
 			}
-			_samplesLeft = _samplesPerTick * _prfData.timerTicks;
 		}
-		const int len = (count < _samplesLeft) ? count : _samplesLeft;
+		const int len = MIN(count, _samplesLeft);
 		_driver->readSamples(samples, len);
 		_samplesLeft -= len;
 		count -= len;
 		samples += len * 2;
 	}
-	return total - count;
+	return total;
 }
 
 bool PrfPlayer::mixCallback(void *param, int16_t *buf, int len) {
-	return ((PrfPlayer *)param)->mix(buf, len);
-}
-
-bool PrfPlayer::mix(int16_t *buf, int len) {
-	const int count = readSamples(buf, len);
-	return count != 0;
+	return ((PrfPlayer *)param)->mix(buf, len) != 0;
 }

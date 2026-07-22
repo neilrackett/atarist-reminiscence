@@ -101,7 +101,7 @@ void Game::col_preparePiegeState(LivePGE *pge) {
 	}
 }
 
-uint16_t Game::col_getGridPos(LivePGE *pge, int16_t dx) {
+uint16_t Game::col_getGridPos(LivePGE *pge, int16_t dx) const {
 	int16_t x = pge->pos_x + dx;
 	int16_t y = pge->pos_y;
 
@@ -135,15 +135,16 @@ uint16_t Game::col_getGridPos(LivePGE *pge, int16_t dx) {
 	}
 }
 
-int16_t Game::col_findSlot(int16_t pos) {
+int16_t Game::col_findSlot(int16_t pos) const {
 	for (uint16_t i = 0; i < _col_curPos; ++i) {
-		if (_col_slotsTable[i]->ct_pos == pos)
+		if (_col_slotsTable[i]->ct_pos == pos) {
 			return i;
+		}
 	}
 	return -1;
 }
 
-int16_t Game::col_getGridData(LivePGE *pge, int16_t dy, int16_t dx) {
+int16_t Game::col_getGridData(LivePGE *pge, int16_t dy, int16_t dx) const {
 	if (_pge_currentPiegeFacingDir) {
 		dx = -dx;
 	}
@@ -401,7 +402,7 @@ int Game::col_detectGunHitCallback1(LivePGE *pge, int16_t arg2, int16_t arg4, in
 
 int Game::col_detectGunHitCallback2(LivePGE *pge1, LivePGE *pge2, int16_t arg4, int16_t) {
 	if (pge1 != pge2 && (pge1->flags & 4)) {
-		if (pge1->init_PGE->object_type == 1 || pge1->init_PGE->object_type == 10) {
+		if (pge1->init_PGE->object_type == kObjectTypeConrad || pge1->init_PGE->object_type == kObjectTypeMonster) {
 			uint8_t id;
 			if ((pge1->flags & 1) != (pge2->flags & 1)) {
 				id = 4;
@@ -425,7 +426,7 @@ int Game::col_detectGunHitCallback2(LivePGE *pge1, LivePGE *pge2, int16_t arg4, 
 
 int Game::col_detectGunHitCallback3(LivePGE *pge1, LivePGE *pge2, int16_t arg4, int16_t) {
 	if (pge1 != pge2 && (pge1->flags & 4)) {
-		if (pge1->init_PGE->object_type == 1 || pge1->init_PGE->object_type == 12 || pge1->init_PGE->object_type == 10) {
+		if (pge1->init_PGE->object_type == kObjectTypeConrad || pge1->init_PGE->object_type == kObjectTypeDestructible || pge1->init_PGE->object_type == kObjectTypeMonster) {
 			uint8_t id;
 			if ((pge1->flags & 1) != (pge2->flags & 1)) {
 				id = 4;

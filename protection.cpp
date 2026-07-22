@@ -8,12 +8,10 @@
 #include "screenshot.h"
 #include "systemstub.h"
 
-static uint8_t reverseBits(uint8_t ch) {
-	static const uint8_t lut[] = {
-		0x0, 0x8, 0x4, 0xC, 0x2, 0xA, 0x6, 0xE,
-		0x1, 0x9, 0x5, 0xD, 0x3, 0xB, 0x7, 0xF
-	};
-	return (lut[ch & 15] << 4) | lut[ch >> 4];
+static uint8_t reverseBits(uint8_t x) {
+	x = ((x & 0xAA) >> 1) | ((x & 0x55) << 1);
+	x = ((x & 0xCC) >> 2) | ((x & 0x33) << 2);
+	return (x >> 4) | (x << 4);
 }
 
 static uint8_t decryptChar(uint8_t ch) {

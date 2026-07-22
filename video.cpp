@@ -1102,12 +1102,12 @@ void Video::fillRect(int x, int y, int w, int h, uint8_t color) {
 }
 
 static void fixOffsetDecodeBuffer(DecodeBuffer *buf, const uint8_t *dataPtr, bool xflip) {
-        if (xflip) {
+	if (xflip) {
 		buf->dst_x += (int16_t)READ_BE_UINT16(dataPtr + 4) - READ_BE_UINT16(dataPtr) - 1;
-        } else {
+	} else {
 		buf->dst_x -= (int16_t)READ_BE_UINT16(dataPtr + 4);
-        }
-        buf->dst_y -= (int16_t)READ_BE_UINT16(dataPtr + 6);
+	}
+	buf->dst_y -= (int16_t)READ_BE_UINT16(dataPtr + 6);
 }
 
 void Video::MAC_drawSprite(int x, int y, const uint8_t *data, int frame, bool xflip, bool eraseBackground) {

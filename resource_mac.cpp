@@ -10,7 +10,8 @@ const char *ResourceMac::FILENAME1 = "Flashback.bin";
 const char *ResourceMac::FILENAME2 = "Flashback.rsrc";
 
 ResourceMac::ResourceMac(const char *filePath, FileSystem *fs)
-	: _dataOffset(0), _types(0), _entries(0), _sndIndex(-1) {
+	: _dataOffset(0), _types(0), _entries(0),
+		_animIndex(-1), _condIndex(-1), _objdIndex(-1), _lmapIndex(-1), _pmovIndex(-1), _polyIndex(-1), _ppssIndex(-1), _sndIndex(-1), _strsIndex(-1), _versIndex(-1) {
 	memset(&_map, 0, sizeof(_map));
 	_f.open(filePath, "rb", fs);
 }
@@ -28,7 +29,7 @@ ResourceMac::~ResourceMac() {
 void ResourceMac::load() {
 	const uint32_t sig = _f.readUint32BE();
 	if (sig == 0x00051607) { // AppleDouble
-		info("Load Macintosh data from AppleDouble");
+		// info("Load Macintosh data from AppleDouble");
 		_f.seek(24);
 		const int count = _f.readUint16BE();
 		for (int i = 0; i < count; ++i) {
@@ -41,10 +42,10 @@ void ResourceMac::load() {
 			}
 		}
 	} else { // MacBinary
-		info("Load Macintosh data from MacBinary");
+		// info("Load Macintosh data from MacBinary");
 		_f.seek(83);
-		uint32_t dataSize = _f.readUint32BE();
-		uint32_t resourceOffset = 128 + ((dataSize + 127) & ~127);
+		const uint32_t dataSize = _f.readUint32BE();
+		const uint32_t resourceOffset = 128 + ((dataSize + 127) & ~127);
 		loadResourceFork(resourceOffset, dataSize);
 	}
 }
@@ -52,7 +53,7 @@ void ResourceMac::load() {
 void ResourceMac::loadResourceFork(uint32_t resourceOffset, uint32_t dataSize) {
 	_f.seek(resourceOffset);
 	_dataOffset = resourceOffset + _f.readUint32BE();
-	uint32_t mapOffset = resourceOffset + _f.readUint32BE();
+	const uint32_t mapOffset = resourceOffset + _f.readUint32BE();
 
 	_f.seek(mapOffset + 22);
 	_f.readUint16BE();
@@ -66,8 +67,37 @@ void ResourceMac::loadResourceFork(uint32_t resourceOffset, uint32_t dataSize) {
 		_f.read(_types[i].id, 4);
 		_types[i].count = _f.readUint16BE() + 1;
 		_types[i].startOffset = _f.readUint16BE();
-		if (_sndIndex < 0 && memcmp(_types[i].id, "snd ", 4) == 0) {
+		switch (READ_BE_UINT32(_types[i].id)) {
+		case 0x414e494d: // 'ANIM'
+			_animIndex = i;
+			break;
+		case 0x434f4e44: // 'COND'
+			_condIndex = i;
+			break;
+		case 0x4f424a44: // 'OBJD'
+			_objdIndex = i;
+			break;
+		case 0x4c4d4150: // 'LMAP'
+			_lmapIndex = i;
+			break;
+		case 0x504d4f56: // 'PMOV'
+			_pmovIndex = i;
+			break;
+		case 0x504f4c59: // 'POLY'
+			_polyIndex = i;
+			break;
+		case 0x50505353: // 'PPSS'
+			_ppssIndex = i;
+			break;
+		case 0x736e6420: // 'snd '
 			_sndIndex = i;
+			break;
+		case 0x53545253: // 'strs'
+			_strsIndex = i;
+			break;
+		case 0x76657273: // 'vers'
+			_versIndex = i;
+			break;
 		}
 	}
 	_entries = (ResourceMacEntry **)calloc(_map.typesCount, sizeof(ResourceMacEntry *));
@@ -93,8 +123,18 @@ void ResourceMac::loadResourceFork(uint32_t resourceOffset, uint32_t dataSize) {
 	}
 }
 
-const ResourceMacEntry *ResourceMac::findEntry(const char *name) const {
-	for (int type = 0; type < _map.typesCount; ++type) {
+const ResourceMacEntry *ResourceMac::findEntry(const char *name, int type) const {
+	if (type < 0) {
+		for (type = 0; type < _map.typesCount; ++type) {
+			for (int i = 0; i < _types[type].count; ++i) {
+				if (strcmp(name, _entries[type][i].name) == 0) {
+					// fprintf(stdout, "Found name '%s' sig 0x%x %c%c%c%c\n", name, READ_BE_UINT32(_types[type].id), _types[type].id[0], _types[type].id[1], _types[type].id[2], _types[type].id[3]);
+					return &_entries[type][i];
+				}
+			}
+		}
+	} else {
+		assert(type < _map.typesCount);
 		for (int i = 0; i < _types[type].count; ++i) {
 			if (strcmp(name, _entries[type][i].name) == 0) {
 				return &_entries[type][i];
@@ -104,3 +144,8 @@ const ResourceMacEntry *ResourceMac::findEntry(const char *name) const {
 	return 0;
 }
 
+const ResourceMacEntry *ResourceMac::getEntry(int type, int num) const {
+	assert(type >= 0 && type < _map.typesCount);
+	assert(num >= 0 && _types[type].count);
+	return &_entries[type][num];
+}

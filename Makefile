@@ -19,9 +19,9 @@ SRCS = collision.cpp cpc_player.cpp cutscene.cpp decode_mac.cpp file.cpp fs.cpp 
 #CXXFLAGS += -DUSE_STATIC_SCALER
 #SCALERS  := scalers/scaler_nearest.cpp scalers/scaler_tv2x.cpp scalers/scaler_xbr.cpp
 
-#CXXFLAGS    += -DUSE_MIDI_DRIVER
-#MIDIDRIVERS := midi_driver_adlib.cpp midi_driver_mt32.cpp
-#MIDI_LIBS   := -lmt32emu
+#CXXFLAGS    += -DUSE_MIDI_DRIVER -DUSE_MT32EMU -DUSE_FLUIDSYNTH
+#MIDIDRIVERS := midi_driver_adlib.cpp midi_driver_fluidsynth.cpp midi_driver_mt32.cpp
+#MIDI_LIBS   := -lmt32emu -lfluidsynth
 
 LIBS = $(MIDI_LIBS) $(MODPLUG_LIBS) $(SDL_LIBS) $(TREMOR_LIBS) $(ZLIB_LIBS)
 

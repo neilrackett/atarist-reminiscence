@@ -115,6 +115,7 @@ struct Resource {
 	enum {
 		kPaulaFreq = 3546897,
 		kClutSize = 1024,
+		kSprHeaderSize = 12,
 		kScratchBufferSize = 320 * 224 + 1024
 	};
 
@@ -331,7 +332,7 @@ struct Resource {
 		return 0;
 	}
 	void clearBankData();
-	int getBankDataSize(uint16_t num);
+	int getBankDataSize(uint16_t num) const;
 	uint8_t *findBankData(uint16_t num);
 	uint8_t *loadBankData(uint16_t num);
 
@@ -339,7 +340,7 @@ struct Resource {
 	void PC98_loadSounds();
 
 	uint8_t *decodeResourceMacText(const char *name, const char *suffix);
-	uint8_t *decodeResourceMacData(const char *name, bool decompressLzss);
+	uint8_t *decodeResourceMacData(const char *name, bool decompressLzss, int type = -1);
 	uint8_t *decodeResourceMacData(const ResourceMacEntry *entry, bool decompressLzss);
 	void MAC_decodeImageData(const uint8_t *ptr, int i, DecodeBuffer *dst);
 	void MAC_decodeDataCLUT(const uint8_t *ptr);
@@ -347,7 +348,7 @@ struct Resource {
 	void MAC_loadFontData();
 	void MAC_loadIconData();
 	void MAC_loadPersoData();
-	void MAC_loadMonsterData(const char *name, Color *clut);
+	void MAC_loadMonsterData(const char *name, Color *clut, int level);
 	void MAC_loadTitleImage(int i, DecodeBuffer *buf);
 	void MAC_unloadLevelData();
 	void MAC_loadLevelData(int level);
@@ -362,6 +363,7 @@ struct Resource {
 	void MAC_loadCutsceneText();
 	void MAC_loadCreditsText();
 	void MAC_loadSounds();
+	void MAC_dumpVersion();
 
 	int MAC_getPersoFrame(int anim) const {
 		static const int16_t data[] = {

@@ -56,6 +56,7 @@ Resource::~Resource() {
 	}
 	free(_sfxList);
 	free(_bankData);
+	free(_credits);
 	delete _aba;
 	delete _mac;
 	delete _paq;
@@ -63,7 +64,7 @@ Resource::~Resource() {
 
 static const char *_demoAba = "DEMO_UK.ABA";
 
-static const char *_joystickAba[] = {
+static const char *const _joystickAba[] = {
 	"GLOB1_FB.ABA", "GLOB2_FB.ABA", "GLOB_FR.ABA", 0
 };
 
@@ -94,6 +95,7 @@ void Resource::init() {
 			_mac = new ResourceMac(ResourceMac::FILENAME2, _fs);
 		}
 		_mac->load();
+		MAC_dumpVersion();
 		break;
 	case kResourceTypePC98:
 		_paq = new ResourcePaq(_fs);
@@ -148,12 +150,7 @@ void Resource::load_DEM(const char *filename) {
 	_demLen = 0;
 	if (_mac) {
 		char name[256];
-		if (0) {
-			// recorded inputs for levels 3 and 5 are not replayed correctly
-			snprintf(name, sizeof(name), "Demo Level %c", filename[4]);
-		} else {
-			snprintf(name, sizeof(name), "Demo Level 1");
-		}
+		snprintf(name, sizeof(name), "Demo Level %c", filename[4]);
 		_dem = decodeResourceMacData(name, true);
 		_demLen = _resourceMacDataSize;
 		for (int i = 0; i < _demLen; ++i) {
@@ -171,6 +168,10 @@ void Resource::load_DEM(const char *filename) {
 				mask |= 0x80; // backspace
 			}
 			_dem[i] = mask | (_dem[i] & 0xF);
+		}
+		if (filename[4] == '5' && _demLen > 1292 && 0) {
+			// shorten the demo inputs to workaround game being de-synced
+			_demLen = 1292;
 		}
 		return;
 	}
@@ -391,14 +392,10 @@ void Resource::load_SPR_OFF(const char *fileName, uint8_t *sprData, const char *
 				_sprData[i] = (offset == -1) ? 0 : sprData + offset;
 			}
 		} else {
-			for (uint16_t pos; (pos = READ_LE_UINT16(p)) != 0xFFFF; p += 6) {
-				assert(pos < NUM_SPRITES);
-				const uint32_t off = READ_LE_UINT32(p + 2);
-				if (off == 0xFFFFFFFF) {
-					_sprData[pos] = 0;
-				} else {
-					_sprData[pos] = sprData + off;
-				}
+			for (int i; (i = READ_LE_UINT16(p)) != 0xFFFF; p += 6) {
+				assert(i < NUM_SPRITES);
+				const int32_t offset = READ_LE_UINT32(p + 2);
+				_sprData[i] = (offset == -1) ? 0 : sprData + offset;
 			}
 		}
 		free(offData);
@@ -813,9 +810,9 @@ void Resource::load(const char *objName, int objType, const char *ext) {
 					_tbn = dat;
 					break;
 				case OT_SPR:
-					assert(memcmp(dat, "SPP", 3) == 0);
-					_spr1 = (uint8_t *)malloc(size - 12);
-					memcpy(_spr1, dat + 12, size - 12);
+					assert(memcmp(dat, "SPP", 3) == 0 && size > kSprHeaderSize);
+					_spr1 = (uint8_t *)malloc(size - kSprHeaderSize);
+					memcpy(_spr1, dat + kSprHeaderSize, size - kSprHeaderSize);
 					break;
 				case OT_CMD:
 					_cmd = dat;
@@ -824,8 +821,8 @@ void Resource::load(const char *objName, int objType, const char *ext) {
 					_pol = dat;
 					break;
 				case OT_SPRM:
-					assert(memcmp(dat, "SPP", 3) == 0);
-					memcpy(_sprm, dat + 12, size - 12);
+					assert(memcmp(dat, "SPP", 3) == 0 && size > kSprHeaderSize);
+					memcpy(_sprm, dat + kSprHeaderSize, size - kSprHeaderSize);
 					break;
 				case OT_SGD:
 					_sgd = dat;
@@ -908,21 +905,25 @@ void Resource::load_ICN(File *f) {
 
 void Resource::load_SPR(File *f) {
 	debug(DBG_RES, "Resource::load_SPR()");
-	const int len = f->size() - 12;
+	uint32_t len = f->size();
+	assert(len > kSprHeaderSize);
+	len -= kSprHeaderSize;
 	_spr1 = (uint8_t *)malloc(len);
 	if (!_spr1) {
 		error("Unable to allocate SPR1 buffer");
 	} else {
-		f->seek(12);
+		f->seek(kSprHeaderSize);
 		f->read(_spr1, len);
 	}
 }
 
 void Resource::load_SPRM(File *f) {
 	debug(DBG_RES, "Resource::load_SPRM()");
-	const uint32_t len = f->size() - 12;
+	uint32_t len = f->size();
+	assert(len > kSprHeaderSize);
+	len -= kSprHeaderSize;
 	assert(len <= sizeof(_sprm));
-	f->seek(12);
+	f->seek(kSprHeaderSize);
 	f->read(_sprm, len);
 }
 
@@ -1066,7 +1067,7 @@ void Resource::decodeOBJ(const uint8_t *tmp, int size) {
 				obj->opcode_arg1 = _readUint16(objData); objData += 2;
 				obj->opcode_arg2 = _readUint16(objData); objData += 2;
 				obj->opcode_arg3 = _readUint16(objData); objData += 2;
-				debug(DBG_RES, "obj_node=%d obj=%d op1=0x%X op2=0x%X op3=0x%X", i, j, obj->opcode2, obj->opcode1, obj->opcode3);
+				debug(DBG_RES, "obj_node=%d obj=%d op1=0x%X op2=0x%X op3=0x%X arg1=%d arg2=%d arg3=%d", i, j, obj->opcode1, obj->opcode2, obj->opcode3, obj->opcode_arg1, obj->opcode_arg2, obj->opcode_arg3);
 			}
 			++iObj;
 			prevOffset = offsets[i];
@@ -1381,7 +1382,7 @@ void Resource::clearBankData() {
 	_bankDataHead = _bankData;
 }
 
-int Resource::getBankDataSize(uint16_t num) {
+int Resource::getBankDataSize(uint16_t num) const {
 	int len = READ_BE_UINT16(_mbk + num * 6 + 4);
 	switch (_type) {
 	case kResourceTypeAmiga:
@@ -1436,10 +1437,11 @@ uint8_t *Resource::loadBankData(uint16_t num) {
 		clearBankData();
 	}
 	assert(_bankDataHead + size <= _bankDataTail);
-	assert(_bankBuffersCount < (int)ARRAYSIZE(_bankBuffers));
-	_bankBuffers[_bankBuffersCount].entryNum = num;
-	_bankBuffers[_bankBuffersCount].ptr = _bankDataHead;
-	++_bankBuffersCount;
+	if (_bankBuffersCount < (int)ARRAYSIZE(_bankBuffers)) {
+		_bankBuffers[_bankBuffersCount].entryNum = num;
+		_bankBuffers[_bankBuffersCount].ptr = _bankDataHead;
+		++_bankBuffersCount;
+	}
 	const uint8_t *data = _mbk + dataOffset;
 	const int count = READ_BE_UINT16(ptr + 4);
 	if (count & 0x8000) {
@@ -1510,7 +1512,7 @@ void Resource::PC98_loadSounds() {
 uint8_t *Resource::decodeResourceMacText(const char *name, const char *suffix) {
 	char buf[256];
 	snprintf(buf, sizeof(buf), "%s %s", name, suffix);
-	const ResourceMacEntry *entry = _mac->findEntry(buf);
+	const ResourceMacEntry *entry = _mac->findEntry(buf, _mac->_strsIndex);
 	if (entry) {
 		return decodeResourceMacData(entry, false);
 	} else { // CD version
@@ -1519,13 +1521,13 @@ uint8_t *Resource::decodeResourceMacText(const char *name, const char *suffix) {
 		}
 		const char *language = (_lang == LANG_FR) ? "French" : "English";
 		snprintf(buf, sizeof(buf), "%s %s %s", name, suffix, language);
-		return decodeResourceMacData(buf, false);
+		return decodeResourceMacData(buf, false, _mac->_strsIndex);
 	}
 }
 
-uint8_t *Resource::decodeResourceMacData(const char *name, bool decompressLzss) {
+uint8_t *Resource::decodeResourceMacData(const char *name, bool decompressLzss, int type) {
 	uint8_t *data = 0;
-	const ResourceMacEntry *entry = _mac->findEntry(name);
+	const ResourceMacEntry *entry = _mac->findEntry(name, type);
 	if (entry) {
 		data = decodeResourceMacData(entry, decompressLzss);
 	} else {
@@ -1639,22 +1641,22 @@ void Resource::MAC_loadClutData() {
 }
 
 void Resource::MAC_loadFontData() {
-	_fnt = decodeResourceMacData("Font", true);
+	_fnt = decodeResourceMacData("Font", true, _mac->_ppssIndex);
 }
 
 void Resource::MAC_loadIconData() {
-	_icn = decodeResourceMacData("Icons", true);
+	_icn = decodeResourceMacData("Icons", true, _mac->_ppssIndex);
 }
 
 void Resource::MAC_loadPersoData() {
-	_perso = decodeResourceMacData("Person", true);
+	_perso = decodeResourceMacData("Person", true, _mac->_ppssIndex);
 }
 
-void Resource::MAC_loadMonsterData(const char *name, Color *clut) {
+void Resource::MAC_loadMonsterData(const char *name, Color *clut, int level) {
 	static const struct {
 		const char *id;
 		const char *name;
-		uint8_t index;
+		uint8_t pal_index;
 	} data[] = {
 		{ "junky", "Junky", 0x32 },
 		{ "mercenai", "Mercenary", 0x34 },
@@ -1666,9 +1668,9 @@ void Resource::MAC_loadMonsterData(const char *name, Color *clut) {
 	_monster = 0;
 	for (int i = 0; data[i].id; ++i) {
 		if (strcmp(data[i].id, name) == 0) {
-			_monster = decodeResourceMacData(data[i].name, true);
+			_monster = decodeResourceMacData(data[i].name, true, _mac->_ppssIndex);
 			assert(_monster);
-			MAC_copyClut16(clut, 5, data[i].index);
+			MAC_copyClut16(clut, 0, (i == 0 && level == 1) ? 0x33 : data[i].pal_index);
 			break;
 		}
 	}
@@ -1677,7 +1679,7 @@ void Resource::MAC_loadMonsterData(const char *name, Color *clut) {
 void Resource::MAC_loadTitleImage(int i, DecodeBuffer *buf) {
 	char name[64];
 	snprintf(name, sizeof(name), "Title %d", i);
-	uint8_t *ptr = decodeResourceMacData(name, (i == 6));
+	uint8_t *ptr = decodeResourceMacData(name, (i == 6), _mac->_ppssIndex);
 	if (ptr) {
 		MAC_decodeImageData(ptr, 0, buf);
 		free(ptr);
@@ -1709,32 +1711,32 @@ void Resource::MAC_loadLevelData(int level) {
 
 	// .PGE
 	snprintf(name, sizeof(name), "Level %s objects", _macLevelNumbers[level]);
-	uint8_t *ptr = decodeResourceMacData(name, true);
+	uint8_t *ptr = decodeResourceMacData(name, true, _mac->_objdIndex);
 	decodePGE(ptr, _resourceMacDataSize);
 	free(ptr);
 
 	// .ANI
 	snprintf(name, sizeof(name), "Level %s sequences", _macLevelNumbers[level]);
-	_ani = decodeResourceMacData(name, true);
+	_ani = decodeResourceMacData(name, true, _mac->_animIndex);
 	assert(READ_BE_UINT16(_ani) == 0x48D);
 
 	// .OBJ
 	snprintf(name, sizeof(name), "Level %s conditions", _macLevelNumbers[level]);
-	ptr = decodeResourceMacData(name, true);
+	ptr = decodeResourceMacData(name, true, _mac->_condIndex);
 	assert(READ_BE_UINT16(ptr) == NUM_OBJECTS);
 	decodeOBJ(ptr, _resourceMacDataSize);
 	free(ptr);
 
 	// .CT
 	snprintf(name, sizeof(name), "Level %c map", _macLevelNumbers[level][0]);
-	ptr = decodeResourceMacData(name, true);
+	ptr = decodeResourceMacData(name, true, _mac->_lmapIndex);
 	assert(_resourceMacDataSize == 0x1D00);
 	memcpy(_ctData, ptr, _resourceMacDataSize);
 	free(ptr);
 
 	// .SPC
 	snprintf(name, sizeof(name), "Objects %c", _macLevelNumbers[level][0]);
-	_spc = decodeResourceMacData(name, true);
+	_spc = decodeResourceMacData(name, true, _mac->_ppssIndex);
 
 	// .TBN
 	snprintf(name, sizeof(name), "Level %s", _macLevelNumbers[level]);
@@ -1746,13 +1748,13 @@ void Resource::MAC_loadLevelData(int level) {
 void Resource::MAC_loadLevelRoom(int level, int i, DecodeBuffer *dst) {
 	char name[64];
 	snprintf(name, sizeof(name), "Level %c Room %d", _macLevelNumbers[level][0], i);
-	uint8_t *ptr = decodeResourceMacData(name, true);
+	uint8_t *ptr = decodeResourceMacData(name, true,  _mac->_ppssIndex);
 	MAC_decodeImageData(ptr, 0, dst);
 	free(ptr);
 }
 
 void Resource::MAC_clearClut16(Color *clut, uint8_t dest) {
-        memset(&clut[dest * 16], 0, 16 * sizeof(Color));
+	memset(&clut[dest * 16], 0, 16 * sizeof(Color));
 }
 
 void Resource::MAC_copyClut16(Color *clut, uint8_t dest, uint8_t src) {
@@ -1806,7 +1808,7 @@ const uint8_t *Resource::MAC_getImageData(const uint8_t *ptr, int i) {
 bool Resource::MAC_hasLevelMap(int level, int room) const {
 	char name[64];
 	snprintf(name, sizeof(name), "Level %c Room %d", _macLevelNumbers[level][0], room);
-	return _mac->findEntry(name) != 0;
+	return _mac->findEntry(name, _mac->_ppssIndex) != 0;
 }
 
 static void stringLowerCase(char *p) {
@@ -1831,7 +1833,7 @@ void Resource::MAC_loadCutscene(const char *cutscene) {
 
 	snprintf(name, sizeof(name), "%s movie", cutscene);
 	stringLowerCase(name);
-	const ResourceMacEntry *cmdEntry = _mac->findEntry(name);
+	const ResourceMacEntry *cmdEntry = _mac->findEntry(name, _mac->_pmovIndex);
 	if (!cmdEntry) {
 		return;
 	}
@@ -1839,7 +1841,7 @@ void Resource::MAC_loadCutscene(const char *cutscene) {
 
 	snprintf(name, sizeof(name), "%s polygons", cutscene);
 	stringLowerCase(name);
-	const ResourceMacEntry *polEntry = _mac->findEntry(name);
+	const ResourceMacEntry *polEntry = _mac->findEntry(name, _mac->_polyIndex);
 	if (!polEntry) {
 		return;
 	}
@@ -1877,8 +1879,7 @@ void Resource::MAC_loadSounds() {
 	for (int i = 0; i < NUM_SFXS; ++i) {
 		const int num = table[i];
 		if (num != -1) {
-			assert(num >= 0 && num < _mac->_types[soundType].count);
-			const ResourceMacEntry *entry = &_mac->_entries[soundType][num];
+			const ResourceMacEntry *entry = _mac->getEntry(soundType, num);
 			_mac->_f.seek(_mac->_dataOffset + entry->dataOffset);
 			int dataSize = _mac->_f.readUint32BE();
 			assert(dataSize > kHeaderSize);
@@ -1897,5 +1898,42 @@ void Resource::MAC_loadSounds() {
 				debug(DBG_RES, "sfx #%d len %d datasize %d freq %d", i, _sfxList[i].len, dataSize, _sfxList[i].freq);
 			}
 		}
+	}
+}
+
+static int dumpPascalString(const uint8_t *s, const char *text) {
+	fputs(text, stdout);
+	const int len = *s++;
+	for (int i = 0; i < len; ++i, ++s) {
+		if (*s == 0xA9) {
+			fprintf(stdout, "(c)");
+		} else if (*s < 0x80) {
+			fputc(*s, stdout);
+		}
+	}
+	fputc('\n', stdout);
+	return len + 1;
+}
+
+void Resource::MAC_dumpVersion() {
+	const int versionType = _mac->_versIndex;
+	if (versionType != -1) {
+		const ResourceMacEntry *entry = _mac->getEntry(versionType, 0);
+		_mac->_f.seek(_mac->_dataOffset + entry->dataOffset);
+		int dataSize = _mac->_f.readUint32BE();
+		static const int kVersionSize = 0x80;
+		assert(dataSize <= kVersionSize);
+		uint8_t buf[kVersionSize];
+		_mac->_f.read(buf, kVersionSize);
+		int offset = 0;
+		++offset; // major
+		++offset; // minor
+		++offset; // development stage
+		++offset; // prerelease version
+		offset += 2; // region
+		const int len = buf[offset++];
+		offset += len;
+		// offset += dumpPascalString(buf + offset);
+		offset += dumpPascalString(buf + offset, "Macintosh version: ");
 	}
 }

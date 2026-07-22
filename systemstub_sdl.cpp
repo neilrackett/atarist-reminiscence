@@ -10,7 +10,7 @@
 #include "systemstub.h"
 #include "util.h"
 
-static const int kAudioHz = 22050;
+static const int kDefaultOutputSampleRate = 22050;
 
 static const char *kIconBmp = "icon.bmp";
 
@@ -55,9 +55,10 @@ struct SystemStub_SDL : SystemStub {
 	SDL_Texture *_widescreenTexture;
 	int _wideMargin;
 	bool _enableWidescreen;
+	int _outputSampleRate;
 
 	virtual ~SystemStub_SDL() {}
-	virtual void init(const char *title, int w, int h, bool fullscreen, int widescreenMode, bool maximized, const ScalerParameters *scalerParameters);
+	virtual void init(const char *title, int w, int h, bool fullscreen, int widescreenMode, bool maximized, const ScalerParameters *scalerParameters, int outputRate);
 	virtual void destroy();
 	virtual bool hasWidescreen() const;
 	virtual void setScreenSize(int w, int h);
@@ -101,7 +102,7 @@ SystemStub *SystemStub_SDL_create() {
 	return new SystemStub_SDL();
 }
 
-void SystemStub_SDL::init(const char *title, int w, int h, bool fullscreen, int widescreenMode, bool maximized, const ScalerParameters *scalerParameters) {
+void SystemStub_SDL::init(const char *title, int w, int h, bool fullscreen, int widescreenMode, bool maximized, const ScalerParameters *scalerParameters, int outputRate) {
 	SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER);
 	SDL_ShowCursor(SDL_DISABLE);
 	_caption = title;
@@ -141,6 +142,7 @@ void SystemStub_SDL::init(const char *title, int w, int h, bool fullscreen, int 
 			_joystick = SDL_JoystickOpen(kJoystickIndex);
 		}
 	}
+	_outputSampleRate = !outputRate ? kDefaultOutputSampleRate : outputRate;
 }
 
 void SystemStub_SDL::destroy() {
@@ -181,8 +183,8 @@ void SystemStub_SDL::setScreenSize(int w, int h) {
 		free(_screenBuffer);
 		_screenBuffer = 0;
 	}
-	const int screenBufferSize = w * h * sizeof(uint32_t);
-	_screenBuffer = (uint32_t *)calloc(1, screenBufferSize);
+	const int screenBufferSize = w * h;
+	_screenBuffer = (uint32_t *)calloc(screenBufferSize, sizeof(uint32_t));
 	if (!_screenBuffer) {
 		error("SystemStub_SDL::setScreenSize() Unable to allocate offscreen buffer, w=%d, h=%d", w, h);
 	}
@@ -941,7 +943,7 @@ static void mixAudioS16(void *param, uint8_t *buf, int len) {
 void SystemStub_SDL::startAudio(AudioCallback callback, void *param) {
 	SDL_AudioSpec desired;
 	memset(&desired, 0, sizeof(desired));
-	desired.freq = kAudioHz;
+	desired.freq = _outputSampleRate;
 	desired.format = AUDIO_S16SYS;
 	desired.channels = 2;
 	desired.samples = 4096;
@@ -961,7 +963,7 @@ void SystemStub_SDL::stopAudio() {
 }
 
 uint32_t SystemStub_SDL::getOutputSampleRate() {
-	return kAudioHz;
+	return _outputSampleRate;
 }
 
 void SystemStub_SDL::lockAudio() {

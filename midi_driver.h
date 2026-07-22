@@ -14,6 +14,8 @@ struct MidiDriver {
 	}
 	virtual void fixExRegisterAddress(bool state) { // fmopl only
 	}
+	virtual void setSoundFont(const char *path) { // fluidsynth only
+	}
 
 	virtual void noteOff(int channel, int note, int velocity) = 0;
 	virtual void noteOn(int channel, int note, int velocity) = 0;
@@ -38,6 +40,7 @@ struct MidiDriverInfo {
 #endif
 
 MIDI_DRIVER_SYMBOL extern const MidiDriverInfo midi_driver_adlib;
+MIDI_DRIVER_SYMBOL extern const MidiDriverInfo midi_driver_fluidsynth;
 MIDI_DRIVER_SYMBOL extern const MidiDriverInfo midi_driver_mt32;
 
 #endif /* MIDI_DRIVER_H__ */

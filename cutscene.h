@@ -49,8 +49,8 @@ struct Cutscene {
 
 	static const OpcodeStub _opcodeTable[];
 	static const char *const _namesTableDOS[];
-	static const uint16_t _offsetsTableDOS[];
-	static const uint16_t _offsetsTableAmiga[];
+	static const uint8_t _offsetsTableDOS[];
+	static const uint8_t _offsetsTableAmiga[];
 	static const uint8_t _amigaDemoOffsetsTable[];
 	static const uint8_t _ssiOffsetsTable[];
 	static const uint8_t _creditsDataDOS[];
@@ -155,7 +155,7 @@ struct Cutscene {
 	uint8_t fetchNextCmdByte();
 	uint16_t fetchNextCmdWord();
 	void mainLoop(uint16_t num);
-	bool load(uint16_t cutName);
+	bool load(uint8_t cutName);
 	void unload();
 	void prepare();
 	void playCredits();

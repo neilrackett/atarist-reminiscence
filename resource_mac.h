@@ -39,7 +39,16 @@ struct ResourceMac {
 	ResourceMacMap _map;
 	ResourceMacType *_types;
 	ResourceMacEntry **_entries;
+	int _animIndex;
+	int _condIndex;
+	int _objdIndex;
+	int _lmapIndex;
+	int _pmovIndex;
+	int _polyIndex;
+	int _ppssIndex;
 	int _sndIndex;
+	int _strsIndex;
+	int _versIndex;
 
 	ResourceMac(const char *filePath, FileSystem *);
 	~ResourceMac();
@@ -47,7 +56,8 @@ struct ResourceMac {
 	bool isOpen() const { return _entries != 0; }
 	void load();
 	void loadResourceFork(uint32_t offset, uint32_t size);
-	const ResourceMacEntry *findEntry(const char *name) const;
+	const ResourceMacEntry *findEntry(const char *name, int type = -1) const;
+	const ResourceMacEntry *getEntry(int type, int num) const;
 };
 
 #endif

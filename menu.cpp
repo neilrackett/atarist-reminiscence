@@ -175,7 +175,7 @@ void Menu::displayTitleScreenMac(int num) {
 			_stub->setPaletteEntry(basePaletteColor + j, &palette[j]);
 		}
 	}
-	if (num == kMacTitleScreen_MacPlay) {
+	if (num == kMacTitleScreen_MacPlay || num == kMacTitleScreen_Controls) {
 		Color palette[16];
 		for (int i = 0; i < 2; ++i) {
 			_res->MAC_copyClut16(palette, 0, 55 + i);
@@ -188,7 +188,7 @@ void Menu::displayTitleScreenMac(int num) {
 		Color c;
 		c.r = c.g = c.b = 0;
 		_stub->setPaletteEntry(0, &c);
-	} else if (num == kMacTitleScreen_Flashback) {
+	} else {
 		_vid->setTextPalette();
 	}
 	if (num == kMacTitleScreen_MacPlay || num == kMacTitleScreen_Presage) {

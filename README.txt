@@ -1,6 +1,6 @@
 
 REminiscence README
-Release version: 0.5.5
+Release version: 0.5.6
 -------------------------------------------------------------------------------
 
 
@@ -49,6 +49,7 @@ These paths can be changed using command line switches:
     --language=LANG   Language (fr,en,de,sp,it,jp)
     --autosave        Save game state automatically
     --mididriver=MIDI Driver (adlib, mt32)
+    --outputrate=HZ   Audio output sample rate
 
 The scaler option specifies the algorithm used to smoothen the image and the
 scaling factor. External scalers are also supported, the suffix shall be used

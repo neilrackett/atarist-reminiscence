@@ -8,16 +8,14 @@
 #include "systemstub.h"
 #include "util.h"
 
-Mixer::Mixer(FileSystem *fs, SystemStub *stub, int midiDriver)
-	: _stub(stub), _musicType(MT_NONE), _cpc(this, fs), _mod(this, fs), _ogg(this, fs), _prf(this, fs, midiDriver), _sfx(this) {
+Mixer::Mixer(FileSystem *fs, SystemStub *stub, const PrfMidiDriver *midiDriver, const char *midiSoundFont)
+	: _stub(stub), _musicType(MT_NONE), _cpc(this, fs), _mod(this, fs), _ogg(this, fs), _prf(this, fs, midiDriver, midiSoundFont), _sfx(this) {
 	_musicTrack = -1;
 	_backgroundMusicType = MT_NONE;
 }
 
 void Mixer::init() {
-	for (int i = 0; i < NUM_CHANNELS; ++i) {
-		_channels[i].active = false;
-	}
+	memset(_channels, 0, sizeof(_channels));
 	_premixHook = 0;
 	_stub->startAudio(Mixer::mixCallback, this);
 }
@@ -79,9 +77,7 @@ uint32_t Mixer::getSampleRate() const {
 void Mixer::stopAll() {
 	debug(DBG_SND, "Mixer::stopAll()");
 	LockAudioStack las(_stub);
-	for (uint8_t i = 0; i < NUM_CHANNELS; ++i) {
-		_channels[i].active = false;
-	}
+	memset(_channels, 0, sizeof(_channels));
 }
 
 static bool isMusicSfx(int num) {

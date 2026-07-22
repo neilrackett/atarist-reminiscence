@@ -168,6 +168,13 @@ struct Demo {
 	uint8_t x, y;
 };
 
+struct DemoMac {
+	uint8_t level;
+	uint8_t room;
+	uint8_t x, y;
+	uint8_t rnd;
+};
+
 struct Level {
 	const char *name;
 	const char *name2;
@@ -177,6 +184,14 @@ struct Level {
 	uint8_t track;
 };
 
+enum ObjectType {
+	kObjectTypeConrad       = 1,  // player character
+	kObjectTypeCollectible  = 3,  // inventory / pickup item
+	kObjectTypeMonster      = 10, // enemy
+	kObjectTypeRenderAbove  = 11, // rendered with priority (above others)
+	kObjectTypeDestructible = 12, // can be hit by gun (like a breakable object)
+};
+
 struct InitPGE {
 	uint16_t type;
 	int16_t pos_x;
@@ -184,7 +199,7 @@ struct InitPGE {
 	uint16_t obj_node_number;
 	uint16_t life;
 	int16_t data[4];
-	uint8_t object_type; // 1:conrad, 10:monster
+	uint8_t object_type;
 	uint8_t init_room;
 	uint8_t room_location;
 	uint8_t init_flags;
@@ -278,7 +293,7 @@ struct BankSlot {
 
 struct CollisionSlot2 {
 	CollisionSlot2 *next_slot;
-	int8_t *unk2; // grid_data_pos
+	int8_t *collision_grid_ptr;
 	uint8_t data_size;
 	uint8_t data_buf[0x10]; // <= InitPGE.collision_data_len
 };

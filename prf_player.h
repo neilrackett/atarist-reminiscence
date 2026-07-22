@@ -9,6 +9,13 @@ static const int TIMER_ADLIB_HZ = 2082;
 static const int TIMER_MT32_HZ  = 2242;
 
 struct MidiDriver;
+struct MidiDriverInfo;
+
+struct PrfMidiDriver {
+	int mode;
+	int hz;
+	const MidiDriverInfo *info;
+};
 
 #define INSTRUMENT_NAME_LEN 30
 #define MIDI_FILENAME_LEN   20
@@ -77,7 +84,7 @@ struct PrfPlayer {
 	static const char *const _names[];
 	static const int _namesCount;
 
-	PrfPlayer(Mixer *mix, FileSystem *fs, int mode);
+	PrfPlayer(Mixer *mix, FileSystem *fs, const PrfMidiDriver *midiDriver, const char *midiSoundFont);
 	~PrfPlayer();
 
 	void play(int num);
@@ -98,12 +105,13 @@ struct PrfPlayer {
 	void adlibNoteOff(int track, int note, int velocity);
 
 	void handleTick();
+	void updateTrack(int track_index, MidiTrack *track, PrfTrack *current_track);
 
 	bool end() const;
-	int readSamples(int16_t *samples, int count);
+	int tryBatch(int16_t *samples, int count);
+	int mix(int16_t *samples, int count);
 
 	static bool mixCallback(void *param, int16_t *buf, int len);
-	bool mix(int16_t *buf, int len);
 
 	bool _playing;
 	Mixer *_mixer;

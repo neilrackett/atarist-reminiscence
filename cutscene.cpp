@@ -231,7 +231,7 @@ void Cutscene::drawCreditsText() {
 		} else {
 			code = *_textCurPtr;
 		}
-		if (code == 0x7D && isMac) {
+		if (isMac && (code == 0x7D /* Floppy version */ || code == 0x5E /* CD version */)) {
 			++_textCurPtr;
 			code = *_textCurPtr++;
 			_creditsTextLen -= 2;
@@ -1140,9 +1140,8 @@ void Cutscene::mainLoop(uint16_t num) {
 	}
 }
 
-bool Cutscene::load(uint16_t cutName) {
-	assert(cutName != 0xFFFF);
-	cutName &= 0xFF;
+bool Cutscene::load(uint8_t cutName) {
+	assert(cutName != 0xFF);
 	const char *name = _namesTableDOS[cutName];
 	debug(DBG_CUT, "Cutscene::load name:'%s'", name);
 	switch (_res->_type) {
@@ -1253,9 +1252,9 @@ void Cutscene::playCredits() {
 			break;
 		}
 		prepare();
-		const uint16_t *offsets = _res->isAmiga() ? _offsetsTableAmiga : _offsetsTableDOS;
-		uint16_t cutName = offsets[cut_id * 2 + 0];
-		uint16_t cutOff  = offsets[cut_id * 2 + 1];
+		const uint8_t *offsets = _res->isAmiga() ? _offsetsTableAmiga : _offsetsTableDOS;
+		uint8_t cutName = offsets[cut_id * 2];
+		uint16_t cutOff = (int8_t)offsets[cut_id * 2 + 1];
 		if (load(cutName)) {
 			mainLoop(cutOff);
 			unload();
@@ -1301,10 +1300,10 @@ void Cutscene::play() {
 		debug(DBG_CUT, "Cutscene::play() _id=0x%X", _id);
 		_creditsSequence = false;
 		prepare();
-		const uint16_t *offsets = _res->isAmiga() ? _offsetsTableAmiga : _offsetsTableDOS;
-		uint16_t cutName = offsets[_id * 2 + 0];
-		uint16_t cutOff  = offsets[_id * 2 + 1];
-		if (cutName == 0xFFFF) {
+		const uint8_t *offsets = _res->isAmiga() ? _offsetsTableAmiga : _offsetsTableDOS;
+		uint8_t cutName = offsets[_id * 2];
+		uint16_t cutOff = (int8_t)offsets[_id * 2 + 1];
+		if (cutName == 0xFF) {
 			switch (_id) {
 			case 3: // keys
 				if (g_options.play_carte_cutscene) {
@@ -1355,7 +1354,7 @@ void Cutscene::play() {
 					break;
 				}
 			}
-		} else if (cutName != 0xFFFF) {
+		} else if (cutName != 0xFF) {
 			if (load(cutName)) {
 				mainLoop(cutOff);
 				unload();

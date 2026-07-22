@@ -188,8 +188,9 @@ static const uint8_t *decodeSeqOp1(uint8_t *dst, int pitch, const uint8_t *src) 
 		const int bits = log2_16[len - 1] + 1;
 		for (int y = 0; y < 8; ++y) {
 			for (int x = 0; x < 8; ++x) {
-				dst[y * pitch + x] = src[bs.getBits(bits)];
+				dst[x] = src[bs.getBits(bits)];
 			}
+			dst += pitch;
 		}
 		src += len + bits * 8;
 	}
@@ -198,7 +199,8 @@ static const uint8_t *decodeSeqOp1(uint8_t *dst, int pitch, const uint8_t *src) 
 
 static const uint8_t *decodeSeqOp2(uint8_t *dst, int pitch, const uint8_t *src) {
 	for (int y = 0; y < 8; ++y) {
-		memcpy(dst + y * pitch, src, 8);
+		memcpy(dst, src, 8);
+		dst += pitch;
 		src += 8;
 	}
 	return src;
