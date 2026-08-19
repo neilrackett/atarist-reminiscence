@@ -49,6 +49,8 @@ struct Video {
 	// re-bake the room layers from the staging buffer with the
 	// current palette (used when leaving cutscene palette mode)
 	void ST_rebakeRoom();
+	// restore only recently drawn blocks from the back layer
+	void ST_restoreDirty();
 #endif
 	uint8_t _unkPalSlot1, _unkPalSlot2;
 	uint8_t _mapPalSlot1, _mapPalSlot2, _mapPalSlot3, _mapPalSlot4;

@@ -128,14 +128,18 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 		return;
 	}
 	const int xOffBytes = (_xOffset >> 4) << 3;
+	const int n32 = bytes >> 3;
 	for (int j = 0; j < h; ++j) {
 		const int sy = y + j;
 		if (_yDrop[sy]) {
 			continue;
 		}
-		const uint8_t *src = layer + sy * kSTRowBytes + (gx0 << 3);
-		uint8_t *dst = _screen->pixels + _yMap[sy] * kScreenStride + xOffBytes + (gx0 << 3);
-		memcpy(dst, src, bytes);
+		const uint32_t *src = (const uint32_t *)(layer + sy * kSTRowBytes + (gx0 << 3));
+		uint32_t *dst = (uint32_t *)(_screen->pixels + _yMap[sy] * kScreenStride + xOffBytes + (gx0 << 3));
+		for (int n = n32; --n >= 0; ) {
+			*dst++ = *src++;
+			*dst++ = *src++;
+		}
 	}
 }
 

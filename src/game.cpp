@@ -20,6 +20,44 @@
 #define GAME_COPYRECT_FRONT() _stub->copyRect(0, 0, _vid._w, _vid._h, _vid._frontLayer, _vid._w)
 #endif
 
+#ifdef ATARIST
+// Cache of RLE-decoded sprite frames, keyed on the source pointer.
+// The engine decodes every sprite frame on every displayed frame,
+// which dominates the 8MHz frame budget; idle/looping animations hit
+// the cache instead. Flushed whenever the underlying resource
+// buffers are reloaded (level data, per-room monster SPM).
+struct SpriteCache {
+	enum { N = 16 };
+	const uint8_t *key[N];
+	uint8_t *buf[N];
+	int pos;
+
+	uint8_t *lookup(const uint8_t *p) {
+		for (int i = 0; i < N; ++i) {
+			if (key[i] == p) {
+				return buf[i];
+			}
+		}
+		return 0;
+	}
+	uint8_t *insert(const uint8_t *p, int size) {
+		const int i = pos;
+		pos = (pos + 1) & (N - 1);
+		::free(buf[i]);
+		buf[i] = (uint8_t *)malloc(size);
+		key[i] = buf[i] ? p : 0;
+		return buf[i];
+	}
+	void flush() {
+		for (int i = 0; i < N; ++i) {
+			key[i] = 0;
+		}
+	}
+};
+static SpriteCache _spmCache;
+static SpriteCache _spcCache;
+#endif
+
 Game::Game(SystemStub *stub, FileSystem *fs, const char *savePath, int level, ResourceType ver, Language lang, WidescreenMode widescreenMode, bool autoSave, const PrfMidiDriver *midiDriver, const char *midiSoundFont, uint32_t cheats)
 	: _cut(&_res, stub, &_vid), _menu(&_res, stub, &_vid),
 	_mix(fs, stub, midiDriver, midiSoundFont), _res(fs, ver, lang), _seq(stub, &_mix), _vid(&_res, stub, widescreenMode),
@@ -365,7 +403,11 @@ void Game::mainLoop() {
 			return;
 		}
 	}
+#ifdef ATARIST
+	_vid.ST_restoreDirty();
+#else
 	memcpy(_vid._frontLayer, _vid._backLayer, _vid._layerSize);
+#endif
 	pge_getInput();
 	pge_prepare();
 	col_prepareRoomState();
@@ -1175,8 +1217,27 @@ void Game::drawAnimBuffer(uint8_t stateNum, AnimBufferState *state) {
 				}
 				switch (_res._type) {
 				case kResourceTypeAmiga:
-					_vid.AMIGA_decodeSpm(state->dataPtr, _res._scratchBuffer);
-					drawCharacter(_res._scratchBuffer, state->x, state->y, state->h, state->w, pge->flags);
+					{
+#ifdef ATARIST
+						const uint8_t *chr = _spmCache.lookup(state->dataPtr);
+						if (!chr) {
+							const int w = ((state->dataPtr[2] >> 7) + 1) * 16;
+							const int h = state->dataPtr[2] & 0x7F;
+							uint8_t *dst = _spmCache.insert(state->dataPtr, w * h);
+							if (dst) {
+								_vid.AMIGA_decodeSpm(state->dataPtr, dst);
+								chr = dst;
+							} else {
+								_vid.AMIGA_decodeSpm(state->dataPtr, _res._scratchBuffer);
+								chr = _res._scratchBuffer;
+							}
+						}
+						drawCharacter(chr, state->x, state->y, state->h, state->w, pge->flags);
+#else
+						_vid.AMIGA_decodeSpm(state->dataPtr, _res._scratchBuffer);
+						drawCharacter(_res._scratchBuffer, state->x, state->y, state->h, state->w, pge->flags);
+#endif
+					}
 					break;
 				case kResourceTypeDOS:
 				case kResourceTypePC98:
@@ -1286,9 +1347,25 @@ void Game::drawObjectFrame(const uint8_t *bankDataPtr, const uint8_t *dataPtr, i
 	const uint8_t sprite_h = (((sprite_flags >> 0) & 3) + 1) * 8;
 	const uint8_t sprite_w = (((sprite_flags >> 2) & 3) + 1) * 8;
 
+#ifdef ATARIST
+	const uint8_t *decoded = 0;
+#endif
 	switch (_res._type) {
 	case kResourceTypeAmiga:
+#ifdef ATARIST
+		decoded = _spcCache.lookup(src);
+		if (!decoded) {
+			uint8_t *dst = _spcCache.insert(src, sprite_w * sprite_h);
+			if (dst) {
+				_vid.AMIGA_decodeSpc(src, sprite_w, sprite_h, dst);
+				decoded = dst;
+			} else {
+				_vid.AMIGA_decodeSpc(src, sprite_w, sprite_h, _res._scratchBuffer);
+			}
+		}
+#else
 		_vid.AMIGA_decodeSpc(src, sprite_w, sprite_h, _res._scratchBuffer);
+#endif
 		break;
 	case kResourceTypeDOS:
 	case kResourceTypePC98:
@@ -1302,7 +1379,11 @@ void Game::drawObjectFrame(const uint8_t *bankDataPtr, const uint8_t *dataPtr, i
 		break;
 	}
 
+#ifdef ATARIST
+	src = decoded ? decoded : _res._scratchBuffer;
+#else
 	src = _res._scratchBuffer;
+#endif
 	bool sprite_mirror_x = false;
 	int16_t sprite_clipped_w;
 	if (sprite_x >= 0) {
@@ -1356,6 +1437,7 @@ void Game::drawObjectFrame(const uint8_t *bankDataPtr, const uint8_t *dataPtr, i
 	const uint8_t sprite_col_mask = (flags & 0x60) >> 1;
 
 #ifdef ATARIST
+	(void)dst_offset;
 	uint8_t map16[16];
 	ST_buildMap16(sprite_col_mask, map16);
 	unsigned stFlags = (sprite_flags & 0x10) ? kSTSpriteXflip : 0;
@@ -1470,6 +1552,7 @@ void Game::drawCharacter(const uint8_t *dataPtr, int16_t pos_x, int16_t pos_y, u
 	debug(DBG_GAME, "dst_offset=0x%X src_offset=%ld", dst_offset, src - dataPtr);
 
 #ifdef ATARIST
+	(void)dst_offset;
 	uint8_t map16[16];
 	ST_buildMap16(sprite_col_mask, map16);
 	unsigned stFlags = kSTSpriteRespectPrio;
@@ -1527,6 +1610,10 @@ int Game::loadMonsterSprites(LivePGE *pge) {
 		case kResourceTypeAmiga:
 		case kResourceTypeSega: {
 				_res.load(_monsterNames[1][_curMonsterNum], Resource::OT_SPM);
+#ifdef ATARIST
+				// the SPM buffer is reused per monster
+				_spmCache.flush();
+#endif
 				const int dst_offset = Video::PALETTE_INDEX_MONSTER * 16;
 				const int src_offset = _vid._mapPalSlot3 * 16 + (_curMonsterNum & 1) * 8;
 				for (int i = 0; i < 8; ++i) {
@@ -1648,6 +1735,10 @@ void Game::loadLevelRoom() {
 }
 
 void Game::loadLevelData() {
+#ifdef ATARIST
+	_spmCache.flush();
+	_spcCache.flush();
+#endif
 	_res.clearLevelRes();
 	const Level *lvl = &_gameLevels[_currentLevel];
 	switch (_res._type) {
@@ -1983,6 +2074,7 @@ void Game::handleInventory() {
 						ST_drawPoint(_vid._frontLayer, 56 + 9 * icon_spr_w - 1, 140 + y, outline_color);
 					}
 					ST_hspan(_vid._frontLayer, 57, 56 + 9 * icon_spr_w - 2, 140 + 5 * icon_spr_h - 1, outline_color);
+					_vid.markBlockAsDirty(56, 140, 9 * icon_spr_w, 5 * icon_spr_h, 1);
 #else
 					uint8_t *p = _vid._frontLayer + 140 * Video::GAMESCREEN_W + 56;
 					memset(p + 1, outline_color, 9 * icon_spr_w - 2);

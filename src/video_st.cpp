@@ -87,55 +87,63 @@ void ST_drawSprite(uint8_t *layer, const uint8_t *src, int pitch, int x, int y, 
 	const bool respectPrio = (flags & kSTSpriteRespectPrio) != 0;
 	const int gx0 = x >> 4;
 	const int gx1 = (x + w - 1) >> 4;
+	uint8_t rowBuf[kSTLayerW];
 	for (int j = 0; j < h; ++j) {
-		// gather the source row (handles flip / column-major once)
-		uint8_t row[kSTLayerW];
+		// gather the source row (flip / column-major variants); the
+		// common unflipped row-major case reads the source directly
+		const uint8_t *row;
 		if (flags & kSTSpriteColMajor) {
 			if (flags & kSTSpriteXflip) {
 				for (int i = 0; i < w; ++i) {
-					row[i] = src[-i * pitch];
+					rowBuf[i] = src[-i * pitch];
 				}
 			} else {
 				for (int i = 0; i < w; ++i) {
-					row[i] = src[i * pitch];
+					rowBuf[i] = src[i * pitch];
 				}
 			}
+			row = rowBuf;
 			++src;
-		} else {
-			if (flags & kSTSpriteXflip) {
-				for (int i = 0; i < w; ++i) {
-					row[i] = src[-i];
-				}
-			} else {
-				for (int i = 0; i < w; ++i) {
-					row[i] = src[i];
-				}
+		} else if (flags & kSTSpriteXflip) {
+			for (int i = 0; i < w; ++i) {
+				rowBuf[i] = src[-i];
 			}
+			row = rowBuf;
+			src += pitch;
+		} else {
+			row = src;
 			src += pitch;
 		}
 		uint16_t *dst = groupPtr(layer, gx0 << 4, y + j);
 		uint16_t *prio = prioPtr(layer, gx0 << 4, y + j);
 		for (int g = gx0; g <= gx1; ++g) {
 			const int base = (g << 4) - x; // source index of the group's first pixel
-			uint16_t drawn = 0, d0 = 0, d1 = 0, d2 = 0, d3 = 0;
-			uint16_t bit = 0x8000;
-			for (int i = 0; i < 16; ++i, bit >>= 1) {
-				const int s = base + i;
-				if (s < 0 || s >= w) {
-					continue;
-				}
-				const uint8_t c = row[s];
-				if (c == 0) {
-					continue;
-				}
-				const uint8_t v = map16[c & 15];
-				drawn |= bit;
-				if (v & 1) d0 |= bit;
-				if (v & 2) d1 |= bit;
-				if (v & 4) d2 |= bit;
-				if (v & 8) d3 |= bit;
+			// pixel range of this group that overlaps the sprite
+			int i0 = 0;
+			if (base < 0) {
+				i0 = -base;
 			}
-			applyGroup(dst, prio, drawn, d0, d1, d2, d3, respectPrio, setPrio);
+			int i1 = w - base;
+			if (i1 > 16) {
+				i1 = 16;
+			}
+			uint16_t drawn = 0, d0 = 0, d1 = 0, d2 = 0, d3 = 0;
+			const uint8_t *p = row + base + i0;
+			uint16_t bit = 0x8000 >> i0;
+			for (int i = i1 - i0; --i >= 0; bit >>= 1) {
+				const uint8_t c = *p++;
+				if (c) {
+					const uint8_t v = map16[c & 15];
+					drawn |= bit;
+					if (v & 1) d0 |= bit;
+					if (v & 2) d1 |= bit;
+					if (v & 4) d2 |= bit;
+					if (v & 8) d3 |= bit;
+				}
+			}
+			if (drawn) {
+				applyGroup(dst, prio, drawn, d0, d1, d2, d3, respectPrio, setPrio);
+			}
 			dst += 4;
 			++prio;
 		}

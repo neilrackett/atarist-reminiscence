@@ -13,6 +13,18 @@ This fork ports the engine to the **Atari ST/STE/Mega STE** using the
 `stdl/` submodule), running from the Amiga data files. Sound effects
 play through STE DMA audio (silent on a plain ST).
 
+The renderer is planar-native: the engine's layers are ST interleaved
+bitplanes plus a fifth priority plane (Flashback's foreground
+masking), with chunky pixels surviving only at load time (room decode
+and the title screen). The Amiga's ~2x16-colour palettes are quantised
+to the ST's 16 hardware colours per room; cutscenes map their palette
+onto the hardware slots directly, so palette animation and the
+polygon shadow effect work as originally authored. The 224-line game
+screen is displayed on the ST's 200 lines by dropping 24 lines evenly.
+
+Requires 2MB RAM. Measured in Hatari: ~10 fps on a plain 8MHz ST,
+~18 fps on a 16MHz Mega STE (the game logic targets 30 fps).
+
 ## Building the Atari ST version
 
 With [atarist-toolkit-docker](https://github.com/sidecartridge/atarist-toolkit-docker)

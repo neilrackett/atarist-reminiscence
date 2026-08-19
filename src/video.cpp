@@ -65,6 +65,60 @@ void Video::ST_rebakeRoom() {
 	ST_convertChunky(_backLayer, _stagingLayer, GAMESCREEN_H);
 	memcpy(_frontLayer, _backLayer, _layerSize);
 }
+
+// Restore only the screen blocks touched in the last frames instead
+// of copying the whole back layer (block counters are maintained by
+// markBlockAsDirty/updateScreen; anything drawn is marked).
+void Video::ST_restoreDirty() {
+	if (_fullRefresh) {
+		memcpy(_frontLayer, _backLayer, _layerSize);
+		return;
+	}
+	const int cols = _w / SCREENBLOCK_W;
+	const uint8_t *p = _screenBlocks;
+	for (int j = 0; j < _h / SCREENBLOCK_H; ++j) {
+		int i = 0;
+		while (i < cols) {
+			if (p[i] == 0) {
+				++i;
+				continue;
+			}
+			int i2 = i;
+			while (i2 < cols && p[i2] != 0) {
+				++i2;
+			}
+			const int gx0 = (i * SCREENBLOCK_W) >> 4;
+			const int gx1 = (i2 * SCREENBLOCK_W - 1) >> 4;
+			const int groups = gx1 - gx0 + 1;
+			{
+				const int yy = j * SCREENBLOCK_H;
+				const uint32_t *s = (const uint32_t *)(_backLayer + yy * kSTRowBytes + gx0 * 8);
+				uint32_t *d = (uint32_t *)(_frontLayer + yy * kSTRowBytes + gx0 * 8);
+				const int skip = (kSTRowBytes - groups * 8) >> 2;
+				for (int line = 0; line < SCREENBLOCK_H; ++line) {
+					for (int n = groups; --n >= 0; ) {
+						*d++ = *s++;
+						*d++ = *s++;
+					}
+					s += skip;
+					d += skip;
+				}
+				const uint16_t *ps = (const uint16_t *)(_backLayer + kSTPlaneBytes + yy * kSTPrioRowBytes + gx0 * 2);
+				uint16_t *pd = (uint16_t *)(_frontLayer + kSTPlaneBytes + yy * kSTPrioRowBytes + gx0 * 2);
+				const int pskip = (kSTPrioRowBytes - groups * 2) >> 1;
+				for (int line = 0; line < SCREENBLOCK_H; ++line) {
+					for (int n = groups; --n >= 0; ) {
+						*pd++ = *ps++;
+					}
+					ps += pskip;
+					pd += pskip;
+				}
+			}
+			i = i2;
+		}
+		p += cols;
+	}
+}
 #endif
 
 void Video::markBlockAsDirty(int16_t x, int16_t y, uint16_t w, uint16_t h, int scale) {
