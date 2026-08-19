@@ -49,7 +49,10 @@ struct SystemStub_STDL : SystemStub {
 	bool _shadowValid;
 	uint8_t _yMap[kMaxSrcH];   // source line -> screen line
 	uint8_t _yDrop[kMaxSrcH];  // 1 = line not displayed
-	bool _joyEnter;
+	// key releases are applied at the start of the *next* poll so a
+	// press+release inside one slow frame is still seen by the game
+	uint8_t _upDirMask;
+	bool _upEnter, _upSpace, _upShift;
 
 	virtual ~SystemStub_STDL() {}
 	virtual void init(const char *title, int w, int h, bool fullscreen, int widescreenMode, bool maximized, const ScalerParameters *scalerParameters, int outputRate);
@@ -94,6 +97,8 @@ SystemStub *SystemStub_STDL_create() {
 
 void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int widescreenMode, bool maximized, const ScalerParameters *scalerParameters, int outputRate) {
 	memset(&_pi, 0, sizeof(_pi));
+	_upDirMask = 0;
+	_upEnter = _upSpace = _upShift = false;
 	if (STDL_Init(0x20 | 0x200) != 0) { // VIDEO | JOYSTICK
 		error("STDL_Init failed");
 	}
@@ -439,6 +444,11 @@ void SystemStub_STDL::fadeScreen() {
 }
 
 void SystemStub_STDL::processEvents() {
+	_pi.dirMask &= ~_upDirMask;
+	_upDirMask = 0;
+	if (_upEnter) { _pi.enter = false; _upEnter = false; }
+	if (_upSpace) { _pi.space = false; _upSpace = false; }
+	if (_upShift) { _pi.shift = false; _upShift = false; }
 	STDL_Event ev;
 	while (STDL_PollEvent(&ev)) {
 		switch (ev.type) {
@@ -452,34 +462,42 @@ void SystemStub_STDL::processEvents() {
 			const uint16_t mod = ev.key.keysym.mod;
 			switch (sym) {
 			case STDLK_UP:
-				if (down) _pi.dirMask |= PlayerInput::DIR_UP; else _pi.dirMask &= ~PlayerInput::DIR_UP;
+				if (down) { _pi.dirMask |= PlayerInput::DIR_UP; _upDirMask &= ~PlayerInput::DIR_UP; } else _upDirMask |= PlayerInput::DIR_UP;
 				break;
 			case STDLK_DOWN:
-				if (down) _pi.dirMask |= PlayerInput::DIR_DOWN; else _pi.dirMask &= ~PlayerInput::DIR_DOWN;
+				if (down) { _pi.dirMask |= PlayerInput::DIR_DOWN; _upDirMask &= ~PlayerInput::DIR_DOWN; } else _upDirMask |= PlayerInput::DIR_DOWN;
 				break;
 			case STDLK_LEFT:
-				if (down) _pi.dirMask |= PlayerInput::DIR_LEFT; else _pi.dirMask &= ~PlayerInput::DIR_LEFT;
+				if (down) { _pi.dirMask |= PlayerInput::DIR_LEFT; _upDirMask &= ~PlayerInput::DIR_LEFT; } else _upDirMask |= PlayerInput::DIR_LEFT;
 				break;
 			case STDLK_RIGHT:
-				if (down) _pi.dirMask |= PlayerInput::DIR_RIGHT; else _pi.dirMask &= ~PlayerInput::DIR_RIGHT;
+				if (down) { _pi.dirMask |= PlayerInput::DIR_RIGHT; _upDirMask &= ~PlayerInput::DIR_RIGHT; } else _upDirMask |= PlayerInput::DIR_RIGHT;
 				break;
 			case STDLK_RETURN:
 			case STDLK_KP_ENTER:
-				_pi.enter = down;
+				if (down) { _pi.enter = true; _upEnter = false; } else _upEnter = true;
 				break;
 			case STDLK_SPACE:
-				_pi.space = down;
+				if (down) { _pi.space = true; _upSpace = false; } else _upSpace = true;
 				break;
 			case STDLK_LSHIFT:
 			case STDLK_RSHIFT:
-				_pi.shift = down;
+				if (down) { _pi.shift = true; _upShift = false; } else _upShift = true;
 				break;
+			// backspace and escape are edge-consumed by the game
+			// (it writes false back). Frames can be slow enough
+			// that press and release arrive in the same poll, so
+			// never clear them here or the game misses the press.
 			case STDLK_BACKSPACE:
 			case STDLK_TAB:
-				_pi.backspace = down;
+				if (down) {
+					_pi.backspace = true;
+				}
 				break;
 			case STDLK_ESCAPE:
-				_pi.escape = down;
+				if (down) {
+					_pi.escape = true;
+				}
 				break;
 			default:
 				if (down) {

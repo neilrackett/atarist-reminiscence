@@ -18,6 +18,18 @@
 
 uint32_t g_debugMask;
 
+#ifdef ATARIST
+// GEMDOS console output lands in screen RAM, so route diagnostics to
+// a log file instead of scribbling over the game.
+static void logLine(const char *tag, const char *buf) {
+	FILE *fp = fopen("RS.LOG", "a");
+	if (fp) {
+		fprintf(fp, "%s%s\n", tag, buf);
+		fclose(fp);
+	}
+}
+#endif
+
 #ifndef NDEBUG
 void debug(uint32_t cm, const char *msg, ...) {
 	char buf[1024];
@@ -57,7 +69,11 @@ void warning(const char *msg, ...) {
 	va_start(va, msg);
 	vsnprintf(buf, sizeof(buf), msg, va);
 	va_end(va);
+#ifdef ATARIST
+	logLine("WARNING: ", buf);
+#else
 	fprintf(stderr, "WARNING: %s!\n", buf);
+#endif
 #ifdef __ANDROID__
 	__android_log_print(ANDROID_LOG_WARN, LOG_TAG, "%s", buf);
 #endif
@@ -69,8 +85,12 @@ void info(const char *msg, ...) {
 	va_start(va, msg);
 	vsnprintf(buf, sizeof(buf), msg, va);
 	va_end(va);
+#ifdef ATARIST
+	logLine("", buf);
+#else
 	fprintf(stdout, "%s\n", buf);
 	fflush(stdout);
+#endif
 #ifdef __ANDROID__
 	__android_log_print(ANDROID_LOG_INFO, LOG_TAG, "%s", buf);
 #endif
