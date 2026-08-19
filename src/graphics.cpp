@@ -6,6 +6,7 @@
 
 #include "graphics.h"
 #include "util.h"
+#include "video_st.h"
 
 void Graphics::setLayer(uint8_t *layer, int pitch) {
 	_layer = layer;
@@ -23,7 +24,11 @@ void Graphics::setClippingRect(int16_t rx, int16_t ry, int16_t rw, int16_t rh) {
 void Graphics::drawPoint(uint8_t color, const Point *pt) {
 	debug(DBG_VIDEO, "Graphics::drawPoint() col=0x%X x=%d, y=%d", color, pt->x, pt->y);
 	if (pt->x >= 0 && pt->x < _crw && pt->y >= 0 && pt->y < _crh) {
+#ifdef ATARIST
+		ST_drawPoint(_layer, pt->x + _crx, pt->y + _cry, color);
+#else
 		*(_layer + (pt->y + _cry) * _layerPitch + pt->x + _crx) = color;
+#endif
 	}
 }
 
@@ -206,6 +211,26 @@ void Graphics::drawEllipse(uint8_t color, bool hasAlpha, const Point *pt, int16_
 void Graphics::fillArea(uint8_t color, bool hasAlpha) {
 	debug(DBG_VIDEO, "Graphics::fillArea()");
 	int16_t *pts = _areaPoints;
+#ifdef ATARIST
+	int y = _cry + *pts++;
+	int16_t x1 = *pts++;
+	if (x1 >= 0) {
+		const bool orMode = (hasAlpha && color > 0xC7);
+		do {
+			const int16_t x2 = MIN<int16_t>(_crw - 1, *pts++);
+			if (x1 <= x2) {
+				if (orMode) {
+					ST_hspanOr(_layer, _crx + x1, _crx + x2, y, color);
+				} else {
+					ST_hspan(_layer, _crx + x1, _crx + x2, y, color);
+				}
+			}
+			++y;
+			x1 = *pts++;
+		} while (x1 >= 0);
+	}
+	return;
+#else
 	uint8_t *dst = _layer + (_cry + *pts++) * _layerPitch + _crx;
 	int16_t x1 = *pts++;
 	if (x1 >= 0) {
@@ -230,6 +255,7 @@ void Graphics::fillArea(uint8_t color, bool hasAlpha) {
 			} while (x1 >= 0);
 		}
 	}
+#endif
 }
 
 void Graphics::drawSegment(uint8_t color, bool hasAlpha, int16_t ys, const Point *pts, uint8_t numPts) {

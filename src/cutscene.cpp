@@ -8,6 +8,7 @@
 #include "cutscene.h"
 #include "resource.h"
 #include "systemstub.h"
+#include "video_st.h"
 #include "util.h"
 #include "video.h"
 
@@ -33,6 +34,7 @@ Cutscene::Cutscene(Resource *res, SystemStub *stub, Video *vid)
 	memset(_palBuf, 0, sizeof(_palBuf));
 	_paletteNum = -1;
 	_isConcavePolygonShape = false;
+	_stClearPending = false;
 }
 
 const uint8_t *Cutscene::getCommandData() const {
@@ -83,8 +85,13 @@ void Cutscene::updatePalette() {
 void Cutscene::updateScreen() {
 	sync(_frameDelay - 1);
 	updatePalette();
+	stFlushBackPage();
 	SWAP(_frontPage, _backPage);
+#ifdef ATARIST
+	_stub->copyRectPlanar(0, 0, _vid->_w, _vid->_h, _frontPage);
+#else
 	_stub->copyRect(0, 0, _vid->_w, _vid->_h, _frontPage, _vid->_w);
+#endif
 	_stub->updateScreen(0);
 }
 
@@ -201,10 +208,26 @@ void Cutscene::drawText(int16_t x, int16_t y, const uint8_t *p, uint16_t color, 
 
 void Cutscene::clearBackPage() {
 	if (_clearScreen == 0) {
+		_stClearPending = false;
 		memcpy(_backPage, _auxPage, _vid->_layerSize);
 	} else {
+#ifdef ATARIST
+		// defer: the scene's op_setPalette may not have run yet, and
+		// planar clears bake the current colour remap into the page
+		_stClearPending = true;
+#else
 		memset(_backPage, 0xC0, _vid->_layerSize);
+#endif
 	}
+}
+
+void Cutscene::stFlushBackPage() {
+#ifdef ATARIST
+	if (_stClearPending) {
+		_stClearPending = false;
+		ST_clearLayer(_backPage, 0xC0);
+	}
+#endif
 }
 
 void Cutscene::drawCreditsText() {
@@ -270,6 +293,7 @@ void Cutscene::drawCreditsText() {
 	} else {
 		_creditsTextCounter -= 10;
 	}
+	stFlushBackPage();
 	drawText((_creditsTextPosX - 1) * 8, _creditsTextPosY * 8, _textBuf, 0xEF, _backPage, kTextJustifyLeft);
 }
 
@@ -345,7 +369,8 @@ void Cutscene::op_waitForSync() {
 			if (_textBuf == _textCurBuf) {
 				_creditsTextCounter = _res->isDOS() ? 20 : 60;
 			}
-			memcpy(_backPage, _frontPage, _vid->_layerSize);
+			_stClearPending = false;
+	memcpy(_backPage, _frontPage, _vid->_layerSize);
 			drawCreditsText();
 			updateScreen();
 		} while (--n);
@@ -363,6 +388,7 @@ void Cutscene::checkShape(uint16_t shapeOffset) {
 
 void Cutscene::drawShape(const uint8_t *data, int16_t x, int16_t y) {
 	debug(DBG_CUT, "Cutscene::drawShape()");
+	stFlushBackPage();
 	_gfx.setLayer(_backPage, _vid->_w);
 	uint8_t numVertices = *data++;
 	if (numVertices & 0x80) {
@@ -448,6 +474,7 @@ void Cutscene::op_drawShape() {
 		drawShape(primitiveVertices, x + dx, y + dy);
 	}
 	if (_clearScreen != 0) {
+	stFlushBackPage();
 		memcpy(_auxPage, _backPage, _vid->_layerSize);
 	}
 }
@@ -464,6 +491,12 @@ void Cutscene::op_setPalette() {
 		_palBuf[0x21] = 0xFF;
 	}
 	_paletteNum = num;
+#ifdef ATARIST
+	// planar pages bake colours at draw time, so the palette (and
+	// therefore the colour remap) must be current before this
+	// frame's shapes are drawn, not applied at the next flip
+	updatePalette();
+#endif
 }
 
 void Cutscene::op_drawCaptionText() {
@@ -474,9 +507,16 @@ void Cutscene::op_drawCaptionText() {
 		const int h = 45 * _vid->_layerScale;
 		const int y = Video::GAMESCREEN_H * _vid->_layerScale - h;
 
+#ifdef ATARIST
+		stFlushBackPage();
+		ST_fillRect(_auxPage, 0, y, Video::GAMESCREEN_W, h, 0xC0);
+		ST_fillRect(_backPage, 0, y, Video::GAMESCREEN_W, h, 0xC0);
+		ST_fillRect(_frontPage, 0, y, Video::GAMESCREEN_W, h, 0xC0);
+#else
 		memset(_auxPage + y * _vid->_w, 0xC0, h * _vid->_w);
 		memset(_backPage + y * _vid->_w, 0xC0, h * _vid->_w);
 		memset(_frontPage + y * _vid->_w, 0xC0, h * _vid->_w);
+#endif
 		if (strId != 0xFFFF) {
 			const uint8_t *str = _res->getCineString(strId);
 			if (str) {
@@ -511,6 +551,7 @@ void Cutscene::op_refreshAll() {
 
 void Cutscene::drawShapeScale(const uint8_t *data, int16_t zoom, int16_t b, int16_t c, int16_t d, int16_t e, int16_t f, int16_t g) {
 	debug(DBG_CUT, "Cutscene::drawShapeScale(%d, %d, %d, %d, %d, %d, %d)", zoom, b, c, d, e, f, g);
+	stFlushBackPage();
 	_gfx.setLayer(_backPage, _vid->_w);
 	uint8_t numVertices = *data++;
 	if (numVertices & 0x80) {
@@ -698,6 +739,7 @@ void Cutscene::op_drawShapeScale() {
 
 void Cutscene::drawShapeScaleRotate(const uint8_t *data, int16_t zoom, int16_t b, int16_t c, int16_t d, int16_t e, int16_t f, int16_t g) {
 	debug(DBG_CUT, "Cutscene::drawShapeScaleRotate(%d, %d, %d, %d, %d, %d, %d)", zoom, b, c, d, e, f, g);
+	stFlushBackPage();
 	_gfx.setLayer(_backPage, _vid->_w);
 	uint8_t numVertices = *data++;
 	if (numVertices & 0x80) {
@@ -970,6 +1012,7 @@ void Cutscene::op_copyScreen() {
 	if (_textCurBuf == _textBuf) {
 		++_creditsTextCounter;
 	}
+	_stClearPending = false;
 	memcpy(_backPage, _frontPage, _vid->_layerSize);
 	_frameDelay = 10;
 
@@ -987,7 +1030,8 @@ void Cutscene::op_copyScreen() {
 			paletteLut[k] = 0xC0 + index;
 		}
 
-		_gfx.setLayer(_backPage, _vid->_w);
+		stFlushBackPage();
+	_gfx.setLayer(_backPage, _vid->_w);
 		drawSetShape(_memoSetShape2Data, 0, (int16_t)memoSetPos[_memoSetOffset + 1], (int16_t)memoSetPos[_memoSetOffset + 2], paletteLut);
 		_memoSetOffset += 3;
 		if (memoSetPos[_memoSetOffset] == 4) {
@@ -1013,12 +1057,18 @@ void Cutscene::op_drawTextAtPos() {
 			const uint8_t *str = _res->getCineString(strId & 0xFFF);
 			if (str) {
 				const uint8_t color = 0xD0 + (strId >> 0xC);
+				stFlushBackPage();
 				drawText(x, y, str, color, _backPage, kTextJustifyCenter);
 			}
 			// 'voyage' - cutscene script redraws the string to refresh the screen
 			if (_id == kCineVoyage && (strId & 0xFFF) == 0x45) {
 				if ((_cmdPtr - _cmdStartPtr) == 0xA) {
-					_stub->copyRect(0, 0, _vid->_w, _vid->_h, _backPage, _vid->_w);
+					#ifdef ATARIST
+		stFlushBackPage();
+		_stub->copyRectPlanar(0, 0, _vid->_w, _vid->_h, _backPage);
+#else
+		_stub->copyRect(0, 0, _vid->_w, _vid->_h, _backPage, _vid->_w);
+#endif
 					_stub->updateScreen(0);
 				} else {
 					_stub->sleep(15);
@@ -1227,6 +1277,9 @@ void Cutscene::prepare() {
 }
 
 void Cutscene::playCredits() {
+#ifdef ATARIST
+	ST_setCutscenePalMode(true);
+#endif
 	if (_res->isMac()) {
 		_res->MAC_loadCreditsText();
 		_creditsTextIndex = 0;
@@ -1261,6 +1314,10 @@ void Cutscene::playCredits() {
 		}
 	}
 	_creditsSequence = false;
+#ifdef ATARIST
+	ST_setCutscenePalMode(false);
+	_vid->ST_rebakeRoom();
+#endif
 }
 
 void Cutscene::playText(const char *str) {
@@ -1279,9 +1336,18 @@ void Cutscene::playText(const char *str) {
 		}
 	}
 	const int y = (128 - lines * 8) / 2;
-	memset(_backPage, 0xC0, _vid->_layerSize);
+	#ifdef ATARIST
+		ST_clearLayer(_backPage, 0xC0);
+#else
+		memset(_backPage, 0xC0, _vid->_layerSize);
+#endif
 	drawText(0, y, (const uint8_t *)str, 0xC1, _backPage, kTextJustifyAlign);
-	_stub->copyRect(0, 0, _vid->_w, _vid->_h, _backPage, _vid->_w);
+	#ifdef ATARIST
+		stFlushBackPage();
+		_stub->copyRectPlanar(0, 0, _vid->_w, _vid->_h, _backPage);
+#else
+		_stub->copyRect(0, 0, _vid->_w, _vid->_h, _backPage, _vid->_w);
+#endif
 	_stub->updateScreen(0);
 
 	while (!_stub->_pi.quit) {
@@ -1300,6 +1366,9 @@ void Cutscene::play() {
 		debug(DBG_CUT, "Cutscene::play() _id=0x%X", _id);
 		_creditsSequence = false;
 		prepare();
+#ifdef ATARIST
+		ST_setCutscenePalMode(true);
+#endif
 		const uint8_t *offsets = _res->isAmiga() ? _offsetsTableAmiga : _offsetsTableDOS;
 		uint8_t cutName = offsets[_id * 2];
 		uint16_t cutOff = (int8_t)offsets[_id * 2 + 1];
@@ -1362,6 +1431,10 @@ void Cutscene::play() {
 		} else if (_id == 8 && g_options.play_caillou_cutscene) {
 			playSet(_caillouSetData, 0x5E4);
 		}
+#ifdef ATARIST
+		ST_setCutscenePalMode(false);
+		_vid->ST_rebakeRoom();
+#endif
 		_vid->fullRefresh();
 		if (_id != 0x3D) {
 			_id = 0xFFFF;
@@ -1444,6 +1517,7 @@ void Cutscene::playSet(const uint8_t *p, int offset) {
 	}
 
 	prepare();
+	stFlushBackPage();
 	_gfx.setLayer(_backPage, _vid->_w);
 
 	offset = 10;
@@ -1451,7 +1525,11 @@ void Cutscene::playSet(const uint8_t *p, int offset) {
 	for (int i = 0; i < frames && !_stub->_pi.quit && !_interrupted; ++i) {
 		const uint32_t timestamp = _stub->getTimeStamp();
 
+		#ifdef ATARIST
+		ST_clearLayer(_backPage, 0xC0);
+#else
 		memset(_backPage, 0xC0, _vid->_layerSize);
+#endif
 
 		const int shapeBg = READ_BE_UINT16(p + offset); offset += 2;
 		const int count = READ_BE_UINT16(p + offset); offset += 2;
@@ -1498,7 +1576,12 @@ void Cutscene::playSet(const uint8_t *p, int offset) {
 			_stub->setPaletteEntry(0xC0 + j, &c);
 		}
 
+		#ifdef ATARIST
+		stFlushBackPage();
+		_stub->copyRectPlanar(0, 0, _vid->_w, _vid->_h, _backPage);
+#else
 		_stub->copyRect(0, 0, _vid->_w, _vid->_h, _backPage, _vid->_w);
+#endif
 		_stub->updateScreen(0);
 		const int diff = 90 - (_stub->getTimeStamp() - timestamp);
 		_stub->sleep((diff < 16) ? 16 : diff);

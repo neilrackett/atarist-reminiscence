@@ -28,6 +28,7 @@ extern "C" {
 
 #include "systemstub.h"
 #include "util.h"
+#include "video_st.h"
 
 static const int kMaxSrcW = 320;
 static const int kMaxSrcH = 224;
@@ -65,6 +66,7 @@ struct SystemStub_STDL : SystemStub {
 	virtual void getPaletteEntry(int i, Color *c);
 	virtual void setOverscanColor(int i) {}
 	virtual void copyRect(int x, int y, int w, int h, const uint8_t *buf, int pitch);
+	virtual void copyRectPlanar(int x, int y, int w, int h, const uint8_t *layer);
 	virtual void copyRectRgb24(int x, int y, int w, int h, const uint8_t *rgb) {}
 	virtual void zoomRect(int x, int y, int w, int h) {}
 	virtual void copyWidescreenLeft(int w, int h, const uint8_t *buf) {}
@@ -91,8 +93,50 @@ struct SystemStub_STDL : SystemStub {
 	void reconvertFromShadow();
 };
 
+static SystemStub_STDL *g_stub;
+
 SystemStub *SystemStub_STDL_create() {
-	return new SystemStub_STDL();
+	g_stub = new SystemStub_STDL();
+	return g_stub;
+}
+
+// Draw-time access to the logical->hardware colour map for the
+// planar layer primitives (video_st.cpp).
+const uint8_t *ST_getRemap() {
+	if (g_stub->_palDirty) {
+		g_stub->buildRemap();
+	}
+	return g_stub->_remap;
+}
+
+// Copy a planar layer region to the screen: pure word moves with the
+// 224->200 line squash and horizontal centring. x/w widen to 16px.
+void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *layer) {
+	if (_palDirty) {
+		buildRemap();
+	}
+	const int gx0 = x >> 4;
+	int gx1 = (x + w + 15) >> 4;
+	if (gx1 > kSTLayerW / 16) {
+		gx1 = kSTLayerW / 16;
+	}
+	if (y + h > kSTLayerH) {
+		h = kSTLayerH - y;
+	}
+	const int bytes = (gx1 - gx0) << 3;
+	if (bytes <= 0) {
+		return;
+	}
+	const int xOffBytes = (_xOffset >> 4) << 3;
+	for (int j = 0; j < h; ++j) {
+		const int sy = y + j;
+		if (_yDrop[sy]) {
+			continue;
+		}
+		const uint8_t *src = layer + sy * kSTRowBytes + (gx0 << 3);
+		uint8_t *dst = _screen->pixels + _yMap[sy] * kScreenStride + xOffBytes + (gx0 << 3);
+		memcpy(dst, src, bytes);
+	}
 }
 
 void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int widescreenMode, bool maximized, const ScalerParameters *scalerParameters, int outputRate) {
@@ -188,12 +232,61 @@ void SystemStub_STDL::getPaletteEntry(int i, Color *c) {
 	*c = _pal[i];
 }
 
+// Cutscene palette mode: shapes are authored against logical
+// entries 0xC0-0xCF (8 base + 8 shadow colours), so map those to
+// hardware slots 0-15 directly. Baked page content then follows
+// palette changes exactly like the chunky original, and the shadow
+// effect (index |= 8) becomes a plane-3 OR.
+static bool g_cutscenePal;
+
+void ST_setCutscenePalMode(bool enable) {
+	if (g_cutscenePal != enable) {
+		g_cutscenePal = enable;
+		g_stub->_palDirty = true;
+	}
+}
+
+bool ST_cutscenePalMode() {
+	return g_cutscenePal;
+}
+
 // Quantise the 256-entry logical palette to 16 hardware colours.
 // Colours are reduced to STE 4-bit per channel first (the hardware
 // cannot do better), deduplicated, then greedily merged by nearest
 // pair until 16 remain.
 void SystemStub_STDL::buildRemap() {
 	_palDirty = false;
+
+	if (g_cutscenePal) {
+		for (int i = 0; i < 16; ++i) {
+			_hwPal[i] = _pal[0xC0 + i];
+		}
+		for (int i = 0; i < 256; ++i) {
+			if (i >= 0xC0 && i < 0xD0) {
+				_remap[i] = i & 15;
+				continue;
+			}
+			// everything else (upper cutscene bank, text) lands on
+			// the nearest of the 16
+			long best = 0x7FFFFFFF;
+			int bs = 0;
+			for (int s = 0; s < 16; ++s) {
+				const int dr = _pal[i].r - _hwPal[s].r;
+				const int dg = _pal[i].g - _hwPal[s].g;
+				const int db = _pal[i].b - _hwPal[s].b;
+				const long d = (long)dr * dr + 2L * dg * dg + (long)db * db;
+				if (d < best) {
+					best = d;
+					bs = s;
+				}
+			}
+			_remap[i] = bs;
+		}
+		memcpy(_basePal, _pal, sizeof(_pal));
+		_fade = 256;
+		_hwDirty = true;
+		return;
+	}
 
 	// fade fast path: same colours, uniformly darker or brighter -
 	// keep the remap, only rescale the registers
@@ -291,23 +384,66 @@ void SystemStub_STDL::buildRemap() {
 		--live;
 	}
 
-	// assign hardware slots and build the remap
+	// Assign hardware slots stickily: match each cluster to the slot
+	// whose previous colour is nearest. Planar layers bake the remap
+	// into their pixels at draw time, so content that survives a
+	// palette change keeps its colours only if unchanged colours
+	// keep their slots.
 	uint8_t slotOf[256];
-	int slot = 0;
+	int clusters[16];
+	int nc = 0;
 	for (int i = 0; i < n; ++i) {
 		if (alias[i] == i) {
-			slotOf[i] = slot;
-			const uint8_t r = (col[i] >> 8) & 15, g = (col[i] >> 4) & 15, b = col[i] & 15;
-			_hwPal[slot].r = (r << 4) | r;
-			_hwPal[slot].g = (g << 4) | g;
-			_hwPal[slot].b = (b << 4) | b;
-			++slot;
+			clusters[nc++] = i;
 		}
 	}
-	while (slot < 16) {
-		_hwPal[slot].r = _hwPal[slot].g = _hwPal[slot].b = 0;
-		++slot;
+	bool slotUsed[16];
+	bool clusterDone[16];
+	memset(slotUsed, 0, sizeof(slotUsed));
+	memset(clusterDone, 0, sizeof(clusterDone));
+	Color newHw[16];
+	memset(newHw, 0, sizeof(newHw));
+	for (int pass = 0; pass < nc; ++pass) {
+		long best = 0x7FFFFFFF;
+		int bc = -1, bs = -1;
+		for (int c = 0; c < nc; ++c) {
+			if (clusterDone[c]) {
+				continue;
+			}
+			const int i = clusters[c];
+			const int r1 = (col[i] >> 8) & 15, g1 = (col[i] >> 4) & 15, b1 = col[i] & 15;
+			for (int s = 0; s < 16; ++s) {
+				if (slotUsed[s]) {
+					continue;
+				}
+				const int dr = r1 - (_hwPal[s].r >> 4);
+				const int dg = g1 - (_hwPal[s].g >> 4);
+				const int db = b1 - (_hwPal[s].b >> 4);
+				const long d = dr * dr + 2 * dg * dg + db * db;
+				if (d < best) {
+					best = d;
+					bc = c;
+					bs = s;
+				}
+			}
+		}
+		const int i = clusters[bc];
+		slotOf[i] = bs;
+		const uint8_t r = (col[i] >> 8) & 15, g = (col[i] >> 4) & 15, b = col[i] & 15;
+		newHw[bs].r = (r << 4) | r;
+		newHw[bs].g = (g << 4) | g;
+		newHw[bs].b = (b << 4) | b;
+		slotUsed[bs] = true;
+		clusterDone[bc] = true;
 	}
+	// unused slots keep their previous colours so stale pixels at
+	// least stay stable
+	for (int s = 0; s < 16; ++s) {
+		if (!slotUsed[s]) {
+			newHw[s] = _hwPal[s];
+		}
+	}
+	memcpy(_hwPal, newHw, sizeof(_hwPal));
 	uint8_t newRemap[256];
 	for (int i = 0; i < 256; ++i) {
 		int c = entryCluster[i];

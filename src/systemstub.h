@@ -68,6 +68,10 @@ struct SystemStub {
 	virtual void getPaletteEntry(int i, Color *c) = 0;
 	virtual void setOverscanColor(int i) = 0;
 	virtual void copyRect(int x, int y, int w, int h, const uint8_t *buf, int pitch) = 0;
+#ifdef ATARIST
+	// planar layer blit (see video_st.h for the layer format)
+	virtual void copyRectPlanar(int x, int y, int w, int h, const uint8_t *layer) {}
+#endif
 	virtual void copyRectRgb24(int x, int y, int w, int h, const uint8_t *rgb) = 0;
 	virtual void zoomRect(int x, int y, int h, int w) = 0;
 	virtual void copyWidescreenLeft(int w, int h, const uint8_t *buf) = 0;

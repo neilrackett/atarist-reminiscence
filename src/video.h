@@ -43,6 +43,13 @@ struct Video {
 	uint8_t *_backLayer;
 	uint8_t *_tempLayer;
 	uint8_t *_tempLayer2;
+#ifdef ATARIST
+	// chunky staging buffer for room decode; layers are planar
+	uint8_t *_stagingLayer;
+	// re-bake the room layers from the staging buffer with the
+	// current palette (used when leaving cutscene palette mode)
+	void ST_rebakeRoom();
+#endif
 	uint8_t _unkPalSlot1, _unkPalSlot2;
 	uint8_t _mapPalSlot1, _mapPalSlot2, _mapPalSlot3, _mapPalSlot4;
 	uint8_t _charFrontColor;

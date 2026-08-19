@@ -74,6 +74,8 @@ struct Cutscene {
 	uint16_t _id;
 	uint16_t _deathCutsceneId;
 	bool _interrupted;
+	bool _stClearPending;
+	void stFlushBackPage();
 	bool _stop;
 	const uint8_t *_polPtr;
 	const uint8_t *_cmdPtr;

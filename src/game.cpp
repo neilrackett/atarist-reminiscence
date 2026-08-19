@@ -12,6 +12,13 @@
 #include "seq_player.h"
 #include "systemstub.h"
 #include "util.h"
+#include "video_st.h"
+
+#ifdef ATARIST
+#define GAME_COPYRECT_FRONT() _stub->copyRectPlanar(0, 0, _vid._w, _vid._h, _vid._frontLayer)
+#else
+#define GAME_COPYRECT_FRONT() _stub->copyRect(0, 0, _vid._w, _vid._h, _vid._frontLayer, _vid._w)
+#endif
 
 Game::Game(SystemStub *stub, FileSystem *fs, const char *savePath, int level, ResourceType ver, Language lang, WidescreenMode widescreenMode, bool autoSave, const PrfMidiDriver *midiDriver, const char *midiSoundFont, uint32_t cheats)
 	: _cut(&_res, stub, &_vid), _menu(&_res, stub, &_vid),
@@ -595,7 +602,7 @@ void Game::showFinalScore() {
 	const char *str = _menu.getLevelPassword(7, _skillLevel);
 	_vid.drawString(str, (Video::GAMESCREEN_W - strlen(str) * Video::CHAR_W) / 2, 16, 0xE7);
 	while (!_stub->_pi.quit) {
-		_stub->copyRect(0, 0, _vid._w, _vid._h, _vid._frontLayer, _vid._w);
+		GAME_COPYRECT_FRONT();
 		_stub->updateScreen(0);
 		_stub->processEvents();
 		if (_stub->_pi.enter) {
@@ -794,7 +801,7 @@ bool Game::handleContinueAbort() {
 			_stub->_pi.enter = false;
 			return (current_color == 0);
 		}
-		_stub->copyRect(0, 0, _vid._w, _vid._h, _vid._frontLayer, _vid._w);
+		GAME_COPYRECT_FRONT();
 		_stub->updateScreen(0);
 		static const int COLOR_STEP = 8;
 		static const int COLOR_MIN = 16;
@@ -1345,6 +1352,15 @@ void Game::drawObjectFrame(const uint8_t *bankDataPtr, const uint8_t *dataPtr, i
 	const uint32_t dst_offset = Video::GAMESCREEN_W * sprite_y + sprite_x;
 	const uint8_t sprite_col_mask = (flags & 0x60) >> 1;
 
+#ifdef ATARIST
+	uint8_t map16[16];
+	ST_buildMap16(sprite_col_mask, map16);
+	unsigned stFlags = (sprite_flags & 0x10) ? kSTSpriteXflip : 0;
+	if (!_eraseBackground) {
+		stFlags |= kSTSpriteRespectPrio;
+	}
+	ST_drawSprite(_vid._frontLayer, src, sprite_w, sprite_x, sprite_y, sprite_clipped_w, sprite_clipped_h, map16, stFlags, false);
+#else
 	if (_eraseBackground) {
 		if (!(sprite_flags & 0x10)) {
 			_vid.drawSpriteSub1(src, _vid._frontLayer + dst_offset, sprite_w, sprite_clipped_h, sprite_clipped_w, sprite_col_mask);
@@ -1358,6 +1374,7 @@ void Game::drawObjectFrame(const uint8_t *bankDataPtr, const uint8_t *dataPtr, i
 			_vid.drawSpriteSub4(src, _vid._frontLayer + dst_offset, sprite_w, sprite_clipped_h, sprite_clipped_w, sprite_col_mask);
 		}
 	}
+#endif
 	_vid.markBlockAsDirty(sprite_x, sprite_y, sprite_clipped_w, sprite_clipped_h, _vid._layerScale);
 }
 
@@ -1449,6 +1466,20 @@ void Game::drawCharacter(const uint8_t *dataPtr, int16_t pos_x, int16_t pos_y, u
 
 	debug(DBG_GAME, "dst_offset=0x%X src_offset=%ld", dst_offset, src - dataPtr);
 
+#ifdef ATARIST
+	uint8_t map16[16];
+	ST_buildMap16(sprite_col_mask, map16);
+	unsigned stFlags = kSTSpriteRespectPrio;
+	if (flags & 2) {
+		stFlags |= kSTSpriteXflip;
+	}
+	int stPitch = sprite_w;
+	if (sprite_mirror_y) {
+		stFlags |= kSTSpriteColMajor;
+		stPitch = sprite_h;
+	}
+	ST_drawSprite(_vid._frontLayer, src, stPitch, pos_x, pos_y, sprite_clipped_w, sprite_clipped_h, map16, stFlags, false);
+#else
 	if (!(flags & 2)) {
 		if (sprite_mirror_y) {
 			_vid.drawSpriteSub5(src, _vid._frontLayer + dst_offset, sprite_h, sprite_clipped_h, sprite_clipped_w, sprite_col_mask);
@@ -1462,6 +1493,7 @@ void Game::drawCharacter(const uint8_t *dataPtr, int16_t pos_x, int16_t pos_y, u
 			_vid.drawSpriteSub4(src, _vid._frontLayer + dst_offset, sprite_w, sprite_clipped_h, sprite_clipped_w, sprite_col_mask);
 		}
 	}
+#endif
 	_vid.markBlockAsDirty(pos_x, pos_y, sprite_clipped_w, sprite_clipped_h, _vid._layerScale);
 }
 
@@ -1848,7 +1880,15 @@ void Game::drawIcon(uint8_t iconNum, int16_t x, int16_t y, uint8_t colMask) {
 		_vid.SEGA_decodeIcn(_res._icn, iconNum, buf);
 		break;
 	}
+#ifdef ATARIST
+	{
+		uint8_t map16[16];
+		ST_buildMap16(colMask << 4, map16);
+		ST_drawSprite(_vid._frontLayer, buf, 16, x, y, 16, 16, map16, 0, (colMask & 8) != 0);
+	}
+#else
 	_vid.drawSpriteSub1(buf, _vid._frontLayer + x + y * _vid._w, 16, 16, 16, colMask << 4);
+#endif
 	_vid.markBlockAsDirty(x, y, 16, 16, _vid._layerScale);
 }
 
@@ -1933,6 +1973,14 @@ void Game::handleInventory() {
 				if (_res._type == kResourceTypeAmiga) {
 					// draw outline rectangle
 					static const uint8_t outline_color = 0xE7;
+#ifdef ATARIST
+					ST_hspan(_vid._frontLayer, 57, 56 + 9 * icon_spr_w - 2, 140, outline_color);
+					for (int y = 1; y < 5 * icon_spr_h - 1; ++y) {
+						ST_drawPoint(_vid._frontLayer, 56, 140 + y, outline_color);
+						ST_drawPoint(_vid._frontLayer, 56 + 9 * icon_spr_w - 1, 140 + y, outline_color);
+					}
+					ST_hspan(_vid._frontLayer, 57, 56 + 9 * icon_spr_w - 2, 140 + 5 * icon_spr_h - 1, outline_color);
+#else
 					uint8_t *p = _vid._frontLayer + 140 * Video::GAMESCREEN_W + 56;
 					memset(p + 1, outline_color, 9 * icon_spr_w - 2);
 					p += Video::GAMESCREEN_W;
@@ -1941,6 +1989,7 @@ void Game::handleInventory() {
 						p += Video::GAMESCREEN_W;
 					}
 					memset(p + 1, outline_color, 9 * icon_spr_w - 2);
+#endif
 				}
 				break;
 			case kResourceTypeMac:

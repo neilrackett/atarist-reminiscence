@@ -7,6 +7,7 @@
 #include "game.h"
 #include "screenshot.h"
 #include "systemstub.h"
+#include "video_st.h"
 
 static uint8_t reverseBits(uint8_t x) {
 	x = ((x & 0xAA) >> 1) | ((x & 0x55) << 1);
@@ -76,7 +77,11 @@ bool Game::handleProtectionScreenShape() {
 	const int codeNum = getRandomNumber() % 5;
 	for (int16_t zoom = 2000; zoom >= 0; zoom -= 100) {
 		_cut.drawProtectionShape(shapeNum, zoom);
+		#ifdef ATARIST
+		_stub->copyRectPlanar(0, 0, _vid._w, _vid._h, _vid._tempLayer);
+#else
 		_stub->copyRect(0, 0, _vid._w, _vid._h, _vid._tempLayer, _vid._w);
+#endif
 		_stub->updateScreen(0);
 		_stub->sleep(30);
 	}

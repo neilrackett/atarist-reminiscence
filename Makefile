@@ -30,7 +30,7 @@ SRCS = collision.cpp cpc_player.cpp cutscene.cpp decode_mac.cpp file.cpp \
 	protection.cpp resource.cpp resource_aba.cpp resource_mac.cpp \
 	resource_paq.cpp screenshot.cpp seq_player.cpp sfx_player.cpp \
 	staticres.cpp unpack.cpp util.cpp video.cpp \
-	main_atari.cpp systemstub_stdl.cpp
+	main_atari.cpp systemstub_stdl.cpp video_st.cpp
 
 OBJS = $(SRCS:%.cpp=build/%.o)
 

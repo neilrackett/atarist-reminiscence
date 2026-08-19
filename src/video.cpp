@@ -10,13 +10,19 @@
 #include "unpack.h"
 #include "util.h"
 #include "video.h"
+#include "video_st.h"
 
 Video::Video(Resource *res, SystemStub *stub, WidescreenMode widescreenMode)
 	: _res(res), _stub(stub), _widescreenMode(widescreenMode) {
 	_layerScale = g_features->resolution_scale;
 	_w = GAMESCREEN_W * _layerScale;
 	_h = GAMESCREEN_H * _layerScale;
+#ifdef ATARIST
+	_layerSize = kSTLayerSize;
+	_stagingLayer = (uint8_t *)calloc(1, GAMESCREEN_W * GAMESCREEN_H);
+#else
 	_layerSize = _w * _h;
+#endif
 	_frontLayer = (uint8_t *)calloc(1, _layerSize);
 	_backLayer = (uint8_t *)calloc(1,_layerSize);
 	_tempLayer = (uint8_t *)calloc(1, _layerSize);
@@ -44,12 +50,22 @@ Video::Video(Resource *res, SystemStub *stub, WidescreenMode widescreenMode)
 }
 
 Video::~Video() {
+#ifdef ATARIST
+	free(_stagingLayer);
+#endif
 	free(_frontLayer);
 	free(_backLayer);
 	free(_tempLayer);
 	free(_tempLayer2);
 	free(_screenBlocks);
 }
+
+#ifdef ATARIST
+void Video::ST_rebakeRoom() {
+	ST_convertChunky(_backLayer, _stagingLayer, GAMESCREEN_H);
+	memcpy(_frontLayer, _backLayer, _layerSize);
+}
+#endif
 
 void Video::markBlockAsDirty(int16_t x, int16_t y, uint16_t w, uint16_t h, int scale) {
 	debug(DBG_VIDEO, "Video::markBlockAsDirty(%d, %d, %d, %d)", x, y, w, h);
@@ -79,8 +95,13 @@ void Video::markBlockAsDirty(int16_t x, int16_t y, uint16_t w, uint16_t h, int s
 void Video::updateScreen() {
 	debug(DBG_VIDEO, "Video::updateScreen()");
 //	_fullRefresh = true;
+#ifdef ATARIST
+#define VIDEO_BLIT(x, y, w, h) _stub->copyRectPlanar((x), (y), (w), (h), _frontLayer)
+#else
+#define VIDEO_BLIT(x, y, w, h) _stub->copyRect((x), (y), (w), (h), _frontLayer, _w)
+#endif
 	if (_fullRefresh) {
-		_stub->copyRect(0, 0, _w, _h, _frontLayer, _w);
+		VIDEO_BLIT(0, 0, _w, _h);
 		_stub->updateScreen(_shakeOffset);
 		_fullRefresh = false;
 	} else {
@@ -95,14 +116,14 @@ void Video::updateScreen() {
 					++nh;
 				} else if (nh != 0) {
 					const int x = (i - nh) * SCREENBLOCK_W;
-					_stub->copyRect(x, j * SCREENBLOCK_H, nh * SCREENBLOCK_W, SCREENBLOCK_H, _frontLayer, _w);
+					VIDEO_BLIT(x, j * SCREENBLOCK_H, nh * SCREENBLOCK_W, SCREENBLOCK_H);
 					nh = 0;
 					++count;
 				}
 			}
 			if (nh != 0) {
 				const int x = (i - nh) * SCREENBLOCK_W;
-				_stub->copyRect(x, j * SCREENBLOCK_H, nh * SCREENBLOCK_W, SCREENBLOCK_H, _frontLayer, _w);
+				VIDEO_BLIT(x, j * SCREENBLOCK_H, nh * SCREENBLOCK_W, SCREENBLOCK_H);
 				++count;
 			}
 			p += _w / SCREENBLOCK_W;
@@ -111,6 +132,7 @@ void Video::updateScreen() {
 			_stub->updateScreen(_shakeOffset);
 		}
 	}
+#undef VIDEO_BLIT
 	if (_shakeOffset != 0) {
 		_shakeOffset = 0;
 		_fullRefresh = true;
@@ -706,17 +728,28 @@ void Video::AMIGA_decodeLev(int level, int room) {
 			}
 		}
 	} while((d0 & 0x8000) == 0);
-	memset(_frontLayer, 0, _layerSize);
+#ifdef ATARIST
+	// build the room in the chunky staging buffer; it is converted
+	// to planar at the end of this function, after the palettes
+	// (and therefore the colour remap) are known
+	uint8_t *roomLayer = _stagingLayer;
+	memset(roomLayer, 0, GAMESCREEN_W * GAMESCREEN_H);
+#else
+	uint8_t *roomLayer = _frontLayer;
+	memset(roomLayer, 0, _layerSize);
+#endif
 	if (tmp[1] != 0) {
 		assert(_res->_sgd);
 		DrawTileMaskProc drawTileMask = _res->isAmiga() ? AMIGA_planar_mask : DOS_drawTileMask;
-		decodeSgd(_frontLayer, tmp + offset10, _res->_sgd, drawTileMask, level, room);
+		decodeSgd(roomLayer, tmp + offset10, _res->_sgd, drawTileMask, level, room);
 		offset10 = 0;
 	}
 	DrawTileProc drawTile = _res->isAmiga() ? AMIGA_drawTile : DOS_drawTile;
-	decodeLevHelper(_frontLayer, tmp, offset10, offset12, buf, tmp[1] != 0, drawTile, _res->_readUint16);
+	decodeLevHelper(roomLayer, tmp, offset10, offset12, buf, tmp[1] != 0, drawTile, _res->_readUint16);
 	free(buf);
+#ifndef ATARIST
 	memcpy(_backLayer, _frontLayer, _layerSize);
+#endif
 	_mapPalSlot1 = READ_BE_UINT16(tmp + 2);
 	_mapPalSlot2 = READ_BE_UINT16(tmp + 4);
 	_mapPalSlot3 = READ_BE_UINT16(tmp + 6);
@@ -741,6 +774,11 @@ void Video::AMIGA_decodeLev(int level, int room) {
 	setPaletteSlotBE(0x9, (level == 0) ? _mapPalSlot1 : _mapPalSlot3);
 	// inventory
 	setPaletteSlotBE(0xA, _mapPalSlot3);
+#ifdef ATARIST
+	// palettes are final: bake the room into the planar layers
+	ST_convertChunky(_frontLayer, _stagingLayer, GAMESCREEN_H);
+	memcpy(_backLayer, _frontLayer, _layerSize);
+#endif
 }
 
 void Video::AMIGA_decodeSpm(const uint8_t *src, uint8_t *dst) {
@@ -967,10 +1005,18 @@ void Video::DOS_drawChar(uint8_t c, int16_t y, int16_t x, bool forceDefaultFont)
 }
 
 void Video::AMIGA_drawStringChar(uint8_t *dst, int pitch, int x, int y, const uint8_t *src, uint8_t color, uint8_t chr) {
-	dst += y * pitch + x;
 	assert(chr >= 32);
 	AMIGA_decodeIcn(src, chr - 32, _res->_scratchBuffer);
 	src = _res->_scratchBuffer;
+#ifdef ATARIST
+	// pitch 256 = a planar layer / cutscene page; anything else is a
+	// plain chunky buffer (the 320-wide Amiga title screen)
+	if (pitch == GAMESCREEN_W) {
+		ST_drawGlyph(dst, src, x, y, color);
+		return;
+	}
+#endif
+	dst += y * pitch + x;
 	for (int y = 0; y < 8; ++y) {
 		for (int x = 0; x < 8; ++x) {
 			if (src[x] != 0) {
@@ -1094,11 +1140,15 @@ void Video::MAC_decodeMap(int level, int room) {
 }
 
 void Video::fillRect(int x, int y, int w, int h, uint8_t color) {
+#ifdef ATARIST
+	ST_fillRect(_frontLayer, x, y, w, h, color);
+#else
 	uint8_t *p = _frontLayer + y * _layerScale * _w + x * _layerScale;
 	for (int j = 0; j < h * _layerScale; ++j) {
 		memset(p, color, w * _layerScale);
 		p += _w;
 	}
+#endif
 }
 
 static void fixOffsetDecodeBuffer(DecodeBuffer *buf, const uint8_t *dataPtr, bool xflip) {
