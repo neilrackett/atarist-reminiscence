@@ -11,3 +11,5 @@ rs
 # extraction working files
 tools/adf/
 tools/extracted/
+tools/ipf2adf
+tools/capsimg.so
