@@ -2075,8 +2075,21 @@ void Game::inp_update() {
 }
 
 void Game::makeGameStateName(uint8_t slot, char *buf) {
+#ifdef ATARIST
+	// GEMDOS 8.3
+	sprintf(buf, "RS%d_%02d.SAV", _currentLevel + 1, slot);
+#else
 	sprintf(buf, "rs-level%d-%02d.state", _currentLevel + 1, slot);
+#endif
 }
+
+#ifdef USE_ZLIB
+#define SAVE_MODE "zwb"
+#define LOAD_MODE "zrb"
+#else
+#define SAVE_MODE "wb"
+#define LOAD_MODE "rb"
+#endif
 
 // 3: persist _pge_opGunVar
 static const int kSaveVersion = 3;
@@ -2091,7 +2104,7 @@ bool Game::saveGameState(uint8_t slot) {
 	char stateFile[32];
 	makeGameStateName(slot, stateFile);
 	File f;
-	if (!f.open(stateFile, "zwb", _savePath)) {
+	if (!f.open(stateFile, SAVE_MODE, _savePath)) {
 		warning("Unable to save state file '%s'", stateFile);
 	} else {
 		// header
@@ -2121,7 +2134,7 @@ bool Game::loadGameState(uint8_t slot) {
 	char stateFile[32];
 	makeGameStateName(slot, stateFile);
 	File f;
-	if (!f.open(stateFile, "zrb", _savePath)) {
+	if (!f.open(stateFile, LOAD_MODE, _savePath)) {
 		warning("Unable to open state file '%s'", stateFile);
 	} else {
 		uint32_t id = f.readUint32BE();

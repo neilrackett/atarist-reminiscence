@@ -267,11 +267,17 @@ struct OggDecoder_impl {
 
 OggPlayer::OggPlayer(Mixer *mixer, FileSystem *fs)
 	: _mix(mixer), _fs(fs) {
+#if defined(USE_TREMOR) || defined(USE_STB_VORBIS)
 	_impl = new OggDecoder_impl;
+#else
+	_impl = 0;
+#endif
 }
 
 OggPlayer::~OggPlayer() {
+#if defined(USE_TREMOR) || defined(USE_STB_VORBIS)
 	delete _impl;
+#endif
 	_impl = 0;
 }
 
@@ -279,6 +285,7 @@ OggPlayer::~OggPlayer() {
 static const char *kMenuThemeRemix = "deadly_cookie_-_flashback.ogg";
 
 bool OggPlayer::playTrack(int num) {
+#if defined(USE_TREMOR) || defined(USE_STB_VORBIS)
 	stopTrack();
 	char buf[16];
 	snprintf(buf, sizeof(buf), "track%02d.ogg", num);
@@ -287,6 +294,7 @@ bool OggPlayer::playTrack(int num) {
 		_mix->setPremixHook(mixCallback, this);
 		return true;
 	}
+#endif
 	return false;
 }
 
@@ -309,9 +317,11 @@ void OggPlayer::resumeTrack() {
 }
 
 bool OggPlayer::mix(int16_t *buf, int len) {
+#if defined(USE_TREMOR) || defined(USE_STB_VORBIS)
 	if (_impl) {
 		return _impl->read(buf, len) != 0;
 	}
+#endif
 	return false;
 }
 

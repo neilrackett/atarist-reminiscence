@@ -876,7 +876,12 @@ const char *const Game::_monsterNames[2][4] = {
 	{ // Amiga
 		"junky",
 		"garde",
+#ifdef ATARIST
+		// GEMDOS 8.3: the data file is renamed REPLICAN.SPM
+		"replican",
+#else
 		"replicant",
+#endif
 		"glue"
 	}
 };

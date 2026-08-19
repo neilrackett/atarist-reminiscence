@@ -1,0 +1,13 @@
+.DS_Store
+dist/
+tmp/
+
+# build artifacts
+*.o
+*.d
+build/
+rs
+
+# extraction working files
+tools/adf/
+tools/extracted/

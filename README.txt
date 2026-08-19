@@ -21,6 +21,8 @@ or PC98 release.
 For the Macintosh release, the resource fork must be dumped as a file named
 'FLASHBACK.BIN' (MacBinary) or 'FLASHBACK.RSRC' (AppleDouble).
 
+For Amiga release, try https://ia600803.us.archive.org/view_archive.php?archive=/21/items/Commodore_Amiga_TOSEC_2012_04_10/Commodore_Amiga_TOSEC_2012_04_10.zip
+
 For speech with in-game dialogues, you need to copy the 'VOICE.VCE' file
 from the SegaCD version.
 

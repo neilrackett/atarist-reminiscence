@@ -8,6 +8,42 @@
 #include "systemstub.h"
 #include "util.h"
 
+#ifdef ATARIST
+extern "C" {
+#include <stdl/stdl.h>
+}
+
+// STE DMA one-shot playback: no per-frame CPU cost, monophonic.
+// Samples are signed 8-bit; resample to the nearest DMA rate and
+// apply the volume while copying.
+static uint8_t *_dmaBuf;
+static uint32_t _dmaBufSize;
+
+static void ATARIST_playSample(const uint8_t *data, uint32_t len, uint16_t freq, uint8_t volume) {
+	const int rate = (freq > 9000) ? 12517 : 6258;
+	const uint32_t outLen = ((uint32_t)((uint64_t)len * rate / freq) + 1) & ~1;
+	if (outLen > _dmaBufSize) {
+		::free(_dmaBuf);
+		_dmaBuf = (uint8_t *)malloc(outLen);
+		_dmaBufSize = _dmaBuf ? outLen : 0;
+	}
+	if (!_dmaBuf) {
+		return;
+	}
+	uint32_t pos = 0; // 16.16 through the source
+	const uint32_t inc = ((uint32_t)freq << 16) / rate;
+	for (uint32_t i = 0; i < outLen; ++i) {
+		const int8_t s = (int8_t)data[pos >> 16];
+		_dmaBuf[i] = (uint8_t)((s * volume) >> 6);
+		pos += inc;
+		if ((pos >> 16) >= len) {
+			pos = ((uint32_t)len - 1) << 16;
+		}
+	}
+	STDL_PlaySample(_dmaBuf, outLen, rate);
+}
+#endif
+
 Mixer::Mixer(FileSystem *fs, SystemStub *stub, const PrfMidiDriver *midiDriver, const char *midiSoundFont)
 	: _stub(stub), _musicType(MT_NONE), _cpc(this, fs), _mod(this, fs), _ogg(this, fs), _prf(this, fs, midiDriver, midiSoundFont), _sfx(this) {
 	_musicTrack = -1;
@@ -35,6 +71,10 @@ void Mixer::setPremixHook(PremixHook premixHook, void *userData) {
 
 void Mixer::play(const uint8_t *data, uint32_t len, uint16_t freq, uint8_t volume) {
 	debug(DBG_SND, "Mixer::play(%d, %d)", freq, volume);
+#ifdef ATARIST
+	ATARIST_playSample(data, len, freq, volume);
+	return;
+#endif
 	LockAudioStack las(_stub);
 	for (int i = 0; i < NUM_CHANNELS; ++i) {
 		MixerChannel *ch = &_channels[i];

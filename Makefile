@@ -1,37 +1,57 @@
 
-SDL_CFLAGS   := `sdl2-config --cflags`
-SDL_LIBS     := `sdl2-config --libs`
+# REminiscence - Atari ST port
+#
+# Cross-compiles with m68k-atari-mint-g++ via atarist-toolkit-docker:
+#   STCMD_NO_TTY=1 stcmd make
+#
+# The SDL build for desktop platforms lives in Makefile.sdl.
+#
+# Amiga data files go in dist/DATA (see tools/README.md for how to
+# extract them from the original disk images).
 
-MODPLUG_LIBS := -lmodplug
-TREMOR_LIBS  := #-lvorbisidec -logg
-ZLIB_LIBS    := -lz
+CXX    = m68k-atari-mint-g++
+STRIP  = m68k-atari-mint-strip
 
-LIBS = $(SDL_LIBS) $(MODPLUG_LIBS) $(TREMOR_LIBS) $(ZLIB_LIBS)
+STDL     = stdl
+STDL_LIB = $(STDL)/libstdl.a
 
-CXXFLAGS += -Wall -Wextra -Wno-unused-parameter -Wpedantic -MMD $(SDL_CFLAGS) -DUSE_MODPLUG -DUSE_STB_VORBIS -DUSE_ZLIB
+CXXFLAGS = -O2 -fomit-frame-pointer -fno-exceptions -fno-rtti \
+	-Wall -Wno-unused-parameter \
+	-I$(STDL)/include -DATARIST -DNDEBUG
 
-SRCS = collision.cpp cpc_player.cpp cutscene.cpp decode_mac.cpp file.cpp fs.cpp game.cpp graphics.cpp main.cpp \
-	menu.cpp midi_parser.cpp mixer.cpp mod_player.cpp ogg_player.cpp \
-	piege.cpp prf_player.cpp protection.cpp resource.cpp resource_aba.cpp \
-	resource_mac.cpp resource_paq.cpp scaler.cpp screenshot.cpp seq_player.cpp \
-	sfx_player.cpp staticres.cpp systemstub_sdl.cpp unpack.cpp util.cpp video.cpp
+LIBS = $(STDL_LIB) -lm
 
-#CXXFLAGS += -DUSE_STATIC_SCALER
-#SCALERS  := scalers/scaler_nearest.cpp scalers/scaler_tv2x.cpp scalers/scaler_xbr.cpp
+# Amiga-data engine + ST platform layer. DOS/Mac/PC98/Sega loaders are
+# still compiled (they are small and keep the diff against upstream
+# minimal); the SDL stub, scalers and MIDI drivers are not.
+SRCS = collision.cpp cpc_player.cpp cutscene.cpp decode_mac.cpp file.cpp \
+	fs.cpp game.cpp graphics.cpp menu.cpp midi_parser.cpp mixer.cpp \
+	mod_player.cpp ogg_player.cpp piege.cpp prf_player.cpp \
+	protection.cpp resource.cpp resource_aba.cpp resource_mac.cpp \
+	resource_paq.cpp screenshot.cpp seq_player.cpp sfx_player.cpp \
+	staticres.cpp unpack.cpp util.cpp video.cpp \
+	main_atari.cpp systemstub_stdl.cpp
 
-#CXXFLAGS    += -DUSE_MIDI_DRIVER -DUSE_MT32EMU -DUSE_FLUIDSYNTH
-#MIDIDRIVERS := midi_driver_adlib.cpp midi_driver_fluidsynth.cpp midi_driver_mt32.cpp
-#MIDI_LIBS   := -lmt32emu -lfluidsynth
+OBJS = $(SRCS:%.cpp=build/%.o)
 
-LIBS = $(MIDI_LIBS) $(MODPLUG_LIBS) $(SDL_LIBS) $(TREMOR_LIBS) $(ZLIB_LIBS)
+TARGET = dist/FLASHBAK.TOS
 
-OBJS = $(SRCS:.cpp=.o) $(SCALERS:.cpp=.o) $(MIDIDRIVERS:.cpp=.o)
-DEPS = $(SRCS:.cpp=.d) $(SCALERS:.cpp=.d) $(MIDIDRIVERS:.cpp=.d)
+all: $(TARGET)
 
-rs: $(OBJS)
-	$(CXX) $(LDFLAGS) -o $@ $(OBJS) $(LIBS)
+$(STDL_LIB):
+	$(MAKE) -C $(STDL) libstdl.a
+
+$(TARGET): $(OBJS) $(STDL_LIB) | dist
+	$(CXX) $(CXXFLAGS) -o $@ $(OBJS) $(LIBS)
+	$(STRIP) $@
+
+build/%.o: src/%.cpp | build
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
+build dist:
+	mkdir -p $@
 
 clean:
-	rm -f $(OBJS) $(DEPS)
+	rm -rf build $(TARGET)
 
--include $(DEPS)
+.PHONY: all clean
