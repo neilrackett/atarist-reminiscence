@@ -36,6 +36,7 @@ Game::Game(SystemStub *stub, FileSystem *fs, const char *savePath, int level, Re
 	_cheats = cheats;
 }
 
+
 void Game::run() {
 	_randSeed = time(0);
 
@@ -87,8 +88,10 @@ void Game::run() {
 			_menu.displayTitleScreenMac(Menu::kMacTitleScreen_Presage);
 		}
 	}
-	playCutscene(0x40);
-	playCutscene(0x0D);
+	if (!g_options.skip_intro) {
+		playCutscene(0x40);
+		playCutscene(0x0D);
+	}
 
 	// global resources
 	switch (_res._type) {

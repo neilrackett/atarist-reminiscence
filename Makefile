@@ -16,6 +16,7 @@ STDL     = stdl
 STDL_LIB = $(STDL)/libstdl.a
 
 CXXFLAGS = -O2 -fomit-frame-pointer -fno-exceptions -fno-rtti \
+	-fno-strict-aliasing \
 	-Wall -Wno-unused-parameter \
 	-I$(STDL)/include -DATARIST -DNDEBUG
 
@@ -42,7 +43,8 @@ $(STDL_LIB):
 	$(MAKE) -C $(STDL) libstdl.a
 
 $(TARGET): $(OBJS) $(STDL_LIB) | dist
-	$(CXX) $(CXXFLAGS) -o $@ $(OBJS) $(LIBS)
+	$(CXX) $(CXXFLAGS) -o build/flashbak.elf $(OBJS) $(LIBS)
+	cp build/flashbak.elf $@
 	$(STRIP) $@
 
 build/%.o: src/%.cpp | build

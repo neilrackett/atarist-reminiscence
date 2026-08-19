@@ -141,6 +141,7 @@ struct Options {
 	bool restore_memo_cutscene;
 	bool order_inventory_original;
 	bool fix_fmopl_e0_reg;
+	bool skip_intro;
 };
 
 struct Features {
