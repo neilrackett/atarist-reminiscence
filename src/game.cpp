@@ -56,6 +56,43 @@ struct SpriteCache {
 };
 static SpriteCache _spmCache;
 static SpriteCache _spcCache;
+
+// Presentation splash: black screen, credit lines centred, shown as
+// soon as the game font is loaded and held while the rest of the
+// startup work happens behind it. Line one is drawn double-height
+// (24 chars at double width would not fit 256px); line two uses the
+// darker pale blue of the title artwork (0x478).
+static void ST_splash(Game *g) {
+	static const char *kLine1 = "Neil Rackett presents...";
+	static const char *kLine2 = "neilrackett.com/atarist";
+	const Color white = { 0xEE, 0xEE, 0xEE };
+	const Color blue = Video::AMIGA_convertColor(0x478);
+	g->_stub->setPaletteEntry(1, &white);
+	g->_stub->setPaletteEntry(2, &blue);
+
+	uint8_t map16[16];
+	ST_buildMap16(0, map16);
+	memset(map16, map16[1], sizeof(map16));
+	int x = (Video::GAMESCREEN_W - (int)strlen(kLine1) * Video::CHAR_W) / 2;
+	for (const char *p = kLine1; *p; ++p, x += Video::CHAR_W) {
+		g->_vid.AMIGA_decodeIcn(g->_res._fnt, *p - 32, g->_res._scratchBuffer);
+		// double each glyph row: 8x8 -> 8x16
+		uint8_t buf[8 * 16];
+		for (int r = 0; r < 8; ++r) {
+			memcpy(buf + r * 16, g->_res._scratchBuffer + r * 16, 8);
+			memcpy(buf + r * 16 + 8, g->_res._scratchBuffer + r * 16, 8);
+		}
+		ST_drawSprite(g->_vid._frontLayer, buf, 8, x, 96, 8, 16, map16, 0, false);
+	}
+	// y chosen so the 224->200 squash drops no row inside the glyphs
+	g->_vid.drawString(kLine2, (Video::GAMESCREEN_W - (int)strlen(kLine2) * Video::CHAR_W) / 2, 122, 2);
+	g->_vid.fullRefresh();
+	g->_vid.updateScreen();
+	g->_stub->sleep(3000);
+	memset(g->_vid._frontLayer, 0, g->_vid._layerSize);
+	g->_vid.fullRefresh();
+	g->_vid.updateScreen();
+}
 #endif
 
 Game::Game(SystemStub *stub, FileSystem *fs, const char *savePath, int level, ResourceType ver, Language lang, WidescreenMode widescreenMode, bool autoSave, const PrfMidiDriver *midiDriver, const char *midiSoundFont, uint32_t cheats)
@@ -84,6 +121,9 @@ void Game::run() {
 	switch (_res._type) {
 	case kResourceTypeAmiga:
 		_res.load("FONT8", Resource::OT_FNT, "SPR");
+#ifdef ATARIST
+		ST_splash(this);
+#endif
 		if (_res._isDemo) {
 			_cut._patchedOffsetsTable = Cutscene::_amigaDemoOffsetsTable;
 		}

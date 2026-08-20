@@ -2,33 +2,25 @@
 
 <img src="./flashback.png" alt="Flashback" width="640" height="400" />
 
-Flashback ported to Atari ST by [Neil Rackett](https://neilrackett.com/atarist).
+Flashback on the Atari ST, by [Neil Rackett](https://neilrackett.com/atarist).
 
 ## Introduction
 
-Of all the games that were never released on the Atari ST, there are a few
-that I was most disappointed about: one of those was Flashback.
+Of all the games that never had an official released on the Atari ST, one
+that I was most disappointed about was Flashback (Delphine Software, 1992).
 
-Say hello to _Flashback_ for Atari ST.
+So, using [STDL](https://github.com/neilrackett/atarist-stdl)
+(the `stdl/` submodule) and the Amiga data files, I've ported
+[REminiscence](https://github.com/cyxx/REminiscence), an open source
+re-implementation of the original game engine, to the Atari ST and
+just three decades later...
 
-This port brings Flashback to the Atari ST for the very first time using the
-planar-native [STDL](https://github.com/neilrackett/atarist-stdl)
-framework (the `stdl/` submodule) and Amiga data files via
-[REminiscence](https://github.com/cyxx/REminiscence), a re-implementation
-of the game engine for Flashback by Delphine Software, released in 1992.
+**_Say hello to Flashback for Atari ST._**
 
-- Sound effects and in-game music are STE-only (silent on a regular
-  ST): the original Amiga action-music modules play through STDL's
-  four-voice sample mixer, hardware-mixed from the VBL, with sound
-  effects on the fourth voice.
+## Requirements
+
+- Sound effects and in-game music are STE-only.
 - Requires 2MB RAM.
-- Speed, measured in Hatari on level 1: ~10 fps on a plain 8MHz ST
-  (~101ms/frame: sprites 51, game logic 20, screen copy 16,
-  background restore 12) and ~19 fps on a 16MHz Mega STE (~52ms).
-  The engine's logic targets 30 fps and free-runs slower; the
-  remaining budget is dominated by sprite drawing (a hand-written
-  68000 gather in STDL's `BlitIndexed8`) and the untouched game
-  logic.
 
 ## Installing
 
@@ -88,12 +80,12 @@ music sets [4]) are supported by the SDL build — see the upstream
 ## To-do
 
 - Non-STE sound effects
-- Music
-- More speed!
+- Non-STE music
+- Make it faster (current ~10 fps on a stock 8MHz ST, ~19 fps on a 16MHz Mega STE)
 
 ## Credits
 
-- [Gregory Montoir for REminiscence](https://github.com/cyxx/REminiscence).
+- A massive thank you to [Gregory Montoir for REminiscence](https://github.com/cyxx/REminiscence).
 - Delphine Software, obviously, for making another great game.
 - Yaz0r, Pixel and gawd for sharing information they gathered on the game.
 

@@ -199,11 +199,11 @@ void ST_hspan(uint8_t *layer, int x1, int x2, int y, uint8_t colour8) {
 }
 
 // The chunky code's cutscene "shadow" effect ORs the colour's slot
-// bits into the underlying pixel (*dst |= colour & 0xF8) - for the
-// usual colours 0xC8-0xCF that means "index |= 8". In cutscene
-// palette mode (identity remap of 0xC0-0xCF onto slots 0-15) that is
-// exactly an OR into plane 3. Outside that case fall back to an
-// opaque fill.
+// bits into the underlying pixel (*dst |= colour & 0xF8), selecting
+// the artist's shadow variant of whatever is underneath. In hardware
+// colour space that becomes a per-slot lookup (ST_getOrMap): read
+// each covered pixel, translate, write back. Outside cutscene mode
+// (no representative table) it falls back to an opaque fill.
 void ST_hspanOr(uint8_t *layer, int x1, int x2, int y, uint8_t colour8) {
 	if (y < 0 || y >= kSTLayerH) {
 		return;
@@ -213,10 +213,12 @@ void ST_hspanOr(uint8_t *layer, int x1, int x2, int y, uint8_t colour8) {
 	if (x1 > x2) {
 		return;
 	}
-	if (!(ST_cutscenePalMode() && (colour8 & 0xF8) == 0xC8)) {
+	if (!ST_cutscenePalMode()) {
 		fillRow(layer, x1, x2 - x1 + 1, y, ST_getRemap()[colour8], (colour8 & 0x80) != 0);
 		return;
 	}
+	uint8_t orMap[16];
+	ST_getOrMap(colour8, orMap);
 	uint16_t *dst = groupPtr(layer, x1, y);
 	uint16_t *prio = prioPtr(layer, x1, y);
 	for (int g = x1 >> 4; g <= (x2 >> 4); ++g) {
@@ -228,7 +230,26 @@ void ST_hspanOr(uint8_t *layer, int x1, int x2, int y, uint8_t colour8) {
 		if (gend > x2) {
 			m &= 0xFFFF << (gend - x2);
 		}
-		dst[3] |= m;
+		// translate the covered pixels through the shadow map
+		uint16_t n0 = 0, n1 = 0, n2 = 0, n3 = 0;
+		uint16_t bit = 0x8000;
+		for (int i = 0; i < 16; ++i, bit >>= 1) {
+			if (!(m & bit)) {
+				continue;
+			}
+			int v = ((dst[0] & bit) ? 1 : 0) | ((dst[1] & bit) ? 2 : 0)
+			      | ((dst[2] & bit) ? 4 : 0) | ((dst[3] & bit) ? 8 : 0);
+			const uint8_t nv = orMap[v];
+			if (nv & 1) n0 |= bit;
+			if (nv & 2) n1 |= bit;
+			if (nv & 4) n2 |= bit;
+			if (nv & 8) n3 |= bit;
+		}
+		const uint16_t keep = ~m;
+		dst[0] = (dst[0] & keep) | n0;
+		dst[1] = (dst[1] & keep) | n1;
+		dst[2] = (dst[2] & keep) | n2;
+		dst[3] = (dst[3] & keep) | n3;
 		*prio |= m;
 		dst += 4;
 		++prio;

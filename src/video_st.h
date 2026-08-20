@@ -46,11 +46,15 @@ const uint8_t *ST_getRemap();
 struct STDL_Surface;
 STDL_Surface *ST_layerSurfaceBare(uint8_t *layer);
 
-// cutscene palette mode: logical 0xC0-0xCF map to hardware slots
-// 0-15 directly, making the shadow effect a plane-3 OR and letting
-// baked pages follow palette changes exactly
+// cutscene palette mode: the colour quantisation runs over only the
+// cutscene banks (0xC0-0xDF, scenes use up to 32 colours) plus the
+// text slot, instead of the game's slots
 void ST_setCutscenePalMode(bool enable);
 bool ST_cutscenePalMode();
+
+// hardware-space translation table for the cutscene shadow effect
+// (chunky semantics: pixel |= colour8 & 0xF8)
+void ST_getOrMap(uint8_t colour8, uint8_t *orMap);
 
 // map16[c] = hardware colour of logical entry (colMask | c)
 inline void ST_buildMap16(uint8_t colMask, uint8_t *map16) {

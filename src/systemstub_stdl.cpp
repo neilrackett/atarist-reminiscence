@@ -45,6 +45,9 @@ struct SystemStub_STDL : SystemStub {
 	// set when the palette MODE changed (cutscene <-> game): the
 	// uniform-fade shortcut must not reuse the other mode's remap
 	bool _remapStale;
+	// per hardware slot, a cutscene logical entry mapping to it
+	// (for the shadow-effect hw->hw lookup)
+	uint8_t _cutsceneRep[16];
 	bool _hwDirty;          // hardware registers need reprogramming
 	int _fade;              // 256 = full brightness (uniform scale)
 	int _srcW, _srcH;
@@ -295,44 +298,26 @@ bool ST_cutscenePalMode() {
 	return g_cutscenePal;
 }
 
+// The cutscene shadow effect in hardware-colour space: the chunky op
+// is L |= colour8 & 0xF8 in logical space, so for each hw slot take
+// a representative logical entry, apply the OR, and see where the
+// result lands. Built per shadow shape - 16 lookups.
+void ST_getOrMap(uint8_t colour8, uint8_t *orMap) {
+	if (g_stub->_palDirty) {
+		g_stub->buildRemap();
+	}
+	for (int s = 0; s < 16; ++s) {
+		const uint8_t L = g_stub->_cutsceneRep[s];
+		orMap[s] = g_stub->_remap[L | (colour8 & 0xF8)];
+	}
+}
+
 // Quantise the 256-entry logical palette to 16 hardware colours.
 // Colours are reduced to STE 4-bit per channel first (the hardware
 // cannot do better), deduplicated, then greedily merged by nearest
 // pair until 16 remain.
 void SystemStub_STDL::buildRemap() {
 	_palDirty = false;
-
-	if (g_cutscenePal) {
-		for (int i = 0; i < 16; ++i) {
-			_hwPal[i] = _pal[0xC0 + i];
-		}
-		for (int i = 0; i < 256; ++i) {
-			if (i >= 0xC0 && i < 0xD0) {
-				_remap[i] = i & 15;
-				continue;
-			}
-			// everything else (upper cutscene bank, text) lands on
-			// the nearest of the 16
-			long best = 0x7FFFFFFF;
-			int bs = 0;
-			for (int s = 0; s < 16; ++s) {
-				const int dr = _pal[i].r - _hwPal[s].r;
-				const int dg = _pal[i].g - _hwPal[s].g;
-				const int db = _pal[i].b - _hwPal[s].b;
-				const long d = (long)dr * dr + 2L * dg * dg + (long)db * db;
-				if (d < best) {
-					best = d;
-					bs = s;
-				}
-			}
-			_remap[i] = bs;
-		}
-		memcpy(_basePal, _pal, sizeof(_pal));
-		_fade = 256;
-		_hwDirty = true;
-		_remapStale = false;
-		return;
-	}
 
 	// fade fast path: same colours, uniformly darker or brighter -
 	// keep the remap, only rescale the registers. Never taken while
@@ -371,16 +356,20 @@ void SystemStub_STDL::buildRemap() {
 
 	// Gather distinct 4-bit colours with usage counts. Logical
 	// entries 0xC0-0xDF belong to cutscenes only (the game's slots
-	// are 0x0-0xB plus the text slots); left in, a finished
-	// cutscene's palette would keep crowding the game's colours out
-	// of the 16 hardware slots. They are excluded here and mapped
-	// to the nearest surviving colour below.
+	// are 0x0-0xB plus the text slots): in game mode they are
+	// excluded so a finished cutscene's palette cannot crowd the
+	// game's colours out of the 16 hardware slots, and in cutscene
+	// mode the quantisation runs over ONLY the cutscene banks and
+	// the text slot (scenes use up to 32 colours - DEBUT draws
+	// Conrad from the upper bank). Excluded entries are mapped to
+	// the nearest surviving colour below.
 	uint16_t col[256];
 	uint16_t cnt[256];
 	uint8_t entryCluster[256];
 	int n = 0;
 	for (int i = 0; i < 256; ++i) {
-		if (i >= 0xC0 && i < 0xE0) {
+		const bool cutEntry = (i >= 0xC0 && i < 0xF0);
+		if (g_cutscenePal ? !cutEntry : (i >= 0xC0 && i < 0xE0)) {
 			entryCluster[i] = 0xFF;
 			continue;
 		}
@@ -503,6 +492,9 @@ void SystemStub_STDL::buildRemap() {
 	}
 	memcpy(_hwPal, newHw, sizeof(_hwPal));
 	uint8_t newRemap[256];
+	memset(_cutsceneRep, 0xC0, sizeof(_cutsceneRep));
+	bool repSet[16];
+	memset(repSet, 0, sizeof(repSet));
 	for (int i = 0; i < 256; ++i) {
 		if (entryCluster[i] == 0xFF) {
 			// excluded cutscene entry: nearest surviving colour
@@ -526,6 +518,10 @@ void SystemStub_STDL::buildRemap() {
 			c = alias[c];
 		}
 		newRemap[i] = slotOf[c];
+		if (i >= 0xC0 && i < 0xE0 && !repSet[slotOf[c]]) {
+			_cutsceneRep[slotOf[c]] = (uint8_t)i;
+			repSet[slotOf[c]] = true;
+		}
 	}
 	memcpy(_basePal, _pal, sizeof(_pal));
 	_hwDirty = true;
