@@ -206,13 +206,24 @@ void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int
 	_fade = 256;
 	_shadow = (uint8_t *)malloc(kMaxSrcW * kMaxSrcH);
 	_shadowValid = false;
-	// 224 -> 200: dst = y * 25 / 28, dropping collisions
-	int prev = -1;
-	for (int y = 0; y < kMaxSrcH; ++y) {
-		const int d = y * 25 / 28;
-		_yDrop[y] = (d == prev) ? 1 : 0;
-		_yMap[y] = d;
-		prev = d;
+	// 224 -> 200: either crop 12 lines off the top and bottom
+	// (every displayed line is intact and screen copies stay one
+	// contiguous run, but the edges of the playfield are hidden),
+	// or squash with dst = y * 25 / 28, dropping collisions
+	if (g_options.crop_screen) {
+		for (int y = 0; y < kMaxSrcH; ++y) {
+			const bool off = (y < 12) || (y >= kMaxSrcH - 12);
+			_yDrop[y] = off ? 1 : 0;
+			_yMap[y] = off ? 0 : (y - 12);
+		}
+	} else {
+		int prev = -1;
+		for (int y = 0; y < kMaxSrcH; ++y) {
+			const int d = y * 25 / 28;
+			_yDrop[y] = (d == prev) ? 1 : 0;
+			_yMap[y] = d;
+			prev = d;
+		}
 	}
 	setScreenSize(w, h);
 	// black screen until the first frame arrives

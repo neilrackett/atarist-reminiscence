@@ -142,6 +142,7 @@ struct Options {
 	bool order_inventory_original;
 	bool fix_fmopl_e0_reg;
 	bool skip_intro;
+	bool crop_screen;
 };
 
 struct Features {

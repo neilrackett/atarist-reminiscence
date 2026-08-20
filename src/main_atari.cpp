@@ -93,6 +93,7 @@ static void initOptions() {
 	g_options.order_inventory_original = false;
 	g_options.fix_fmopl_e0_reg = false;
 	g_options.skip_intro = false;
+	g_options.crop_screen = false;
 	struct {
 		const char *name;
 		bool *value;
@@ -110,6 +111,7 @@ static void initOptions() {
 		{ "restore_memo_cutscene", &g_options.restore_memo_cutscene },
 		{ "order_inventory_original", &g_options.order_inventory_original },
 		{ "skip_intro", &g_options.skip_intro },
+		{ "crop_screen", &g_options.crop_screen },
 		{ 0, 0 }
 	};
 	FILE *fp = fopen("RS.CFG", "rb");
