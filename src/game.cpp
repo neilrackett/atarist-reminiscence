@@ -482,6 +482,7 @@ void Game::mainLoop() {
 			_deathCutsceneCounter = 1;
 		} else {
 			_currentRoom = _pgeLive[0].room_location;
+			info("Room %d", _currentRoom);
 			loadLevelRoom();
 			_loadMap = false;
 			_vid.fullRefresh();

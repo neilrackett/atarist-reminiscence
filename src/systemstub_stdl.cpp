@@ -312,6 +312,16 @@ void ST_getOrMap(uint8_t colour8, uint8_t *orMap) {
 	}
 }
 
+// Manhattan colour distance (green-weighted): the quantiser runs on
+// every cutscene palette step, and squared distances cost a 32-bit
+// multiply library call each on the 68000.
+static inline int colDist(const Color &a, const Color &b) {
+	int dr = a.r - b.r; if (dr < 0) dr = -dr;
+	int dg = a.g - b.g; if (dg < 0) dg = -dg;
+	int db = a.b - b.b; if (db < 0) db = -db;
+	return dr + 2 * dg + db;
+}
+
 // Quantise the 256-entry logical palette to 16 hardware colours.
 // Colours are reduced to STE 4-bit per channel first (the hardware
 // cannot do better), deduplicated, then greedily merged by nearest
@@ -319,14 +329,21 @@ void ST_getOrMap(uint8_t colour8, uint8_t *orMap) {
 void SystemStub_STDL::buildRemap() {
 	_palDirty = false;
 
-	// fade fast path: same colours, uniformly darker or brighter -
-	// keep the remap, only rescale the registers. Never taken while
-	// the remap is stale from a palette-mode switch: a cutscene ends
-	// with the game's logical palette untouched, and reusing the
-	// cutscene remap would redraw the room in cutscene colours.
+	// Fade fast path: the palette is a uniform brightness scale of
+	// the one the mapping was last built for (cutscene fade-ins ramp
+	// FROM the base upward, so brightening rides this too - the
+	// registers clamp per channel). Checked over only the entries
+	// the current mode quantises; a full rebuild every fade step
+	// costs real milliseconds and lets the slot assignment wander,
+	// which showed as per-frame palette churn in the intro. Never
+	// taken while the remap is stale from a palette-mode switch.
 	int num = 0, den = 0;
 	bool uniform = !_remapStale;
 	for (int i = 0; i < 256; ++i) {
+		const bool cutEntry = (i >= 0xC0 && i < 0xF0);
+		if (g_cutscenePal ? !cutEntry : (i >= 0xC0 && i < 0xE0)) {
+			continue;
+		}
 		const int bsum = _basePal[i].r + _basePal[i].g + _basePal[i].b;
 		const int nsum = _pal[i].r + _pal[i].g + _pal[i].b;
 		if (bsum > den) {
@@ -336,6 +353,10 @@ void SystemStub_STDL::buildRemap() {
 	}
 	if (den > 0) {
 		for (int i = 0; i < 256 && uniform; ++i) {
+			const bool cutEntry = (i >= 0xC0 && i < 0xF0);
+			if (g_cutscenePal ? !cutEntry : (i >= 0xC0 && i < 0xE0)) {
+				continue;
+			}
 			const int er = _basePal[i].r * num / den - _pal[i].r;
 			const int eg = _basePal[i].g * num / den - _pal[i].g;
 			const int eb = _basePal[i].b * num / den - _pal[i].b;
@@ -345,8 +366,8 @@ void SystemStub_STDL::buildRemap() {
 		}
 		if (uniform) {
 			_fade = num * 256 / den;
-			if (_fade > 256) {
-				_fade = 256;
+			if (_fade > 1023) {
+				_fade = 1023;
 			}
 			_hwDirty = true;
 			return;
@@ -407,12 +428,14 @@ void SystemStub_STDL::buildRemap() {
 				if (alias[j] != j) {
 					continue;
 				}
-				const int dr = r1 - ((col[j] >> 8) & 15);
-				const int dg = g1 - ((col[j] >> 4) & 15);
-				const int db = b1 - (col[j] & 15);
+				int dr = r1 - ((col[j] >> 8) & 15); if (dr < 0) dr = -dr;
+				int dg = g1 - ((col[j] >> 4) & 15); if (dg < 0) dg = -dg;
+				int db = b1 - (col[j] & 15); if (db < 0) db = -db;
 				// weight by the smaller usage count so rare
-				// colours give way to common ones
-				const long d = (long)(dr * dr + 2 * dg * dg + db * db) * (1 + MIN(cnt[i], cnt[j]));
+				// colours give way to common ones (16-bit multiply:
+				// a mulu.w, not a __mulsi3 library call)
+				const uint16_t w = (uint16_t)(1 + MIN(MIN(cnt[i], cnt[j]), (uint16_t)63));
+				const long d = (long)((uint16_t)(dr + 2 * dg + db) * w);
 				if (d < best) {
 					best = d;
 					bi = i;
@@ -463,10 +486,10 @@ void SystemStub_STDL::buildRemap() {
 				if (slotUsed[s]) {
 					continue;
 				}
-				const int dr = r1 - (_hwPal[s].r >> 4);
-				const int dg = g1 - (_hwPal[s].g >> 4);
-				const int db = b1 - (_hwPal[s].b >> 4);
-				const long d = dr * dr + 2 * dg * dg + db * db;
+				int dr = r1 - (_hwPal[s].r >> 4); if (dr < 0) dr = -dr;
+				int dg = g1 - (_hwPal[s].g >> 4); if (dg < 0) dg = -dg;
+				int db = b1 - (_hwPal[s].b >> 4); if (db < 0) db = -db;
+				const long d = dr + 2 * dg + db;
 				if (d < best) {
 					best = d;
 					bc = c;
@@ -497,14 +520,16 @@ void SystemStub_STDL::buildRemap() {
 	memset(repSet, 0, sizeof(repSet));
 	for (int i = 0; i < 256; ++i) {
 		if (entryCluster[i] == 0xFF) {
+			if (g_cutscenePal) {
+				// game entries are never drawn during a cutscene
+				newRemap[i] = 0;
+				continue;
+			}
 			// excluded cutscene entry: nearest surviving colour
 			long best = 0x7FFFFFFF;
 			int bs = 0;
 			for (int s = 0; s < 16; ++s) {
-				const int dr = _pal[i].r - newHw[s].r;
-				const int dg = _pal[i].g - newHw[s].g;
-				const int db = _pal[i].b - newHw[s].b;
-				const long d = (long)dr * dr + 2L * dg * dg + (long)db * db;
+				const long d = colDist(_pal[i], newHw[s]);
 				if (d < best) {
 					best = d;
 					bs = s;
@@ -537,9 +562,12 @@ void SystemStub_STDL::buildRemap() {
 void SystemStub_STDL::writeHwPalette() {
 	STDL_Colour c[16];
 	for (int i = 0; i < 16; ++i) {
-		c[i].r = _hwPal[i].r * _fade >> 8;
-		c[i].g = _hwPal[i].g * _fade >> 8;
-		c[i].b = _hwPal[i].b * _fade >> 8;
+		int r = _hwPal[i].r * _fade >> 8;
+		int g = _hwPal[i].g * _fade >> 8;
+		int b = _hwPal[i].b * _fade >> 8;
+		c[i].r = (uint8_t)(r > 255 ? 255 : r);
+		c[i].g = (uint8_t)(g > 255 ? 255 : g);
+		c[i].b = (uint8_t)(b > 255 ? 255 : b);
 		c[i].unused = 0;
 	}
 	STDL_SetColours(_screen, c, 0, 16);
