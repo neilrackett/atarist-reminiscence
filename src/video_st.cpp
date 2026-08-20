@@ -145,22 +145,28 @@ static bool bakeSprite(SprEntry *e, const uint8_t *src, int pitch, int w, int h,
 	const int groups = (w + 15) >> 4;
 	const int planeWords = groups * 4 * h;
 	const int words = planeWords + groups * h;
-	if (e->cap < words) {
+	// The shift chain reads one group past the end of a row, so the
+	// block carries guard words - the borrowed-surface contract in
+	// stdl_surface.h asks for the slack rather than clipped reads.
+	enum { kGuard = 8 };
+	if (e->cap < words + kGuard) {
 		// grow only: a slot large enough for one frame is large
 		// enough for the next one that lands in it, so after warm-up
 		// a miss costs no allocation at all
 		free(e->planes);
-		e->planes = (uint16_t *)malloc(words * sizeof(uint16_t));
-		e->cap = e->planes ? words : 0;
+		e->planes = (uint16_t *)malloc((words + kGuard) * sizeof(uint16_t));
+		e->cap = e->planes ? words + kGuard : 0;
 	}
 	if (!e->planes) {
 		return false;
 	}
 	e->mask = e->planes + planeWords;
 	e->groups = groups;
-	// Only the mask has to start clear: BlitIndexed8 skips transparent
-	// pixels, and plane bits outside the mask are never merged.
-	memset(e->mask, 0, groups * h * sizeof(uint16_t));
+	// STDL's source-mask convention is bit set = destination
+	// preserved, so the mask starts opaque-everywhere and
+	// BlitIndexed8's default maintenance clears a bit under each
+	// pixel it draws.
+	memset(e->mask, 0xFF, groups * h * sizeof(uint16_t));
 
 	// One scratch header, reused: STDL_CreateSurfaceFrom per bake was
 	// a malloc/free pair on the miss path.
@@ -182,117 +188,58 @@ static bool bakeSprite(SprEntry *e, const uint8_t *src, int pitch, int w, int h,
 	scratch->clip.y = 0;
 	scratch->clip.w = (uint16_t)(groups * 16);
 	scratch->clip.h = (uint16_t)h;
-	STDL_BlitIndexed8(scratch, src, pitch, 0, 0, w, h, map16, f | STDL_I8_MARK);
+	STDL_BlitIndexed8(scratch, src, pitch, 0, 0, w, h, map16, f);
+	memset(e->planes + words, 0, kGuard * sizeof(uint16_t));
 	return true;
 }
 
-// Move one baked frame into the layer. gcc 4.6 does not unswitch
-// loops, so the aligned and shifted cases are separate loops rather
-// than a test inside the group loop, and each keeps its live values
-// down to what the 68000's registers hold.
-static void mergeGroup(uint16_t *d, uint16_t *pr, uint16_t m,
-                       uint16_t o0, uint16_t o1, uint16_t o2, uint16_t o3,
-                       bool respectPrio, bool setPrio) {
-	if (respectPrio) {
-		m = (uint16_t)(m & ~*pr);
-	}
-	if (m == 0) {
-		return;
-	}
-	const uint16_t keep = (uint16_t)~m;
-	d[0] = (uint16_t)((d[0] & keep) | (o0 & m));
-	d[1] = (uint16_t)((d[1] & keep) | (o1 & m));
-	d[2] = (uint16_t)((d[2] & keep) | (o2 & m));
-	d[3] = (uint16_t)((d[3] & keep) | (o3 & m));
-	*pr = setPrio ? (uint16_t)(*pr | m) : (uint16_t)(*pr & keep);
-}
-
+// Present one baked frame through STDL. The layer's mask is the
+// game's priority plane, so UNDER passes the sprite behind marked
+// foreground and MARK claims it - the same semantics the chunky path
+// gets from STDL_BlitIndexed8.
 static void blitBaked(uint8_t *layer, const SprEntry *e, int x, int y, bool respectPrio, bool setPrio) {
-	const int groups = e->groups;
-	const int r = x & 15;
-	const int gx = x >> 4;
-	const int lastGroup = (kSTLayerW >> 4) - 1;
-	int j0 = 0, j1 = e->h;
-	if (y < 0) {
-		j0 = -y;
-	}
-	if (y + j1 > kSTLayerH) {
-		j1 = kSTLayerH - y;
-	}
-	if (j0 >= j1) {
+	STDL_Surface *dst = layerView(layer, true);
+	if (!dst) {
 		return;
 	}
-	// the output groups that land on the layer, computed once
-	int g0 = 0, g1 = (r == 0) ? groups : groups + 1;
-	if (gx + g0 < 0) {
-		g0 = -gx;
-	}
-	if (gx + g1 > lastGroup + 1) {
-		g1 = lastGroup + 1 - gx;
-	}
-	if (g0 >= g1) {
-		return;
-	}
-	const uint16_t *srcRow = e->planes + (uint32_t)j0 * groups * 4;
-	const uint16_t *maskRow = e->mask + (uint32_t)j0 * groups;
-	uint8_t *dstRow = layer + (uint32_t)(y + j0) * kSTRowBytes + gx * 8;
-	uint8_t *prioRow = layer + kSTPlaneBytes + (uint32_t)(y + j0) * kSTPrioRowBytes + gx * 2;
-
-	if (r == 0) {
-		for (int j = j0; j < j1; ++j) {
-			const uint16_t *sp = srcRow + g0 * 4;
-			const uint16_t *mp = maskRow + g0;
-			uint16_t *d = (uint16_t *)dstRow + g0 * 4;
-			uint16_t *pr = (uint16_t *)prioRow + g0;
-			for (int g = g0; g < g1; ++g) {
-				const uint16_t m = *mp++;
-				if (m != 0) {
-					mergeGroup(d, pr, m, sp[0], sp[1], sp[2], sp[3], respectPrio, setPrio);
-				}
-				sp += 4;
-				d += 4;
-				++pr;
-			}
-			srcRow += groups * 4;
-			maskRow += groups;
-			dstRow += kSTRowBytes;
-			prioRow += kSTPrioRowBytes;
+	static STDL_Surface *view;
+	if (!view) {
+		view = STDL_CreateSurfaceFrom((uint8_t *)e->planes,
+			e->groups * 16, e->h, e->groups * 8,
+			(uint8_t *)e->mask, e->groups * 2);
+		if (!view) {
+			return;
 		}
-		return;
+		STDL_SetColourKey(view, 1, 0);
 	}
+	view->pixels = (uint8_t *)e->planes;
+	view->w = (int16_t)(e->groups * 16);
+	view->h = (int16_t)e->h;
+	view->stride = (uint16_t)(e->groups * 8);
+	view->mask = (uint8_t *)e->mask;
+	view->maskstride = (uint16_t)(e->groups * 2);
+	view->clip.x = 0;
+	view->clip.y = 0;
+	view->clip.w = (uint16_t)(e->groups * 16);
+	view->clip.h = (uint16_t)e->h;
 
-	const int l = 16 - r;
-	for (int j = j0; j < j1; ++j) {
-		const uint16_t *sp = srcRow;
-		const uint16_t *mp = maskRow;
-		uint16_t *d = (uint16_t *)dstRow;
-		uint16_t *pr = (uint16_t *)prioRow;
-		uint16_t c0 = 0, c1 = 0, c2 = 0, c3 = 0, cm = 0;
-		for (int g = 0; g < g1; ++g) {
-			uint16_t s0 = 0, s1 = 0, s2 = 0, s3 = 0, sm = 0;
-			if (g < groups) {
-				s0 = sp[0]; s1 = sp[1]; s2 = sp[2]; s3 = sp[3];
-				sm = *mp++;
-				sp += 4;
-			}
-			const uint16_t om = (uint16_t)((cm << l) | (sm >> r));
-			if (g >= g0 && om != 0) {
-				mergeGroup(d, pr, om,
-					(uint16_t)((c0 << l) | (s0 >> r)),
-					(uint16_t)((c1 << l) | (s1 >> r)),
-					(uint16_t)((c2 << l) | (s2 >> r)),
-					(uint16_t)((c3 << l) | (s3 >> r)),
-					respectPrio, setPrio);
-			}
-			c0 = s0; c1 = s1; c2 = s2; c3 = s3; cm = sm;
-			d += 4;
-			++pr;
-		}
-		srcRow += groups * 4;
-		maskRow += groups;
-		dstRow += kSTRowBytes;
-		prioRow += kSTPrioRowBytes;
+	STDL_Rect sr, dr;
+	sr.x = 0;
+	sr.y = 0;
+	sr.w = (uint16_t)e->w;
+	sr.h = (uint16_t)e->h;
+	dr.x = (int16_t)x;
+	dr.y = (int16_t)y;
+	dr.w = (uint16_t)e->w;
+	dr.h = (uint16_t)e->h;
+	unsigned f = 0;
+	if (respectPrio) {
+		f |= STDL_BLIT_UNDER;
 	}
+	if (setPrio) {
+		f |= STDL_BLIT_MARK;
+	}
+	STDL_BlitSurfaceEx(view, &sr, dst, &dr, f);
 }
 
 void ST_drawSpriteCached(uint8_t *layer, const uint8_t *src, int pitch, int x, int y, int w, int h, uint8_t colMask, unsigned flags, bool setPrio) {

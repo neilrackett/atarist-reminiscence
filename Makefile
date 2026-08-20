@@ -45,7 +45,12 @@ TARGET = dist/FLASHBAK.TOS
 
 all: $(TARGET)
 
-$(STDL_LIB):
+# Depend on the library's own sources: without this the archive is
+# only ever built when missing, so a submodule update leaves a stale
+# libstdl.a linked against fresh headers.
+STDL_SRCS = $(wildcard $(STDL)/src/*.c) $(wildcard $(STDL)/include/stdl/*.h)
+
+$(STDL_LIB): $(STDL_SRCS)
 	$(MAKE) -C $(STDL) libstdl.a
 
 $(TARGET): $(OBJS) $(STDL_LIB) | dist
