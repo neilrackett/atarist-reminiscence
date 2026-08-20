@@ -41,6 +41,11 @@ enum {
 // changed (owned by systemstub_stdl.cpp)
 const uint8_t *ST_getRemap();
 
+// maskless STDL surface view of a layer (screen copies, layer
+// copies); returns a cached wrapper
+struct STDL_Surface;
+STDL_Surface *ST_layerSurfaceBare(uint8_t *layer);
+
 // cutscene palette mode: logical 0xC0-0xCF map to hardware slots
 // 0-15 directly, making the shadow effect a plane-3 OR and letting
 // baked pages follow palette changes exactly

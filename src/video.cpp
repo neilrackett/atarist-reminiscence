@@ -66,25 +66,30 @@ void Video::ST_rebakeRoom() {
 	memcpy(_frontLayer, _backLayer, _layerSize);
 }
 
-// Restore only the screen blocks touched in the last frames instead
-// of copying the whole back layer (block counters are maintained by
-// markBlockAsDirty/updateScreen; anything drawn is marked).
+// Restore only the screen blocks the last frame drew (anything drawn
+// goes through markBlockAsDirty). Block lifecycle on the ST: a mark
+// (2) is blitted once by updateScreen and tagged 0x80; the next
+// frame's restore consumes the tag. The upstream 2->1->0 double-blit
+// exists for SDL double-buffering, which a single ST screen page
+// does not need - this halves both the screen blits and the
+// restores.
 void Video::ST_restoreDirty() {
 	if (_fullRefresh) {
 		memcpy(_frontLayer, _backLayer, _layerSize);
 		return;
 	}
 	const int cols = _w / SCREENBLOCK_W;
-	const uint8_t *p = _screenBlocks;
+	uint8_t *p = _screenBlocks;
 	for (int j = 0; j < _h / SCREENBLOCK_H; ++j) {
 		int i = 0;
 		while (i < cols) {
-			if (p[i] == 0) {
+			if (p[i] != 0x80) {
 				++i;
 				continue;
 			}
 			int i2 = i;
-			while (i2 < cols && p[i2] != 0) {
+			while (i2 < cols && p[i2] == 0x80) {
+				p[i2] = 0;
 				++i2;
 			}
 			const int gx0 = (i * SCREENBLOCK_W) >> 4;
@@ -165,10 +170,18 @@ void Video::updateScreen() {
 		for (j = 0; j < _h / SCREENBLOCK_H; ++j) {
 			int nh = 0;
 			for (i = 0; i < _w / SCREENBLOCK_W; ++i) {
+#ifdef ATARIST
+				// fresh marks blit once, then wait for restore
+				if (p[i] != 0 && p[i] != 0x80) {
+					p[i] = 0x80;
+					++nh;
+				} else if (nh != 0) {
+#else
 				if (p[i] != 0) {
 					--p[i];
 					++nh;
 				} else if (nh != 0) {
+#endif
 					const int x = (i - nh) * SCREENBLOCK_W;
 					VIDEO_BLIT(x, j * SCREENBLOCK_H, nh * SCREENBLOCK_W, SCREENBLOCK_H);
 					nh = 0;

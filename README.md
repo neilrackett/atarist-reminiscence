@@ -17,8 +17,18 @@ framework (the `stdl/` submodule) and Amiga data files via
 [REminiscence](https://github.com/cyxx/REminiscence), a re-implementation
 of the game engine for Flashback by Delphine Software, released in 1992.
 
-- Sound effects are STE-only (silent on a regular ST).
+- Sound effects and in-game music are STE-only (silent on a regular
+  ST): the original Amiga action-music modules play through STDL's
+  four-voice sample mixer, hardware-mixed from the VBL, with sound
+  effects on the fourth voice.
 - Requires 2MB RAM.
+- Speed, measured in Hatari on level 1: ~10 fps on a plain 8MHz ST
+  (~101ms/frame: sprites 51, game logic 20, screen copy 16,
+  background restore 12) and ~19 fps on a 16MHz Mega STE (~52ms).
+  The engine's logic targets 30 fps and free-runs slower; the
+  remaining budget is dominated by sprite drawing (a hand-written
+  68000 gather in STDL's `BlitIndexed8`) and the untouched game
+  logic.
 
 ## Installing
 

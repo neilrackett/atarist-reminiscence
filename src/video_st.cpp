@@ -19,6 +19,33 @@ extern "C" {
  * priority plane doubles as the surface mask (bit set = preserved),
  * which is exactly STDL's composition convention.
  */
+// maskless views of the same layers, for whole-content copies (the
+// masked view would colour-key on the priority plane); the screen
+// copy blits through these so the BLiTTER can take aligned runs
+static STDL_Surface *layerSurfaceBare(uint8_t *layer) {
+	enum { N = 8 };
+	static uint8_t *keys[N];
+	static STDL_Surface *surfs[N];
+	for (int i = 0; i < N && keys[i]; ++i) {
+		if (keys[i] == layer) {
+			return surfs[i];
+		}
+	}
+	for (int i = 0; i < N; ++i) {
+		if (!keys[i]) {
+			surfs[i] = STDL_CreateSurfaceFrom(layer, kSTLayerW, kSTLayerH,
+			                                  kSTRowBytes, 0, 0);
+			keys[i] = layer;
+			return surfs[i];
+		}
+	}
+	return 0;
+}
+
+STDL_Surface *ST_layerSurfaceBare(uint8_t *layer) {
+	return layerSurfaceBare(layer);
+}
+
 static STDL_Surface *layerSurface(uint8_t *layer) {
 	enum { N = 8 };
 	static uint8_t *keys[N];

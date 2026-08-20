@@ -131,6 +131,42 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 		return;
 	}
 	const int xOffBytes = (_xOffset >> 4) << 3;
+	// Large copies (full refreshes, room loads) go through
+	// STDL_BlitSurface so a BLiTTER can take the aligned runs (same
+	// 16px phase, unmasked; runs break where the 224->200 squash
+	// drops a line). Small per-frame dirty runs stay on the word
+	// loop below - measured faster than the per-call blit setup.
+	// The layer is viewed maskless or the copy would key on the
+	// priority plane.
+	if (h >= 32 && gx1 - gx0 >= 8 && _srcW == kSTLayerW
+	    && STDL_GetMachineInfo()->has_blitter) {
+		STDL_Surface *bare = ST_layerSurfaceBare((uint8_t *)layer);
+		if (bare) {
+			int j = 0;
+			while (j < h) {
+				if (_yDrop[y + j]) {
+					++j;
+					continue;
+				}
+				int j2 = j + 1;
+				while (j2 < h && !_yDrop[y + j2]) {
+					++j2;
+				}
+				STDL_Rect sr, dr;
+				sr.x = (int16_t)(gx0 << 4);
+				sr.y = (int16_t)(y + j);
+				sr.w = (uint16_t)((gx1 - gx0) << 4);
+				sr.h = (uint16_t)(j2 - j);
+				dr.x = (int16_t)((gx0 << 4) + _xOffset);
+				dr.y = _yMap[y + j];
+				dr.w = sr.w;
+				dr.h = sr.h;
+				STDL_BlitSurface(bare, &sr, _screen, &dr);
+				j = j2;
+			}
+			return;
+		}
+	}
 	const int n32 = bytes >> 3;
 	for (int j = 0; j < h; ++j) {
 		const int sy = y + j;
