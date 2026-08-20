@@ -57,6 +57,41 @@ struct SpriteCache {
 static SpriteCache _spmCache;
 static SpriteCache _spcCache;
 
+// Decoded 16x16 icons. drawIcon used to run AMIGA_decodeIcn every
+// frame - walking the icon list and unpacking four bitplanes for the
+// inventory item on display - which measured 18ms of a 93ms frame on
+// a stock ST. The decode depends only on the icon number and the
+// loaded ICN bank, so it is done once.
+struct IconCache {
+	enum { N = 16, kSize = 16 * 16 };
+	uint8_t key[N];
+	bool used[N];
+	uint8_t buf[N][kSize];
+	int pos;
+
+	const uint8_t *lookup(uint8_t num) const {
+		for (int i = 0; i < N; ++i) {
+			if (used[i] && key[i] == num) {
+				return buf[i];
+			}
+		}
+		return 0;
+	}
+	uint8_t *insert(uint8_t num) {
+		const int i = pos;
+		pos = (pos + 1) & (N - 1);
+		key[i] = num;
+		used[i] = true;
+		return buf[i];
+	}
+	void flush() {
+		for (int i = 0; i < N; ++i) {
+			used[i] = false;
+		}
+	}
+};
+static IconCache _icnCache;
+
 // Presentation splash: black screen, credit lines centred, shown as
 // soon as the game font is loaded and held while the rest of the
 // startup work happens behind it. Line one is drawn double-height
@@ -460,7 +495,8 @@ void Game::mainLoop() {
 		}
 	}
 #ifdef ATARIST
-	_vid.ST_restoreDirty();
+	{ const uint32_t r0 = _stub->getTimeStamp(); _vid.ST_restoreDirty();
+	  extern uint32_t g_restMs; g_restMs += _stub->getTimeStamp() - r0; }
 #else
 	memcpy(_vid._frontLayer, _vid._backLayer, _vid._layerSize);
 #endif
@@ -503,6 +539,51 @@ void Game::mainLoop() {
 	if (_res.isDOS() && (_stub->_pi.dbgMask & PlayerInput::DF_AUTOZOOM) != 0) {
 		pge_updateZoom();
 	}
+#ifdef ATARIST
+	// TEMP phase measurement
+	{
+		static uint32_t aAnim, aLogic, aRest, aUpd, aTot, aInv; static int n; static uint32_t frameT0;
+		const uint32_t tA = _stub->getTimeStamp();
+		if (frameT0) aTot += tA - frameT0;
+		prepareAnims();
+		const uint32_t tB = _stub->getTimeStamp();
+		drawAnims();
+		const uint32_t tC = _stub->getTimeStamp();
+		aLogic += tB - tA; aAnim += tC - tB;
+		drawCurrentInventoryItem();
+		const uint32_t tC2 = _stub->getTimeStamp();
+		drawLevelTexts();
+		if (_blinkingConradCounter != 0) { --_blinkingConradCounter; }
+		const uint32_t tD = _stub->getTimeStamp();
+		aInv += tC2 - tC;
+		_vid.updateScreen();
+		const uint32_t tE = _stub->getTimeStamp();
+		aUpd += tE - tD;
+		aRest += tD - tC;
+		frameT0 = tE;
+		if (++n == 64) {
+			info("PHASE draw %d inv %d texts %d update %d rest %d",
+				(int)(aAnim/64), (int)(aInv/64), (int)((aRest-aInv)/64), (int)(aUpd/64), (int)(aTot/64));
+			aAnim=aLogic=aRest=aUpd=aTot=aInv=0; n=0;
+		}
+		updateTiming();
+		drawStoryTexts();
+		if (_stub->_pi.backspace) {
+			_stub->_pi.backspace = false;
+			handleInventory();
+			return;
+		}
+		if (_stub->_pi.escape) {
+			_stub->_pi.escape = false;
+			if (_demoBin != -1 || handleConfigPanel()) {
+				_endLoop = true;
+				return;
+			}
+		}
+		inp_handleSpecialKeys();
+		return;
+	}
+#endif
 	prepareAnims();
 	drawAnims();
 	drawCurrentInventoryItem();
@@ -1813,6 +1894,7 @@ void Game::loadLevelData() {
 #ifdef ATARIST
 	_spmCache.flush();
 	_spcCache.flush();
+	_icnCache.flush();
 #endif
 	info("Loading level %d", _currentLevel + 1);
 	_res.clearLevelRes();
@@ -1999,7 +2081,13 @@ void Game::loadLevelData() {
 }
 
 void Game::drawIcon(uint8_t iconNum, int16_t x, int16_t y, uint8_t colMask) {
-	uint8_t buf[16 * 16];
+	uint8_t scratch[16 * 16];
+	uint8_t *buf = scratch;
+	const uint8_t *cached = _icnCache.lookup(iconNum);
+	if (cached) {
+		buf = (uint8_t *)cached;
+		goto drawCached;
+	}
 	switch (_res._type) {
 	case kResourceTypeAmiga:
 		if (iconNum > 30) {
@@ -2050,6 +2138,10 @@ void Game::drawIcon(uint8_t iconNum, int16_t x, int16_t y, uint8_t colMask) {
 		_vid.SEGA_decodeIcn(_res._icn, iconNum, buf);
 		break;
 	}
+	if (_res._type != kResourceTypeMac) {
+		memcpy(_icnCache.insert(iconNum), buf, IconCache::kSize);
+	}
+drawCached:
 #ifdef ATARIST
 	{
 		uint8_t map16[16];
