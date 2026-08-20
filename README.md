@@ -119,8 +119,9 @@ resolution is fixed in the Shifter.
 
 - Non-STE sound effects
 - Non-STE music
-- Make it faster (measured ~10.8 fps on a stock 8MHz ST, ~20.4 fps on a
-  16MHz Mega STE, level 1).
+- Make it faster. Measured on level 1: ~12-15 fps on a stock 8MHz ST,
+  ~26 fps on a 16MHz Mega STE. The sprite blit is the remaining hot
+  path and wants hand-written 68000 assembly.
   Cutscenes already run at the frame delays their scripts ask for.
 
 ## Credits
