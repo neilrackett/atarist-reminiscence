@@ -15,3 +15,5 @@ tools/ipf2adf
 tools/capsimg.so
 
 .claude
+# vendored single-file decoder for the SDL diagnostic build (fetch from github.com/nothings/stb)
+src/stb_vorbis.c

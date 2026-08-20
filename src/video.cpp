@@ -1082,9 +1082,9 @@ void Video::AMIGA_drawStringChar(uint8_t *dst, int pitch, int x, int y, const ui
 	AMIGA_decodeIcn(src, chr - 32, _res->_scratchBuffer);
 	src = _res->_scratchBuffer;
 #ifdef ATARIST
-	// pitch 256 = a planar layer / cutscene page; anything else is a
-	// plain chunky buffer (the 320-wide Amiga title screen)
-	if (pitch == GAMESCREEN_W) {
+	// the game front layer is planar; cutscene pages and the Amiga
+	// title screen are plain chunky buffers
+	if (dst == _frontLayer) {
 		ST_drawGlyph(dst, src, x, y, color);
 		return;
 	}

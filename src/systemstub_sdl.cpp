@@ -519,6 +519,16 @@ void SystemStub_SDL::fadeScreen() {
 }
 
 void SystemStub_SDL::updateScreen(int shakeOffset) {
+	// diagnostic: RS_DUMP=<relative dir> saves every 25th frame as
+	// BMP, for cross-checking the ST port against the SDL renderer
+	if (getenv("RS_DUMP")) {
+		static int frame;
+		if (frame++ % 25 == 0) {
+			char name[256];
+			snprintf(name, sizeof(name), "%s/frame-%04d.bmp", getenv("RS_DUMP"), frame);
+			saveBMP(name, (const uint8_t *)_screenBuffer, 0, _screenW, _screenH);
+		}
+	}
 	if (_texW != _screenW || _texH != _screenH) {
 		void *dst = 0;
 		int pitch = 0;
