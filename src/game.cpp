@@ -64,7 +64,7 @@ static SpriteCache _spcCache;
 // darker pale blue of the title artwork (0x478).
 static void ST_splash(Game *g) {
 	static const char *kLine1 = "Neil Rackett presents...";
-	static const char *kLine2 = "neilrackett.com/atarist";
+	static const char *kLine2 = "neilrackett.com";
 	const Color white = { 0xEE, 0xEE, 0xEE };
 	const Color blue = Video::AMIGA_convertColor(0x478);
 	g->_stub->setPaletteEntry(1, &white);
