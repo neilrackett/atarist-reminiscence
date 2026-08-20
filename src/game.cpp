@@ -75,6 +75,10 @@ Game::Game(SystemStub *stub, FileSystem *fs, const char *savePath, int level, Re
 }
 
 
+#ifdef ATARIST
+uint32_t g_perfR, g_perfL, g_perfA, g_perfB;
+#endif
+
 void Game::run() {
 	_randSeed = time(0);
 
@@ -280,6 +284,7 @@ void Game::run() {
 }
 
 void Game::displayTitleScreenAmiga() {
+	info("Title screen");
 	static const char *FILENAME = "present.cmp";
 	_res.load_CMP_menu(FILENAME);
 	static const int kW = 320;
@@ -404,7 +409,11 @@ void Game::mainLoop() {
 		}
 	}
 #ifdef ATARIST
+	uint32_t bcT0 = _stub->getTimeStamp();
 	_vid.ST_restoreDirty();
+	extern uint32_t g_perfR, g_perfL, g_perfA, g_perfB;
+	uint32_t bcT1 = _stub->getTimeStamp();
+	g_perfR += bcT1 - bcT0;
 #else
 	memcpy(_vid._frontLayer, _vid._backLayer, _vid._layerSize);
 #endif
@@ -446,6 +455,10 @@ void Game::mainLoop() {
 	if (_res.isDOS() && (_stub->_pi.dbgMask & PlayerInput::DF_AUTOZOOM) != 0) {
 		pge_updateZoom();
 	}
+#ifdef ATARIST
+	uint32_t bcT2 = _stub->getTimeStamp();
+	g_perfL += bcT2 - bcT1;
+#endif
 	prepareAnims();
 	drawAnims();
 	drawCurrentInventoryItem();
@@ -456,7 +469,14 @@ void Game::mainLoop() {
 	if (_blinkingConradCounter != 0) {
 		--_blinkingConradCounter;
 	}
+#ifdef ATARIST
+	uint32_t bcT3 = _stub->getTimeStamp();
+	g_perfA += bcT3 - bcT2;
+#endif
 	_vid.updateScreen();
+#ifdef ATARIST
+	g_perfB += _stub->getTimeStamp() - bcT3;
+#endif
 	updateTiming();
 	drawStoryTexts();
 	if (_stub->_pi.backspace) {
@@ -489,6 +509,18 @@ void Game::updateTiming() {
 	if (pause > 0) {
 		_stub->sleep(pause);
 	}
+#ifdef ATARIST
+	{
+		static uint32_t frames = 0, busy = 0;
+		busy += delay;
+		if ((++frames & 127) == 0) {
+			extern uint32_t g_perfR, g_perfL, g_perfA, g_perfB;
+			info("PERF busy %u restore %u logic %u anims %u blit %u", busy / 128, g_perfR / 128, g_perfL / 128, g_perfA / 128, g_perfB / 128);
+			busy = 0;
+			g_perfR = g_perfL = g_perfA = g_perfB = 0;
+		}
+	}
+#endif
 	_frameTimestamp = _stub->getTimeStamp();
 }
 
@@ -1739,6 +1771,7 @@ void Game::loadLevelData() {
 	_spmCache.flush();
 	_spcCache.flush();
 #endif
+	info("Loading level %d", _currentLevel + 1);
 	_res.clearLevelRes();
 	const Level *lvl = &_gameLevels[_currentLevel];
 	switch (_res._type) {

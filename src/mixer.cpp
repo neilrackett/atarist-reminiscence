@@ -13,13 +13,20 @@ extern "C" {
 #include <stdl/stdl.h>
 }
 
-// STE DMA one-shot playback: no per-frame CPU cost, monophonic.
-// Samples are signed 8-bit; resample to the nearest DMA rate and
-// apply the volume while copying.
+// Sound effects on the STE: voice 3 of the STDL_Voice mixer, so
+// they coexist with the SfxPlayer music on voices 0-2. If the voice
+// device is not open (it failed, or a plain ST) fall back to a raw
+// one-shot DMA sample - resampled and volume-scaled into a scratch
+// buffer, since the bare DMA does neither.
 static uint8_t *_dmaBuf;
 static uint32_t _dmaBufSize;
 
 static void ATARIST_playSample(const uint8_t *data, uint32_t len, uint16_t freq, uint8_t volume) {
+	if (STDL_VoicesOpen()) {
+		STDL_SetVoice(3, (const int8_t *)data, len, 0, 0, freq,
+		              (volume > 64) ? 64 : volume);
+		return;
+	}
 	const int rate = (freq > 9000) ? 12517 : 6258;
 	const uint32_t outLen = ((uint32_t)((uint64_t)len * rate / freq) + 1) & ~1;
 	if (outLen > _dmaBufSize) {
@@ -53,12 +60,20 @@ Mixer::Mixer(FileSystem *fs, SystemStub *stub, const PrfMidiDriver *midiDriver, 
 void Mixer::init() {
 	memset(_channels, 0, sizeof(_channels));
 	_premixHook = 0;
+#ifdef ATARIST
+	// the voice mixer carries both music (0-2) and effects (3);
+	// fails cleanly on a plain ST and we fall back to one-shots
+	STDL_OpenVoices(6258);
+#endif
 	_stub->startAudio(Mixer::mixCallback, this);
 }
 
 void Mixer::free() {
 	setPremixHook(0, 0);
 	stopAll();
+#ifdef ATARIST
+	STDL_CloseVoices();
+#endif
 	_stub->stopAudio();
 }
 
@@ -116,6 +131,13 @@ uint32_t Mixer::getSampleRate() const {
 
 void Mixer::stopAll() {
 	debug(DBG_SND, "Mixer::stopAll()");
+#ifdef ATARIST
+	if (STDL_VoicesOpen()) {
+		STDL_StopVoice(3);
+	} else {
+		STDL_StopSample();
+	}
+#endif
 	LockAudioStack las(_stub);
 	memset(_channels, 0, sizeof(_channels));
 }

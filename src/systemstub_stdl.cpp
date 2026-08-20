@@ -42,6 +42,9 @@ struct SystemStub_STDL : SystemStub {
 	Color _hwPal[16];       // quantised colours at last build
 	uint8_t _remap[256];    // logical index -> hardware index
 	bool _palDirty;         // logical palette changed, remap stale
+	// set when the palette MODE changed (cutscene <-> game): the
+	// uniform-fade shortcut must not reuse the other mode's remap
+	bool _remapStale;
 	bool _hwDirty;          // hardware registers need reprogramming
 	int _fade;              // 256 = full brightness (uniform scale)
 	int _srcW, _srcH;
@@ -145,6 +148,7 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 
 void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int widescreenMode, bool maximized, const ScalerParameters *scalerParameters, int outputRate) {
 	memset(&_pi, 0, sizeof(_pi));
+	_remapStale = true;
 	_upDirMask = 0;
 	_upEnter = _upSpace = _upShift = false;
 	if (STDL_Init(0x20 | 0x200) != 0) { // VIDEO | JOYSTICK
@@ -247,6 +251,7 @@ void ST_setCutscenePalMode(bool enable) {
 	if (g_cutscenePal != enable) {
 		g_cutscenePal = enable;
 		g_stub->_palDirty = true;
+		g_stub->_remapStale = true;
 	}
 }
 
@@ -289,13 +294,17 @@ void SystemStub_STDL::buildRemap() {
 		memcpy(_basePal, _pal, sizeof(_pal));
 		_fade = 256;
 		_hwDirty = true;
+		_remapStale = false;
 		return;
 	}
 
 	// fade fast path: same colours, uniformly darker or brighter -
-	// keep the remap, only rescale the registers
+	// keep the remap, only rescale the registers. Never taken while
+	// the remap is stale from a palette-mode switch: a cutscene ends
+	// with the game's logical palette untouched, and reusing the
+	// cutscene remap would redraw the room in cutscene colours.
 	int num = 0, den = 0;
-	bool uniform = true;
+	bool uniform = !_remapStale;
 	for (int i = 0; i < 256; ++i) {
 		const int bsum = _basePal[i].r + _basePal[i].g + _basePal[i].b;
 		const int nsum = _pal[i].r + _pal[i].g + _pal[i].b;
@@ -324,12 +333,21 @@ void SystemStub_STDL::buildRemap() {
 	}
 	_fade = 256;
 
-	// gather distinct 4-bit colours with usage counts
+	// Gather distinct 4-bit colours with usage counts. Logical
+	// entries 0xC0-0xDF belong to cutscenes only (the game's slots
+	// are 0x0-0xB plus the text slots); left in, a finished
+	// cutscene's palette would keep crowding the game's colours out
+	// of the 16 hardware slots. They are excluded here and mapped
+	// to the nearest surviving colour below.
 	uint16_t col[256];
 	uint16_t cnt[256];
 	uint8_t entryCluster[256];
 	int n = 0;
 	for (int i = 0; i < 256; ++i) {
+		if (i >= 0xC0 && i < 0xE0) {
+			entryCluster[i] = 0xFF;
+			continue;
+		}
 		const uint16_t c = ((_pal[i].r >> 4) << 8) | ((_pal[i].g >> 4) << 4) | (_pal[i].b >> 4);
 		int j = 0;
 		for (; j < n; ++j) {
@@ -450,6 +468,23 @@ void SystemStub_STDL::buildRemap() {
 	memcpy(_hwPal, newHw, sizeof(_hwPal));
 	uint8_t newRemap[256];
 	for (int i = 0; i < 256; ++i) {
+		if (entryCluster[i] == 0xFF) {
+			// excluded cutscene entry: nearest surviving colour
+			long best = 0x7FFFFFFF;
+			int bs = 0;
+			for (int s = 0; s < 16; ++s) {
+				const int dr = _pal[i].r - newHw[s].r;
+				const int dg = _pal[i].g - newHw[s].g;
+				const int db = _pal[i].b - newHw[s].b;
+				const long d = (long)dr * dr + 2L * dg * dg + (long)db * db;
+				if (d < best) {
+					best = d;
+					bs = s;
+				}
+			}
+			newRemap[i] = bs;
+			continue;
+		}
 		int c = entryCluster[i];
 		while (alias[c] != c) {
 			c = alias[c];
@@ -458,6 +493,7 @@ void SystemStub_STDL::buildRemap() {
 	}
 	memcpy(_basePal, _pal, sizeof(_pal));
 	_hwDirty = true;
+	_remapStale = false;
 	if (memcmp(newRemap, _remap, sizeof(_remap)) != 0) {
 		memcpy(_remap, newRemap, sizeof(_remap));
 		// stale planar data on screen uses the old mapping:

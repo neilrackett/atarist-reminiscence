@@ -6,7 +6,39 @@
 
 #ifdef ATARIST
 
+extern "C" {
+#include <stdl/stdl.h>
+}
+
 #include "video_st.h"
+
+/*
+ * The engine's layers are raw caller-owned blocks (pointer-swapped
+ * cutscene pages, single-memcpy restores), wrapped as STDL surfaces
+ * on demand so the library primitives can draw into them. The
+ * priority plane doubles as the surface mask (bit set = preserved),
+ * which is exactly STDL's composition convention.
+ */
+static STDL_Surface *layerSurface(uint8_t *layer) {
+	enum { N = 8 };
+	static uint8_t *keys[N];
+	static STDL_Surface *surfs[N];
+	for (int i = 0; i < N && keys[i]; ++i) {
+		if (keys[i] == layer) {
+			return surfs[i];
+		}
+	}
+	for (int i = 0; i < N; ++i) {
+		if (!keys[i]) {
+			surfs[i] = STDL_CreateSurfaceFrom(layer, kSTLayerW, kSTLayerH,
+			                                  kSTRowBytes, layer + kSTPlaneBytes,
+			                                  kSTPrioRowBytes);
+			keys[i] = layer;
+			return surfs[i];
+		}
+	}
+	return 0;
+}
 
 static inline uint16_t *groupPtr(uint8_t *layer, int x, int y) {
 	return (uint16_t *)(layer + y * kSTRowBytes + ((x >> 4) << 3));
@@ -43,111 +75,25 @@ void ST_convertChunky(uint8_t *layer, const uint8_t *src, int h) {
 	}
 }
 
-// Apply one group's worth of sprite pixels. drawn = bits to write.
-static inline void applyGroup(uint16_t *dst, uint16_t *prio, uint16_t drawn, uint16_t d0, uint16_t d1, uint16_t d2, uint16_t d3, bool respectPrio, bool setPrio) {
-	if (respectPrio) {
-		drawn &= ~*prio;
-	}
-	if (!drawn) {
-		return;
-	}
-	const uint16_t keep = ~drawn;
-	dst[0] = (dst[0] & keep) | (d0 & drawn);
-	dst[1] = (dst[1] & keep) | (d1 & drawn);
-	dst[2] = (dst[2] & keep) | (d2 & drawn);
-	dst[3] = (dst[3] & keep) | (d3 & drawn);
-	if (setPrio) {
-		*prio |= drawn;
-	} else {
-		*prio &= keep;
-	}
-}
-
 void ST_drawSprite(uint8_t *layer, const uint8_t *src, int pitch, int x, int y, int w, int h, const uint8_t *map16, unsigned flags, bool setPrio) {
-	// clip (callers pre-clip; this is a safety net)
-	if (x < 0) {
-		w += x;
-		src += (flags & kSTSpriteColMajor) ? -x * ((flags & kSTSpriteXflip) ? -pitch : pitch) : ((flags & kSTSpriteXflip) ? x : -x);
-		x = 0;
-	}
-	if (y < 0) {
-		h += y;
-		src += (flags & kSTSpriteColMajor) ? -y : -y * pitch;
-		y = 0;
-	}
-	if (x + w > kSTLayerW) {
-		w = kSTLayerW - x;
-	}
-	if (y + h > kSTLayerH) {
-		h = kSTLayerH - y;
-	}
-	if (w <= 0 || h <= 0) {
+	STDL_Surface *s = layerSurface(layer);
+	if (!s) {
 		return;
 	}
-	const bool respectPrio = (flags & kSTSpriteRespectPrio) != 0;
-	const int gx0 = x >> 4;
-	const int gx1 = (x + w - 1) >> 4;
-	uint8_t rowBuf[kSTLayerW];
-	for (int j = 0; j < h; ++j) {
-		// gather the source row (flip / column-major variants); the
-		// common unflipped row-major case reads the source directly
-		const uint8_t *row;
-		if (flags & kSTSpriteColMajor) {
-			if (flags & kSTSpriteXflip) {
-				for (int i = 0; i < w; ++i) {
-					rowBuf[i] = src[-i * pitch];
-				}
-			} else {
-				for (int i = 0; i < w; ++i) {
-					rowBuf[i] = src[i * pitch];
-				}
-			}
-			row = rowBuf;
-			++src;
-		} else if (flags & kSTSpriteXflip) {
-			for (int i = 0; i < w; ++i) {
-				rowBuf[i] = src[-i];
-			}
-			row = rowBuf;
-			src += pitch;
-		} else {
-			row = src;
-			src += pitch;
-		}
-		uint16_t *dst = groupPtr(layer, gx0 << 4, y + j);
-		uint16_t *prio = prioPtr(layer, gx0 << 4, y + j);
-		for (int g = gx0; g <= gx1; ++g) {
-			const int base = (g << 4) - x; // source index of the group's first pixel
-			// pixel range of this group that overlaps the sprite
-			int i0 = 0;
-			if (base < 0) {
-				i0 = -base;
-			}
-			int i1 = w - base;
-			if (i1 > 16) {
-				i1 = 16;
-			}
-			uint16_t drawn = 0, d0 = 0, d1 = 0, d2 = 0, d3 = 0;
-			const uint8_t *p = row + base + i0;
-			uint16_t bit = 0x8000 >> i0;
-			for (int i = i1 - i0; --i >= 0; bit >>= 1) {
-				const uint8_t c = *p++;
-				if (c) {
-					const uint8_t v = map16[c & 15];
-					drawn |= bit;
-					if (v & 1) d0 |= bit;
-					if (v & 2) d1 |= bit;
-					if (v & 4) d2 |= bit;
-					if (v & 8) d3 |= bit;
-				}
-			}
-			if (drawn) {
-				applyGroup(dst, prio, drawn, d0, d1, d2, d3, respectPrio, setPrio);
-			}
-			dst += 4;
-			++prio;
-		}
+	unsigned f = 0;
+	if (flags & kSTSpriteXflip) {
+		f |= STDL_I8_XFLIP;
 	}
+	if (flags & kSTSpriteColMajor) {
+		f |= STDL_I8_COLMAJOR;
+	}
+	if (flags & kSTSpriteRespectPrio) {
+		f |= STDL_I8_UNDER;
+	}
+	if (setPrio) {
+		f |= STDL_I8_MARK;
+	}
+	STDL_BlitIndexed8(s, src, pitch, x, y, w, h, map16, f);
 }
 
 void ST_drawGlyph(uint8_t *layer, const uint8_t *src, int x, int y, uint8_t colour8) {

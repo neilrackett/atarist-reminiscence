@@ -8,6 +8,30 @@
 #include "sfx_player.h"
 #include "util.h"
 
+#ifdef ATARIST
+extern "C" {
+#include <stdl/stdl.h>
+}
+
+// The Amiga action music maps 1:1 onto the STDL_Voice device: the
+// 50Hz sequencer (handleTick) runs from the device's voice tick in
+// VBL context - static module data only, no allocation - and
+// playSample() programs a hardware-mixed voice instead of a
+// software-mixed channel. Voice 3 is left to the game's sound
+// effects (see mixer.cpp).
+static void ATARIST_voiceTick(void *ud) {
+	SfxPlayer *p = (SfxPlayer *)ud;
+	p->handleTick();
+	if (!p->_playing) {
+		// end of song: silence the music voices and stand down
+		STDL_StopVoice(0);
+		STDL_StopVoice(1);
+		STDL_StopVoice(2);
+		STDL_SetVoiceTick(0, 0);
+	}
+}
+#endif
+
 // volume instruments are either equal to 64 or 32 (this corresponds to aud0vol)
 // use one third of the volume for master (for comparison, modplug uses a master volume of 128, max 512)
 static const int kMasterVolume = 64 * 3;
@@ -49,8 +73,16 @@ void SfxPlayer::play(uint8_t num) {
 		_modData = _mod->moduleData + 0x22;
 		memset(_samples, 0, sizeof(_samples));
 		_samplesLeft = 0;
+#ifdef ATARIST
+		if (!STDL_VoicesOpen()) {
+			return;
+		}
+		_playing = true;
+		STDL_SetVoiceTick(ATARIST_voiceTick, this);
+#else
 		_mix->setPremixHook(mixCallback, this);
 		_playing = true;
+#endif
 		if (kLowPassFilter) {
 			memset(bw_xf, 0, sizeof(bw_xf));
 			memset(bw_yf, 0, sizeof(bw_yf));
@@ -60,7 +92,14 @@ void SfxPlayer::play(uint8_t num) {
 
 void SfxPlayer::stop() {
 	if (_playing) {
+#ifdef ATARIST
+		STDL_SetVoiceTick(0, 0);
+		STDL_StopVoice(0);
+		STDL_StopVoice(1);
+		STDL_StopVoice(2);
+#else
 		_mix->setPremixHook(0, 0);
+#endif
 		_playing = false;
 	}
 }
@@ -75,6 +114,18 @@ void SfxPlayer::playSample(int channel, const uint8_t *sampleData, uint16_t peri
 	si->freq = PAULA_FREQ / period;
 	si->pos = 0;
 	si->data = sampleData;
+#ifdef ATARIST
+	// hand the trigger straight to the hardware-mixed voice. The
+	// software mixer wraps at loopPos+loopLen on the first pass too,
+	// so a looping sample's first stretch ends there, not at len.
+	{
+		const bool looping = (si->loopLen > 2);
+		const uint32_t end = looping ? (uint32_t)si->loopPos + si->loopLen : si->len;
+		STDL_SetVoice(channel, (const int8_t *)si->data, end,
+		              si->loopPos, looping ? si->loopLen : 0,
+		              si->freq, (si->vol > 64) ? 64 : (uint8_t)si->vol);
+	}
+#endif
 }
 
 void SfxPlayer::handleTick() {
