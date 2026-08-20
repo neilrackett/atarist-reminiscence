@@ -539,6 +539,24 @@ void Game::mainLoop() {
 }
 
 void Game::updateTiming() {
+#ifdef ATARIST
+	// log_fps: average over 64 frames, to RS.LOG. The engine asks for
+	// 30Hz and sleeps when it is ahead, so anything below 30 is what
+	// the machine actually managed.
+	if (g_options.log_fps) {
+		static int frames;
+		static uint32_t t0;
+		if (++frames == 64) {
+			const uint32_t now = _stub->getTimeStamp();
+			const uint32_t d = now - t0;
+			if (t0 != 0 && d != 0) {
+				info("fps %d.%d (%d ms/frame)", (int)(64000 / d), (int)((640000 / d) % 10), (int)(d / 64));
+			}
+			t0 = now;
+			frames = 0;
+		}
+	}
+#endif
 	static const int frameHz = 30;
 	int32_t delay = _stub->getTimeStamp() - _frameTimestamp;
 	int32_t pause = (_stub->_pi.dbgMask & PlayerInput::DF_FASTMODE) ? 20 : (1000 / frameHz);

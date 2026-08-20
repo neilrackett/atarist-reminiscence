@@ -89,6 +89,7 @@ defaults to off.
 | -------------------------- | ---------------------------------------------------------------------- |
 | `skip_intro`               | Go straight to the title screen, skipping the intro sequence           |
 | `crop_screen`              | Crop 12 lines off the top and bottom instead of squashing 224 into 200 |
+| `log_fps`                  | Log the frame rate to `RS.LOG`, averaged over 64 frames                |
 | `bypass_protection`        | Skip the copy-protection screen                                        |
 | `enable_password_menu`     | Show the level password menu                                           |
 | `fade_out_palette`         | Fade the palette out between screens                                   |
@@ -102,7 +103,7 @@ defaults to off.
 | `restore_memo_cutscene`    | Draw the extra shapes in the MEMO cutscene                             |
 | `order_inventory_original` | Order inventory items as the original did                              |
 
-The two ST-specific ones are `crop_screen` and `skip_intro`.
+The ST-specific ones are `crop_screen`, `skip_intro` and `log_fps`.
 
 `crop_screen` chooses how the game's 224 lines reach the ST's 200:
 by default every ninth line is dropped, which keeps the whole
@@ -118,7 +119,8 @@ resolution is fixed in the Shifter.
 
 - Non-STE sound effects
 - Non-STE music
-- Make it faster (current ~10 fps on a stock 8MHz ST, ~19 fps on a 16MHz Mega STE).
+- Make it faster (measured ~10.8 fps on a stock 8MHz ST, ~20.4 fps on a
+  16MHz Mega STE, level 1).
   Cutscenes already run at the frame delays their scripts ask for.
 
 ## Credits
