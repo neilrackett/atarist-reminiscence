@@ -41,6 +41,10 @@ enum {
 // changed (owned by systemstub_stdl.cpp)
 const uint8_t *ST_getRemap();
 
+// changes whenever ST_getRemap()'s contents change; anything holding
+// pixels with the mapping already baked in must re-bake when it moves
+uint16_t ST_remapGen();
+
 // maskless STDL surface view of a layer (screen copies, layer
 // copies); returns a cached wrapper
 struct STDL_Surface;
@@ -89,6 +93,15 @@ void ST_convertChunky(uint8_t *layer, const uint8_t *src, int h);
 // map16[c] = hardware colour for source value c (0 = transparent).
 // setPrio marks drawn pixels as foreground.
 void ST_drawSprite(uint8_t *layer, const uint8_t *src, int pitch, int x, int y, int w, int h, const uint8_t *map16, unsigned flags, bool setPrio);
+
+// As ST_drawSprite, but the planar form is cached: the same frame,
+// colour bank, flags and palette produce the same plane words every
+// time, so bake them once and then just move words. Falls back to
+// ST_drawSprite when a frame is too large to cache.
+void ST_drawSpriteCached(uint8_t *layer, const uint8_t *src, int pitch, int x, int y, int w, int h, uint8_t colMask, unsigned flags, bool setPrio);
+
+// drop every cached planar frame (level data reloaded)
+void ST_flushSpriteCache();
 
 // 8x8 glyph from a 16-byte-stride chunky source (AMIGA_decodeIcn
 // output): nonzero source pixels painted in colour8

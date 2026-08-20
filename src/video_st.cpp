@@ -105,6 +105,269 @@ void ST_drawSprite(uint8_t *layer, const uint8_t *src, int pitch, int x, int y, 
 	STDL_BlitIndexed8(s, src, pitch, x, y, w, h, map16, f);
 }
 
+// --- planar sprite cache -------------------------------------------
+//
+// Drawing from chunky costs a per-pixel gather every frame: the
+// source byte is mapped, then scattered a bit at a time into four
+// plane words. The same frame, colour bank, flags and palette always
+// produce the same plane words, so bake them once and afterwards
+// just move words into the layer.
+//
+// The bake goes through STDL_BlitIndexed8 into a scratch surface,
+// which already owns the flip, column-major and palette-map rules -
+// there is no second copy of that logic here. STDL_I8_MARK gives the
+// scratch mask a set bit under every drawn pixel, which is exactly
+// the "opaque" mask the blit below wants.
+
+enum { kSprSlots = 64, kSprMaxW = 128, kSprMaxH = 160 };   // power of two: direct-mapped
+
+struct SprEntry {
+	const uint8_t *src;
+	uint16_t gen;
+	uint8_t colMask;
+	uint8_t flags;
+	uint8_t w, h;
+	int groups;
+	uint16_t *planes;       // groups*4 words per row
+	uint16_t *mask;         // groups words per row, 1 = opaque
+	int cap;                // words allocated at planes
+};
+
+static SprEntry g_spr[kSprSlots];
+
+void ST_flushSpriteCache() {
+	for (int i = 0; i < kSprSlots; ++i) {
+		g_spr[i].src = 0;
+	}
+}
+
+static bool bakeSprite(SprEntry *e, const uint8_t *src, int pitch, int w, int h, const uint8_t *map16, unsigned f) {
+	const int groups = (w + 15) >> 4;
+	const int planeWords = groups * 4 * h;
+	const int words = planeWords + groups * h;
+	if (e->cap < words) {
+		// grow only: a slot large enough for one frame is large
+		// enough for the next one that lands in it, so after warm-up
+		// a miss costs no allocation at all
+		free(e->planes);
+		e->planes = (uint16_t *)malloc(words * sizeof(uint16_t));
+		e->cap = e->planes ? words : 0;
+	}
+	if (!e->planes) {
+		return false;
+	}
+	e->mask = e->planes + planeWords;
+	e->groups = groups;
+	// Only the mask has to start clear: BlitIndexed8 skips transparent
+	// pixels, and plane bits outside the mask are never merged.
+	memset(e->mask, 0, groups * h * sizeof(uint16_t));
+
+	// One scratch header, reused: STDL_CreateSurfaceFrom per bake was
+	// a malloc/free pair on the miss path.
+	static STDL_Surface *scratch;
+	if (!scratch) {
+		scratch = STDL_CreateSurfaceFrom((uint8_t *)e->planes,
+			groups * 16, h, groups * 8, (uint8_t *)e->mask, groups * 2);
+		if (!scratch) {
+			return false;
+		}
+	}
+	scratch->pixels = (uint8_t *)e->planes;
+	scratch->w = (int16_t)(groups * 16);
+	scratch->h = (int16_t)h;
+	scratch->stride = (uint16_t)(groups * 8);
+	scratch->mask = (uint8_t *)e->mask;
+	scratch->maskstride = (uint16_t)(groups * 2);
+	scratch->clip.x = 0;
+	scratch->clip.y = 0;
+	scratch->clip.w = (uint16_t)(groups * 16);
+	scratch->clip.h = (uint16_t)h;
+	STDL_BlitIndexed8(scratch, src, pitch, 0, 0, w, h, map16, f | STDL_I8_MARK);
+	return true;
+}
+
+// Move one baked frame into the layer. gcc 4.6 does not unswitch
+// loops, so the aligned and shifted cases are separate loops rather
+// than a test inside the group loop, and each keeps its live values
+// down to what the 68000's registers hold.
+static void mergeGroup(uint16_t *d, uint16_t *pr, uint16_t m,
+                       uint16_t o0, uint16_t o1, uint16_t o2, uint16_t o3,
+                       bool respectPrio, bool setPrio) {
+	if (respectPrio) {
+		m = (uint16_t)(m & ~*pr);
+	}
+	if (m == 0) {
+		return;
+	}
+	const uint16_t keep = (uint16_t)~m;
+	d[0] = (uint16_t)((d[0] & keep) | (o0 & m));
+	d[1] = (uint16_t)((d[1] & keep) | (o1 & m));
+	d[2] = (uint16_t)((d[2] & keep) | (o2 & m));
+	d[3] = (uint16_t)((d[3] & keep) | (o3 & m));
+	*pr = setPrio ? (uint16_t)(*pr | m) : (uint16_t)(*pr & keep);
+}
+
+static void blitBaked(uint8_t *layer, const SprEntry *e, int x, int y, bool respectPrio, bool setPrio) {
+	const int groups = e->groups;
+	const int r = x & 15;
+	const int gx = x >> 4;
+	const int lastGroup = (kSTLayerW >> 4) - 1;
+	int j0 = 0, j1 = e->h;
+	if (y < 0) {
+		j0 = -y;
+	}
+	if (y + j1 > kSTLayerH) {
+		j1 = kSTLayerH - y;
+	}
+	if (j0 >= j1) {
+		return;
+	}
+	// the output groups that land on the layer, computed once
+	int g0 = 0, g1 = (r == 0) ? groups : groups + 1;
+	if (gx + g0 < 0) {
+		g0 = -gx;
+	}
+	if (gx + g1 > lastGroup + 1) {
+		g1 = lastGroup + 1 - gx;
+	}
+	if (g0 >= g1) {
+		return;
+	}
+	const uint16_t *srcRow = e->planes + (uint32_t)j0 * groups * 4;
+	const uint16_t *maskRow = e->mask + (uint32_t)j0 * groups;
+	uint8_t *dstRow = layer + (uint32_t)(y + j0) * kSTRowBytes + gx * 8;
+	uint8_t *prioRow = layer + kSTPlaneBytes + (uint32_t)(y + j0) * kSTPrioRowBytes + gx * 2;
+
+	if (r == 0) {
+		for (int j = j0; j < j1; ++j) {
+			const uint16_t *sp = srcRow + g0 * 4;
+			const uint16_t *mp = maskRow + g0;
+			uint16_t *d = (uint16_t *)dstRow + g0 * 4;
+			uint16_t *pr = (uint16_t *)prioRow + g0;
+			for (int g = g0; g < g1; ++g) {
+				const uint16_t m = *mp++;
+				if (m != 0) {
+					mergeGroup(d, pr, m, sp[0], sp[1], sp[2], sp[3], respectPrio, setPrio);
+				}
+				sp += 4;
+				d += 4;
+				++pr;
+			}
+			srcRow += groups * 4;
+			maskRow += groups;
+			dstRow += kSTRowBytes;
+			prioRow += kSTPrioRowBytes;
+		}
+		return;
+	}
+
+	const int l = 16 - r;
+	for (int j = j0; j < j1; ++j) {
+		const uint16_t *sp = srcRow;
+		const uint16_t *mp = maskRow;
+		uint16_t *d = (uint16_t *)dstRow;
+		uint16_t *pr = (uint16_t *)prioRow;
+		uint16_t c0 = 0, c1 = 0, c2 = 0, c3 = 0, cm = 0;
+		for (int g = 0; g < g1; ++g) {
+			uint16_t s0 = 0, s1 = 0, s2 = 0, s3 = 0, sm = 0;
+			if (g < groups) {
+				s0 = sp[0]; s1 = sp[1]; s2 = sp[2]; s3 = sp[3];
+				sm = *mp++;
+				sp += 4;
+			}
+			const uint16_t om = (uint16_t)((cm << l) | (sm >> r));
+			if (g >= g0 && om != 0) {
+				mergeGroup(d, pr, om,
+					(uint16_t)((c0 << l) | (s0 >> r)),
+					(uint16_t)((c1 << l) | (s1 >> r)),
+					(uint16_t)((c2 << l) | (s2 >> r)),
+					(uint16_t)((c3 << l) | (s3 >> r)),
+					respectPrio, setPrio);
+			}
+			c0 = s0; c1 = s1; c2 = s2; c3 = s3; cm = sm;
+			d += 4;
+			++pr;
+		}
+		srcRow += groups * 4;
+		maskRow += groups;
+		dstRow += kSTRowBytes;
+		prioRow += kSTPrioRowBytes;
+	}
+}
+
+void ST_drawSpriteCached(uint8_t *layer, const uint8_t *src, int pitch, int x, int y, int w, int h, uint8_t colMask, unsigned flags, bool setPrio) {
+	if (w <= 0 || h <= 0 || w > kSprMaxW || h > kSprMaxH
+	    || x >= kSTLayerW || y >= kSTLayerH || x + w <= 0 || y + h <= 0) {
+		if (w > kSprMaxW || h > kSprMaxH) {
+			uint8_t map16[16];
+			ST_buildMap16(colMask, map16);
+			ST_drawSprite(layer, src, pitch, x, y, w, h, map16, flags, setPrio);
+		}
+		return;
+	}
+	const unsigned bakeFlags = flags & (kSTSpriteXflip | kSTSpriteColMajor);
+	const uint16_t gen = ST_remapGen();
+	// direct-mapped: scanning every slot cost more than the blit it
+	// was there to save
+	const int slot = (int)((((unsigned long)src >> 4) ^ colMask) & (kSprSlots - 1));
+	SprEntry *e = &g_spr[slot];
+	if (e->src == src && e->gen == gen && e->colMask == colMask
+	    && e->flags == (uint8_t)bakeFlags && e->w == (uint8_t)w
+	    && e->h == (uint8_t)h) {
+	} else {
+		e = 0;
+	}
+	if (!e) {
+		// Baking costs about what one chunky draw costs, so a frame
+		// drawn once would pay for a bake it never reuses. Bake on the
+		// second sighting: one-off frames cost exactly what they did
+		// before, repeated ones (every animation cycle) go fast.
+		{
+			enum { kSeen = 48 };
+			static const uint8_t *seenSrc[kSeen];
+			static uint8_t seenMask[kSeen];
+			static int seenPos;
+			int slot = -1;
+			for (int i = 0; i < kSeen; ++i) {
+				if (seenSrc[i] == src && seenMask[i] == colMask) {
+					slot = i;
+					break;
+				}
+			}
+			if (slot < 0) {
+				seenSrc[seenPos] = src;
+				seenMask[seenPos] = colMask;
+				seenPos = (seenPos + 1) % kSeen;
+				uint8_t map16[16];
+				ST_buildMap16(colMask, map16);
+				ST_drawSprite(layer, src, pitch, x, y, w, h, map16, flags, setPrio);
+				return;
+			}
+		}
+		e = &g_spr[slot];
+		uint8_t map16[16];
+		ST_buildMap16(colMask, map16);
+		unsigned f = 0;
+		if (bakeFlags & kSTSpriteXflip) {
+			f |= STDL_I8_XFLIP;
+		}
+		if (bakeFlags & kSTSpriteColMajor) {
+			f |= STDL_I8_COLMAJOR;
+		}
+		if (!bakeSprite(e, src, pitch, w, h, map16, f)) {
+			e->src = 0;
+			return;
+		}
+		e->src = src;
+		e->gen = gen;
+		e->colMask = colMask;
+		e->flags = (uint8_t)bakeFlags;
+		e->w = (uint8_t)w;
+		e->h = (uint8_t)h;
+	}
+	blitBaked(layer, e, x, y, (flags & kSTSpriteRespectPrio) != 0, setPrio);
+}
+
 void ST_drawGlyph(uint8_t *layer, const uint8_t *src, int x, int y, uint8_t colour8) {
 	const uint8_t v = ST_getRemap()[colour8];
 	uint8_t map16[16];

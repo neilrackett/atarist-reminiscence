@@ -27,11 +27,20 @@
 // the cache instead. Flushed whenever the underlying resource
 // buffers are reloaded (level data, per-room monster SPM).
 struct SpriteCache {
-	enum { N = 16 };
+	// Sixteen entries were fewer than one moving scene needs, and a
+	// miss does not just re-decode: it hands the frame a NEW buffer
+	// address, which invalidates the planar cache keyed on it. The
+	// frames of a walk cycle have to stay put to be worth baking.
+	enum { N = 64 };
 	const uint8_t *key[N];
 	uint8_t *buf[N];
+	int cap[N];
 	int pos;
 
+	// Round-robin over a scanned table rather than direct-mapped:
+	// hashing on the frame address collides, and a collision evicts a
+	// frame that is still on screen - which then re-decodes into a new
+	// buffer and invalidates its baked planar copy too.
 	uint8_t *lookup(const uint8_t *p) {
 		for (int i = 0; i < N; ++i) {
 			if (key[i] == p) {
@@ -43,8 +52,11 @@ struct SpriteCache {
 	uint8_t *insert(const uint8_t *p, int size) {
 		const int i = pos;
 		pos = (pos + 1) & (N - 1);
-		::free(buf[i]);
-		buf[i] = (uint8_t *)malloc(size);
+		if (cap[i] < size) {   // grow only: no free/malloc per miss
+			::free(buf[i]);
+			buf[i] = (uint8_t *)malloc(size);
+			cap[i] = buf[i] ? size : 0;
+		}
 		key[i] = buf[i] ? p : 0;
 		return buf[i];
 	}
@@ -495,8 +507,7 @@ void Game::mainLoop() {
 		}
 	}
 #ifdef ATARIST
-	{ const uint32_t r0 = _stub->getTimeStamp(); _vid.ST_restoreDirty();
-	  extern uint32_t g_restMs; g_restMs += _stub->getTimeStamp() - r0; }
+	_vid.ST_restoreDirty();
 #else
 	memcpy(_vid._frontLayer, _vid._backLayer, _vid._layerSize);
 #endif
@@ -539,51 +550,6 @@ void Game::mainLoop() {
 	if (_res.isDOS() && (_stub->_pi.dbgMask & PlayerInput::DF_AUTOZOOM) != 0) {
 		pge_updateZoom();
 	}
-#ifdef ATARIST
-	// TEMP phase measurement
-	{
-		static uint32_t aAnim, aLogic, aRest, aUpd, aTot, aInv; static int n; static uint32_t frameT0;
-		const uint32_t tA = _stub->getTimeStamp();
-		if (frameT0) aTot += tA - frameT0;
-		prepareAnims();
-		const uint32_t tB = _stub->getTimeStamp();
-		drawAnims();
-		const uint32_t tC = _stub->getTimeStamp();
-		aLogic += tB - tA; aAnim += tC - tB;
-		drawCurrentInventoryItem();
-		const uint32_t tC2 = _stub->getTimeStamp();
-		drawLevelTexts();
-		if (_blinkingConradCounter != 0) { --_blinkingConradCounter; }
-		const uint32_t tD = _stub->getTimeStamp();
-		aInv += tC2 - tC;
-		_vid.updateScreen();
-		const uint32_t tE = _stub->getTimeStamp();
-		aUpd += tE - tD;
-		aRest += tD - tC;
-		frameT0 = tE;
-		if (++n == 64) {
-			info("PHASE draw %d inv %d texts %d update %d rest %d",
-				(int)(aAnim/64), (int)(aInv/64), (int)((aRest-aInv)/64), (int)(aUpd/64), (int)(aTot/64));
-			aAnim=aLogic=aRest=aUpd=aTot=aInv=0; n=0;
-		}
-		updateTiming();
-		drawStoryTexts();
-		if (_stub->_pi.backspace) {
-			_stub->_pi.backspace = false;
-			handleInventory();
-			return;
-		}
-		if (_stub->_pi.escape) {
-			_stub->_pi.escape = false;
-			if (_demoBin != -1 || handleConfigPanel()) {
-				_endLoop = true;
-				return;
-			}
-		}
-		inp_handleSpecialKeys();
-		return;
-	}
-#endif
 	prepareAnims();
 	drawAnims();
 	drawCurrentInventoryItem();
@@ -1594,13 +1560,11 @@ void Game::drawObjectFrame(const uint8_t *bankDataPtr, const uint8_t *dataPtr, i
 
 #ifdef ATARIST
 	(void)dst_offset;
-	uint8_t map16[16];
-	ST_buildMap16(sprite_col_mask, map16);
 	unsigned stFlags = (sprite_flags & 0x10) ? kSTSpriteXflip : 0;
 	if (!_eraseBackground) {
 		stFlags |= kSTSpriteRespectPrio;
 	}
-	ST_drawSprite(_vid._frontLayer, src, sprite_w, sprite_x, sprite_y, sprite_clipped_w, sprite_clipped_h, map16, stFlags, false);
+	ST_drawSpriteCached(_vid._frontLayer, src, sprite_w, sprite_x, sprite_y, sprite_clipped_w, sprite_clipped_h, sprite_col_mask, stFlags, false);
 #else
 	if (_eraseBackground) {
 		if (!(sprite_flags & 0x10)) {
@@ -1709,8 +1673,6 @@ void Game::drawCharacter(const uint8_t *dataPtr, int16_t pos_x, int16_t pos_y, u
 
 #ifdef ATARIST
 	(void)dst_offset;
-	uint8_t map16[16];
-	ST_buildMap16(sprite_col_mask, map16);
 	unsigned stFlags = kSTSpriteRespectPrio;
 	if (flags & 2) {
 		stFlags |= kSTSpriteXflip;
@@ -1720,7 +1682,7 @@ void Game::drawCharacter(const uint8_t *dataPtr, int16_t pos_x, int16_t pos_y, u
 		stFlags |= kSTSpriteColMajor;
 		stPitch = sprite_h;
 	}
-	ST_drawSprite(_vid._frontLayer, src, stPitch, pos_x, pos_y, sprite_clipped_w, sprite_clipped_h, map16, stFlags, false);
+	ST_drawSpriteCached(_vid._frontLayer, src, stPitch, pos_x, pos_y, sprite_clipped_w, sprite_clipped_h, sprite_col_mask, stFlags, false);
 #else
 	if (!(flags & 2)) {
 		if (sprite_mirror_y) {
@@ -1769,6 +1731,7 @@ int Game::loadMonsterSprites(LivePGE *pge) {
 #ifdef ATARIST
 				// the SPM buffer is reused per monster
 				_spmCache.flush();
+				ST_flushSpriteCache();
 #endif
 				const int dst_offset = Video::PALETTE_INDEX_MONSTER * 16;
 				const int src_offset = _vid._mapPalSlot3 * 16 + (_curMonsterNum & 1) * 8;
@@ -1895,6 +1858,7 @@ void Game::loadLevelData() {
 	_spmCache.flush();
 	_spcCache.flush();
 	_icnCache.flush();
+	ST_flushSpriteCache();
 #endif
 	info("Loading level %d", _currentLevel + 1);
 	_res.clearLevelRes();
@@ -2143,11 +2107,7 @@ void Game::drawIcon(uint8_t iconNum, int16_t x, int16_t y, uint8_t colMask) {
 	}
 drawCached:
 #ifdef ATARIST
-	{
-		uint8_t map16[16];
-		ST_buildMap16(colMask << 4, map16);
-		ST_drawSprite(_vid._frontLayer, buf, 16, x, y, 16, 16, map16, 0, (colMask & 8) != 0);
-	}
+	ST_drawSpriteCached(_vid._frontLayer, buf, 16, x, y, 16, 16, colMask << 4, 0, (colMask & 8) != 0);
 #else
 	_vid.drawSpriteSub1(buf, _vid._frontLayer + x + y * _vid._w, 16, 16, 16, colMask << 4);
 #endif

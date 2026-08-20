@@ -301,6 +301,14 @@ void SystemStub_STDL::getPaletteEntry(int i, Color *c) {
 // effect (index |= 8) becomes a plane-3 OR.
 static bool g_cutscenePal;
 
+// Bumped whenever _remap changes. Callers that bake the mapping into
+// planar pixels (the sprite cache) key their entries on this.
+static uint16_t g_remapGen = 1;
+
+uint16_t ST_remapGen() {
+	return g_remapGen;
+}
+
 void ST_setCutscenePalMode(bool enable) {
 	if (g_cutscenePal != enable) {
 		g_cutscenePal = enable;
@@ -687,6 +695,7 @@ void ST_cutscenePalLock(int part) {
 		}
 		stub->_remap[0xE0 + i] = (uint8_t)bs;
 	}
+	++g_remapGen;
 	stub->_palLocked = true;
 	stub->_remapStale = false;
 	stub->_palDirty = true;
@@ -786,6 +795,7 @@ void SystemStub_STDL::buildRemap() {
 				}
 				_remap[i] = (uint8_t)bs;
 			}
+			++g_remapGen;
 			_fade = (fade > 1023) ? 1023 : fade;
 			_hwDirty = true;
 			return;
@@ -869,6 +879,7 @@ void SystemStub_STDL::buildRemap() {
 	_remapStale = false;
 	if (memcmp(newRemap, _remap, sizeof(_remap)) != 0) {
 		memcpy(_remap, newRemap, sizeof(_remap));
+		++g_remapGen;
 		// stale planar data on screen uses the old mapping:
 		// re-run the conversion from the shadow frame
 		reconvertFromShadow();
