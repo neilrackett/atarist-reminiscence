@@ -329,16 +329,12 @@ static inline int colDist(const Color &a, const Color &b) {
 void SystemStub_STDL::buildRemap() {
 	_palDirty = false;
 
-	// Fade fast path: the palette is a uniform brightness scale of
-	// the one the mapping was last built for (cutscene fade-ins ramp
-	// FROM the base upward, so brightening rides this too - the
-	// registers clamp per channel). Checked over only the entries
-	// the current mode quantises; a full rebuild every fade step
-	// costs real milliseconds and lets the slot assignment wander,
-	// which showed as per-frame palette churn in the intro. Never
-	// taken while the remap is stale from a palette-mode switch.
+	// Estimate the overall brightness scale against the palette the
+	// mapping was last built for: fades ramp every entry by the same
+	// factor, so measuring the brightest base entry recovers it
+	// (fade-ins ramp FROM the base upward - brightening rides the
+	// same path with the registers clamping per channel).
 	int num = 0, den = 0;
-	bool uniform = !_remapStale;
 	for (int i = 0; i < 256; ++i) {
 		const bool cutEntry = (i >= 0xC0 && i < 0xF0);
 		if (g_cutscenePal ? !cutEntry : (i >= 0xC0 && i < 0xE0)) {
@@ -351,8 +347,18 @@ void SystemStub_STDL::buildRemap() {
 			num = nsum;
 		}
 	}
-	if (den > 0) {
-		for (int i = 0; i < 256 && uniform; ++i) {
+	// Patch fast path: cutscene scripts animate a handful of entries
+	// (blinking lights, shading variants of one palette) while the
+	// bulk of the palette stands still. A full requantise on every
+	// such step flips merge decisions and the whole scene jumps
+	// between two or three looks, so when only a few entries moved,
+	// keep the standing mapping and point just the changed entries
+	// at their nearest current hardware colour. A real scene change
+	// replaces most of the palette and still rebuilds below.
+	if (!_remapStale && den > 0) {
+		uint8_t changed[16];
+		int nchg = 0;
+		for (int i = 0; i < 256; ++i) {
 			const bool cutEntry = (i >= 0xC0 && i < 0xF0);
 			if (g_cutscenePal ? !cutEntry : (i >= 0xC0 && i < 0xE0)) {
 				continue;
@@ -360,11 +366,29 @@ void SystemStub_STDL::buildRemap() {
 			const int er = _basePal[i].r * num / den - _pal[i].r;
 			const int eg = _basePal[i].g * num / den - _pal[i].g;
 			const int eb = _basePal[i].b * num / den - _pal[i].b;
-			if (er < -20 || er > 20 || eg < -20 || eg > 20 || eb < -20 || eb > 20) {
-				uniform = false;
+			const int d = (er < 0 ? -er : er) + 2 * (eg < 0 ? -eg : eg) + (eb < 0 ? -eb : eb);
+			if (d > 40) {
+				if (nchg == 16) {
+					++nchg;
+					break;
+				}
+				changed[nchg++] = (uint8_t)i;
 			}
 		}
-		if (uniform) {
+		if (nchg <= 16) {
+			for (int c = 0; c < nchg; ++c) {
+				const int i = changed[c];
+				long best = 0x7FFFFFFF;
+				int bs = 0;
+				for (int s = 0; s < 16; ++s) {
+					const long d = colDist(_pal[i], _hwPal[s]);
+					if (d < best) {
+						best = d;
+						bs = s;
+					}
+				}
+				_remap[i] = (uint8_t)bs;
+			}
 			_fade = num * 256 / den;
 			if (_fade > 1023) {
 				_fade = 1023;
@@ -374,6 +398,7 @@ void SystemStub_STDL::buildRemap() {
 		}
 	}
 	_fade = 256;
+	info("Quantise %s", g_cutscenePal ? "cutscene" : "game");
 
 	// Gather distinct 4-bit colours with usage counts. Logical
 	// entries 0xC0-0xDF belong to cutscenes only (the game's slots
