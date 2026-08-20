@@ -82,10 +82,13 @@ static void ST_splash(Game *g) {
 			memcpy(buf + r * 16, g->_res._scratchBuffer + r * 16, 8);
 			memcpy(buf + r * 16 + 8, g->_res._scratchBuffer + r * 16, 8);
 		}
-		ST_drawSprite(g->_vid._frontLayer, buf, 8, x, 96, 8, 16, map16, 0, false);
+		// vertically centred; the squash-dropped source line inside
+		// this band (113) lands on a doubled row pair, so nothing is
+		// visibly lost
+		ST_drawSprite(g->_vid._frontLayer, buf, 8, x, 104, 8, 16, map16, 0, false);
 	}
-	// y chosen so the 224->200 squash drops no row inside the glyphs
-	g->_vid.drawString(kLine2, (Video::GAMESCREEN_W - (int)strlen(kLine2) * Video::CHAR_W) / 2, 122, 2);
+	// bottom-centred, between the squash-dropped lines 206 and 215
+	g->_vid.drawString(kLine2, (Video::GAMESCREEN_W - (int)strlen(kLine2) * Video::CHAR_W) / 2, 207, 2);
 	g->_vid.fullRefresh();
 	g->_vid.updateScreen();
 	g->_stub->sleep(3000);
