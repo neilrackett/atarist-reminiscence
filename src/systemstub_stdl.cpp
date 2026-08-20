@@ -48,6 +48,8 @@ struct SystemStub_STDL : SystemStub {
 	// per hardware slot, a cutscene logical entry mapping to it
 	// (for the shadow-effect hw->hw lookup)
 	uint8_t _cutsceneRep[16];
+	bool _palLocked;        // fixed cutscene mapping, see video_st.h
+	void quantiseClusters(uint16_t *col, uint16_t *cnt, int n, uint8_t *alias, uint8_t *slotOf);
 	bool _hwDirty;          // hardware registers need reprogramming
 	int _fade;              // 256 = full brightness (uniform scale)
 	int _srcW, _srcH;
@@ -187,6 +189,7 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 
 void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int widescreenMode, bool maximized, const ScalerParameters *scalerParameters, int outputRate) {
 	memset(&_pi, 0, sizeof(_pi));
+	_palLocked = false;
 	_remapStale = true;
 	_upDirMask = 0;
 	_upEnter = _upSpace = _upShift = false;
@@ -333,12 +336,365 @@ static inline int colDist(const Color &a, const Color &b) {
 	return dr + 2 * dg + db;
 }
 
+// Merge n distinct 4-bit colours down to 16 clusters and give each
+// surviving cluster a hardware slot, preferring the slot whose current
+// colour is nearest: planar pages bake slots into pixels, so content
+// that outlives a palette change only stays correct if unchanged
+// colours keep their slots. Fills alias[] (cluster union-find) and
+// slotOf[] (cluster -> slot), and updates _hwPal.
+void SystemStub_STDL::quantiseClusters(uint16_t *col, uint16_t *cnt, int n, uint8_t *alias, uint8_t *slotOf) {
+	// greedy merge to 16 clusters
+	for (int i = 0; i < n; ++i) {
+		alias[i] = i;
+	}
+	int live = n;
+	while (live > 16) {
+		int bi = -1, bj = -1;
+		long best = 0x7FFFFFFF;
+		for (int i = 0; i < n; ++i) {
+			if (alias[i] != i) {
+				continue;
+			}
+			const int r1 = (col[i] >> 8) & 15, g1 = (col[i] >> 4) & 15, b1 = col[i] & 15;
+			for (int j = i + 1; j < n; ++j) {
+				if (alias[j] != j) {
+					continue;
+				}
+				int dr = r1 - ((col[j] >> 8) & 15); if (dr < 0) dr = -dr;
+				int dg = g1 - ((col[j] >> 4) & 15); if (dg < 0) dg = -dg;
+				int db = b1 - (col[j] & 15); if (db < 0) db = -db;
+				// weight by the smaller usage count so rare
+				// colours give way to common ones (16-bit multiply:
+				// a mulu.w, not a __mulsi3 library call)
+				const uint16_t w = (uint16_t)(1 + MIN(MIN(cnt[i], cnt[j]), (uint16_t)63));
+				const long d = (long)((uint16_t)(dr + 2 * dg + db) * w);
+				if (d < best) {
+					best = d;
+					bi = i;
+					bj = j;
+				}
+			}
+		}
+		// merge bj into bi, weighted average
+		const long w1 = cnt[bi], w2 = cnt[bj];
+		const int r = (((col[bi] >> 8) & 15) * w1 + ((col[bj] >> 8) & 15) * w2) / (w1 + w2);
+		const int g = (((col[bi] >> 4) & 15) * w1 + ((col[bj] >> 4) & 15) * w2) / (w1 + w2);
+		const int b = ((col[bi] & 15) * w1 + (col[bj] & 15) * w2) / (w1 + w2);
+		col[bi] = (r << 8) | (g << 4) | b;
+		cnt[bi] += cnt[bj];
+		alias[bj] = bi;
+		--live;
+	}
+
+	// Assign hardware slots stickily: match each cluster to the slot
+	// whose previous colour is nearest. Planar layers bake the remap
+	// into their pixels at draw time, so content that survives a
+	// palette change keeps its colours only if unchanged colours
+	// keep their slots.
+	int clusters[16];
+	int nc = 0;
+	for (int i = 0; i < n; ++i) {
+		if (alias[i] == i) {
+			clusters[nc++] = i;
+		}
+	}
+	bool slotUsed[16];
+	bool clusterDone[16];
+	memset(slotUsed, 0, sizeof(slotUsed));
+	memset(clusterDone, 0, sizeof(clusterDone));
+	Color newHw[16];
+	memset(newHw, 0, sizeof(newHw));
+	for (int pass = 0; pass < nc; ++pass) {
+		long best = 0x7FFFFFFF;
+		int bc = -1, bs = -1;
+		for (int c = 0; c < nc; ++c) {
+			if (clusterDone[c]) {
+				continue;
+			}
+			const int i = clusters[c];
+			const int r1 = (col[i] >> 8) & 15, g1 = (col[i] >> 4) & 15, b1 = col[i] & 15;
+			for (int s = 0; s < 16; ++s) {
+				if (slotUsed[s]) {
+					continue;
+				}
+				int dr = r1 - (_hwPal[s].r >> 4); if (dr < 0) dr = -dr;
+				int dg = g1 - (_hwPal[s].g >> 4); if (dg < 0) dg = -dg;
+				int db = b1 - (_hwPal[s].b >> 4); if (db < 0) db = -db;
+				const long d = dr + 2 * dg + db;
+				if (d < best) {
+					best = d;
+					bc = c;
+					bs = s;
+				}
+			}
+		}
+		const int i = clusters[bc];
+		slotOf[i] = bs;
+		const uint8_t r = (col[i] >> 8) & 15, g = (col[i] >> 4) & 15, b = col[i] & 15;
+		newHw[bs].r = (r << 4) | r;
+		newHw[bs].g = (g << 4) | g;
+		newHw[bs].b = (b << 4) | b;
+		slotUsed[bs] = true;
+		clusterDone[bc] = true;
+	}
+	// unused slots keep their previous colours so stale pixels at
+	// least stay stable
+	for (int s = 0; s < 16; ++s) {
+		if (!slotUsed[s]) {
+			newHw[s] = _hwPal[s];
+		}
+	}
+	memcpy(_hwPal, newHw, sizeof(_hwPal));
+}
+
+// --- cutscene palette collection and locking -------------------
+//
+// The 32 cutscene entries change colour over the scene (fades, and
+// new palettes at scene-part boundaries), so the mapping is decided
+// per ENTRY INDEX rather than per colour: each entry is represented
+// by the brightest colour it is ever given (fades are scalings of
+// that), those are merged to 16 clusters, and each entry keeps its
+// slot for the whole scene.
+
+// Scenes are made of parts separated by a full screen clear, and a
+// part reuses the same 32 entries for very different colours, so the
+// collection is bucketed by part and the mapping is re-locked as each
+// part starts - when the page has just been cleared and nothing on it
+// depends on the old mapping.
+//
+// Two entries may share a hardware slot only if they are similar in
+// EVERY palette the part loads: the logo's camera and its caption
+// both ramp through greys as the scene fades up, but they are never
+// the same grey at the same moment, so they need separate slots.
+// Clustering therefore runs on worst-case distance between entries
+// (complete linkage) over the part's palettes, not on one snapshot.
+enum { kCutParts = 16, kCutEntries = 32 };
+
+// Per part: the worst-case distance seen between every pair of
+// entries, accumulated over every palette the part loads, plus each
+// entry's brightest colour (used only to choose which slot a cluster
+// lands in). Two entries may share a slot only if they never differ.
+static uint8_t g_partDist[kCutParts][kCutEntries][kCutEntries];
+static uint16_t g_partRep[kCutParts][kCutEntries];
+static bool g_partUsed[kCutParts];
+static int g_collectPart;
+
+static inline uint16_t pack4(const Color &c) {
+	return (uint16_t)(((c.r >> 4) << 8) | ((c.g >> 4) << 4) | (c.b >> 4));
+}
+
+static inline int dist4(uint16_t a, uint16_t b) {
+	int dr = ((a >> 8) & 15) - ((b >> 8) & 15); if (dr < 0) dr = -dr;
+	int dg = ((a >> 4) & 15) - ((b >> 4) & 15); if (dg < 0) dg = -dg;
+	int db = (a & 15) - (b & 15); if (db < 0) db = -db;
+	return dr + 2 * dg + db;
+}
+
+void ST_cutscenePalReset() {
+	memset(g_partUsed, 0, sizeof(g_partUsed));
+	g_collectPart = 0;
+}
+
+void ST_cutscenePalPart(int part) {
+	g_collectPart = (part < kCutParts) ? part : (kCutParts - 1);
+}
+
+void ST_cutscenePalCollect(const Color *entries, int n) {
+	if (n > 32) {
+		n = 32;
+	}
+	const int part = g_collectPart;
+	uint16_t packed[kCutEntries];
+	memset(packed, 0, sizeof(packed));
+	for (int i = 0; i < n; ++i) {
+		packed[i] = pack4(entries[i]);
+	}
+	if (!g_partUsed[part]) {
+		g_partUsed[part] = true;
+		memset(g_partDist[part], 0, sizeof(g_partDist[part]));
+		memset(g_partRep[part], 0, sizeof(g_partRep[part]));
+	}
+	uint8_t (*dm)[kCutEntries] = g_partDist[part];
+	uint16_t *rep = g_partRep[part];
+	for (int i = 0; i < kCutEntries; ++i) {
+		if (dist4(packed[i], 0) > dist4(rep[i], 0)) {
+			rep[i] = packed[i];
+		}
+		for (int j = i + 1; j < kCutEntries; ++j) {
+			int d = dist4(packed[i], packed[j]);
+			if (d > 255) {
+				d = 255;
+			}
+			if (d > dm[i][j]) {
+				dm[i][j] = dm[j][i] = (uint8_t)d;
+			}
+		}
+	}
+}
+
+void ST_cutscenePalLock(int part) {
+	if (part >= kCutParts) {
+		part = kCutParts - 1;
+	}
+	if (part < 0 || !g_partUsed[part]) {
+		return;             // no palette of its own: keep the current
+	}
+	SystemStub_STDL *stub = g_stub;
+	const uint16_t *rep = g_partRep[part];
+	static uint8_t dm[kCutEntries][kCutEntries];
+	memcpy(dm, g_partDist[part], sizeof(dm));
+
+	uint8_t alias[kCutEntries];
+	for (int i = 0; i < kCutEntries; ++i) {
+		alias[i] = (uint8_t)i;
+	}
+	int live = kCutEntries;
+	while (live > 16) {
+		int bi = -1, bj = -1, best = 0x7FFF;
+		for (int i = 0; i < kCutEntries; ++i) {
+			if (alias[i] != i) {
+				continue;
+			}
+			for (int j = i + 1; j < kCutEntries; ++j) {
+				if (alias[j] != j) {
+					continue;
+				}
+				if (dm[i][j] < best) {
+					best = dm[i][j];
+					bi = i;
+					bj = j;
+				}
+			}
+		}
+		if (bi < 0) {
+			break;
+		}
+		for (int k = 0; k < kCutEntries; ++k) {
+			if (dm[bj][k] > dm[bi][k]) {
+				dm[bi][k] = dm[k][bi] = dm[bj][k];
+			}
+		}
+		alias[bj] = (uint8_t)bi;
+		--live;
+	}
+
+	// give each surviving cluster the free slot whose current colour
+	// is nearest, so slots stay put across re-locks where they can
+	int clusters[16];
+	int nc = 0;
+	for (int i = 0; i < kCutEntries && nc < 16; ++i) {
+		if (alias[i] == i) {
+			clusters[nc++] = i;
+		}
+	}
+	bool slotUsed[16], clusterDone[16];
+	memset(slotUsed, 0, sizeof(slotUsed));
+	memset(clusterDone, 0, sizeof(clusterDone));
+	uint8_t slotOfCluster[16];
+	for (int pass = 0; pass < nc; ++pass) {
+		int best = 0x7FFF, bc = -1, bs = -1;
+		for (int c = 0; c < nc; ++c) {
+			if (clusterDone[c]) {
+				continue;
+			}
+			const uint16_t rc = rep[clusters[c]];
+			for (int sl = 0; sl < 16; ++sl) {
+				if (slotUsed[sl]) {
+					continue;
+				}
+				const int d = dist4(rc, pack4(stub->_hwPal[sl]));
+				if (d < best) {
+					best = d;
+					bc = c;
+					bs = sl;
+				}
+			}
+		}
+		if (bc < 0) {
+			break;
+		}
+		slotOfCluster[bc] = (uint8_t)bs;
+		slotUsed[bs] = true;
+		clusterDone[bc] = true;
+	}
+
+	bool repSet[16];
+	uint16_t slotColour[16];
+	memset(repSet, 0, sizeof(repSet));
+	memset(slotColour, 0, sizeof(slotColour));
+	for (int i = 0; i < kCutEntries; ++i) {
+		int r = i;
+		while (alias[r] != r) {
+			r = alias[r];
+		}
+		int c = 0;
+		while (c < nc && clusters[c] != r) {
+			++c;
+		}
+		if (c == nc) {
+			continue;
+		}
+		const uint8_t slot = slotOfCluster[c];
+		stub->_remap[0xC0 + i] = slot;
+		// the slot shows its representative entry's LIVE colour, so
+		// fades and colour cycling need no re-quantisation at all
+		if (!repSet[slot]) {
+			stub->_cutsceneRep[slot] = (uint8_t)(0xC0 + i);
+			slotColour[slot] = rep[i];
+			repSet[slot] = true;
+		}
+	}
+	for (int sl = 0; sl < 16; ++sl) {
+		if (!repSet[sl]) {
+			stub->_cutsceneRep[sl] = 0xC0;
+		}
+	}
+	// Captions draw with the text/menu entries, which the scene never
+	// sets. They stay out of the clustering - 16 static colours would
+	// take every slot from the art - and take the nearest slot the
+	// scene's own palette provides.
+	for (int i = 0; i < 16; ++i) {
+		const uint16_t want = pack4(stub->_pal[0xE0 + i]);
+		int best = 0x7FFF, bs = 0;
+		for (int sl = 0; sl < 16; ++sl) {
+			const int d = dist4(want, slotColour[sl]);
+			if (d < best) {
+				best = d;
+				bs = sl;
+			}
+		}
+		stub->_remap[0xE0 + i] = (uint8_t)bs;
+	}
+	stub->_palLocked = true;
+	stub->_remapStale = false;
+	stub->_palDirty = true;
+}
+
+void ST_cutscenePalUnlock() {
+	g_stub->_palLocked = false;
+	g_stub->_remapStale = true;
+	g_stub->_palDirty = true;
+}
+
 // Quantise the 256-entry logical palette to 16 hardware colours.
 // Colours are reduced to STE 4-bit per channel first (the hardware
 // cannot do better), deduplicated, then greedily merged by nearest
 // pair until 16 remain.
 void SystemStub_STDL::buildRemap() {
 	_palDirty = false;
+
+	// Locked cutscene mapping: the logical->slot assignment is fixed
+	// for the scene, so a palette change is just a refresh of the 16
+	// registers from each slot's representative entry. Fades cost
+	// nothing and drawn pixels never need re-baking.
+	if (_palLocked) {
+		for (int s = 0; s < 16; ++s) {
+			_hwPal[s] = _pal[_cutsceneRep[s]];
+		}
+		_fade = 256;
+		_hwDirty = true;
+		return;
+	}
 
 	// Estimate the overall brightness scale against the palette the
 	// mapping was last built for: fades ramp every entry by the same
@@ -446,110 +802,9 @@ void SystemStub_STDL::buildRemap() {
 		entryCluster[i] = j;
 	}
 
-	// greedy merge to 16 clusters
 	uint8_t alias[256];
-	for (int i = 0; i < n; ++i) {
-		alias[i] = i;
-	}
-	int live = n;
-	while (live > 16) {
-		int bi = -1, bj = -1;
-		long best = 0x7FFFFFFF;
-		for (int i = 0; i < n; ++i) {
-			if (alias[i] != i) {
-				continue;
-			}
-			const int r1 = (col[i] >> 8) & 15, g1 = (col[i] >> 4) & 15, b1 = col[i] & 15;
-			for (int j = i + 1; j < n; ++j) {
-				if (alias[j] != j) {
-					continue;
-				}
-				int dr = r1 - ((col[j] >> 8) & 15); if (dr < 0) dr = -dr;
-				int dg = g1 - ((col[j] >> 4) & 15); if (dg < 0) dg = -dg;
-				int db = b1 - (col[j] & 15); if (db < 0) db = -db;
-				// weight by the smaller usage count so rare
-				// colours give way to common ones (16-bit multiply:
-				// a mulu.w, not a __mulsi3 library call)
-				const uint16_t w = (uint16_t)(1 + MIN(MIN(cnt[i], cnt[j]), (uint16_t)63));
-				const long d = (long)((uint16_t)(dr + 2 * dg + db) * w);
-				if (d < best) {
-					best = d;
-					bi = i;
-					bj = j;
-				}
-			}
-		}
-		// merge bj into bi, weighted average
-		const long w1 = cnt[bi], w2 = cnt[bj];
-		const int r = (((col[bi] >> 8) & 15) * w1 + ((col[bj] >> 8) & 15) * w2) / (w1 + w2);
-		const int g = (((col[bi] >> 4) & 15) * w1 + ((col[bj] >> 4) & 15) * w2) / (w1 + w2);
-		const int b = ((col[bi] & 15) * w1 + (col[bj] & 15) * w2) / (w1 + w2);
-		col[bi] = (r << 8) | (g << 4) | b;
-		cnt[bi] += cnt[bj];
-		alias[bj] = bi;
-		--live;
-	}
-
-	// Assign hardware slots stickily: match each cluster to the slot
-	// whose previous colour is nearest. Planar layers bake the remap
-	// into their pixels at draw time, so content that survives a
-	// palette change keeps its colours only if unchanged colours
-	// keep their slots.
 	uint8_t slotOf[256];
-	int clusters[16];
-	int nc = 0;
-	for (int i = 0; i < n; ++i) {
-		if (alias[i] == i) {
-			clusters[nc++] = i;
-		}
-	}
-	bool slotUsed[16];
-	bool clusterDone[16];
-	memset(slotUsed, 0, sizeof(slotUsed));
-	memset(clusterDone, 0, sizeof(clusterDone));
-	Color newHw[16];
-	memset(newHw, 0, sizeof(newHw));
-	for (int pass = 0; pass < nc; ++pass) {
-		long best = 0x7FFFFFFF;
-		int bc = -1, bs = -1;
-		for (int c = 0; c < nc; ++c) {
-			if (clusterDone[c]) {
-				continue;
-			}
-			const int i = clusters[c];
-			const int r1 = (col[i] >> 8) & 15, g1 = (col[i] >> 4) & 15, b1 = col[i] & 15;
-			for (int s = 0; s < 16; ++s) {
-				if (slotUsed[s]) {
-					continue;
-				}
-				int dr = r1 - (_hwPal[s].r >> 4); if (dr < 0) dr = -dr;
-				int dg = g1 - (_hwPal[s].g >> 4); if (dg < 0) dg = -dg;
-				int db = b1 - (_hwPal[s].b >> 4); if (db < 0) db = -db;
-				const long d = dr + 2 * dg + db;
-				if (d < best) {
-					best = d;
-					bc = c;
-					bs = s;
-				}
-			}
-		}
-		const int i = clusters[bc];
-		slotOf[i] = bs;
-		const uint8_t r = (col[i] >> 8) & 15, g = (col[i] >> 4) & 15, b = col[i] & 15;
-		newHw[bs].r = (r << 4) | r;
-		newHw[bs].g = (g << 4) | g;
-		newHw[bs].b = (b << 4) | b;
-		slotUsed[bs] = true;
-		clusterDone[bc] = true;
-	}
-	// unused slots keep their previous colours so stale pixels at
-	// least stay stable
-	for (int s = 0; s < 16; ++s) {
-		if (!slotUsed[s]) {
-			newHw[s] = _hwPal[s];
-		}
-	}
-	memcpy(_hwPal, newHw, sizeof(_hwPal));
+	quantiseClusters(col, cnt, n, alias, slotOf);
 	uint8_t newRemap[256];
 	memset(_cutsceneRep, 0xC0, sizeof(_cutsceneRep));
 	bool repSet[16];
@@ -565,7 +820,7 @@ void SystemStub_STDL::buildRemap() {
 			long best = 0x7FFFFFFF;
 			int bs = 0;
 			for (int s = 0; s < 16; ++s) {
-				const long d = colDist(_pal[i], newHw[s]);
+				const long d = colDist(_pal[i], _hwPal[s]);
 				if (d < best) {
 					best = d;
 					bs = s;
@@ -732,6 +987,9 @@ void SystemStub_STDL::processEvents() {
 			const bool down = (ev.type == STDL_KEYDOWN);
 			const uint16_t sym = ev.key.keysym.sym;
 			const uint16_t mod = ev.key.keysym.mod;
+			if (down) {
+				_pi.anyKey = true;
+			}
 			switch (sym) {
 			case STDLK_UP:
 				if (down) { _pi.dirMask |= PlayerInput::DIR_UP; _upDirMask &= ~PlayerInput::DIR_UP; } else _upDirMask |= PlayerInput::DIR_UP;

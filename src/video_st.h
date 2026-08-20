@@ -52,6 +52,18 @@ STDL_Surface *ST_layerSurfaceBare(uint8_t *layer);
 void ST_setCutscenePalMode(bool enable);
 bool ST_cutscenePalMode();
 
+// Cutscene palette locking. A scene's script is walked once before
+// it plays (see Cutscene::play) to collect every palette it loads;
+// the 32 cutscene entries are then mapped to the 16 hardware slots
+// once and that mapping is held for the whole scene. Planar pages
+// can then bake slots at draw time, and palette changes - including
+// fades - become writes to the 16 hardware registers.
+void ST_cutscenePalReset();
+void ST_cutscenePalPart(int part);
+void ST_cutscenePalCollect(const Color *entries, int n);
+void ST_cutscenePalLock(int part);
+void ST_cutscenePalUnlock();
+
 // hardware-space translation table for the cutscene shadow effect
 // (chunky semantics: pixel |= colour8 & 0xF8)
 void ST_getOrMap(uint8_t colour8, uint8_t *orMap);

@@ -30,6 +30,7 @@ struct PlayerInput {
 	bool shift;
 	bool backspace;
 	bool escape;
+	bool anyKey;    // any key pressed since last cleared (cutscene skip)
 
 	char lastChar;
 
