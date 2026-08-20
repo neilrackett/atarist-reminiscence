@@ -34,7 +34,6 @@ Cutscene::Cutscene(Resource *res, SystemStub *stub, Video *vid)
 	memset(_palBuf, 0, sizeof(_palBuf));
 	_paletteNum = -1;
 	_isConcavePolygonShape = false;
-	_stClearPending = false;
 	_stPrescan = false;
 	_stPrescanOps = 0;
 	_stPart = 0;
@@ -94,7 +93,6 @@ void Cutscene::updateScreen() {
 	}
 	sync(_frameDelay - 1);
 	updatePalette();
-	stFlushBackPage();
 	SWAP(_frontPage, _backPage);
 #ifdef ATARIST
 	_stub->copyRectPlanar(0, 0, _vid->_w, _vid->_h, _frontPage);
@@ -223,29 +221,22 @@ void Cutscene::clearBackPage() {
 		return;
 	}
 	if (_clearScreen == 0) {
-		_stClearPending = false;
 		memcpy(_backPage, _auxPage, _vid->_layerSize);
 	} else {
 #ifdef ATARIST
-		// defer: the scene's op_setPalette may not have run yet, and
-		// planar clears bake the current colour remap into the page
-		_stClearPending = true;
+		ST_clearLayer(_backPage, 0xC0);
 #else
 		memset(_backPage, 0xC0, _vid->_layerSize);
 #endif
 	}
 }
 
-void Cutscene::stFlushBackPage() {
-#ifdef ATARIST
-	if (_stClearPending) {
-		_stClearPending = false;
-		ST_clearLayer(_backPage, 0xC0);
-	}
-#endif
-}
-
 void Cutscene::drawCreditsText() {
+	if (_stPrescan) {
+		// advances _textCurPtr/_textCurBuf, which playCredits sets up
+		// once for the whole sequence
+		return;
+	}
 	if (_creditsKeepText) {
 		if (_creditsSlowText) {
 			return;
@@ -308,7 +299,6 @@ void Cutscene::drawCreditsText() {
 	} else {
 		_creditsTextCounter -= 10;
 	}
-	stFlushBackPage();
 	drawText((_creditsTextPosX - 1) * 8, _creditsTextPosY * 8, _textBuf, 0xEF, _backPage, kTextJustifyLeft);
 }
 
@@ -396,7 +386,6 @@ void Cutscene::op_waitForSync() {
 				_creditsTextCounter = _res->isDOS() ? 20 : 60;
 			}
 			if (!_stPrescan) {
-				_stClearPending = false;
 				memcpy(_backPage, _frontPage, _vid->_layerSize);
 			}
 			drawCreditsText();
@@ -419,7 +408,6 @@ void Cutscene::drawShape(const uint8_t *data, int16_t x, int16_t y) {
 	if (_stPrescan) {
 		return;
 	}
-	stFlushBackPage();
 	_gfx.setLayer(_backPage, _vid->_w);
 	uint8_t numVertices = *data++;
 	if (numVertices & 0x80) {
@@ -505,7 +493,6 @@ void Cutscene::op_drawShape() {
 		drawShape(primitiveVertices, x + dx, y + dy);
 	}
 	if (_clearScreen != 0 && !_stPrescan) {
-		stFlushBackPage();
 		memcpy(_auxPage, _backPage, _vid->_layerSize);
 	}
 }
@@ -553,7 +540,6 @@ void Cutscene::op_drawCaptionText() {
 
 		if (!_stPrescan) {
 #ifdef ATARIST
-			stFlushBackPage();
 			ST_fillRect(_auxPage, 0, y, Video::GAMESCREEN_W, h, 0xC0);
 			ST_fillRect(_backPage, 0, y, Video::GAMESCREEN_W, h, 0xC0);
 			ST_fillRect(_frontPage, 0, y, Video::GAMESCREEN_W, h, 0xC0);
@@ -600,7 +586,6 @@ void Cutscene::drawShapeScale(const uint8_t *data, int16_t zoom, int16_t b, int1
 	if (_stPrescan) {
 		return;
 	}
-	stFlushBackPage();
 	_gfx.setLayer(_backPage, _vid->_w);
 	uint8_t numVertices = *data++;
 	if (numVertices & 0x80) {
@@ -791,7 +776,6 @@ void Cutscene::drawShapeScaleRotate(const uint8_t *data, int16_t zoom, int16_t b
 	if (_stPrescan) {
 		return;
 	}
-	stFlushBackPage();
 	_gfx.setLayer(_backPage, _vid->_w);
 	uint8_t numVertices = *data++;
 	if (numVertices & 0x80) {
@@ -1065,7 +1049,6 @@ void Cutscene::op_copyScreen() {
 		++_creditsTextCounter;
 	}
 	if (!_stPrescan) {
-		_stClearPending = false;
 		memcpy(_backPage, _frontPage, _vid->_layerSize);
 	}
 	_frameDelay = 10;
@@ -1084,7 +1067,6 @@ void Cutscene::op_copyScreen() {
 			paletteLut[k] = 0xC0 + index;
 		}
 
-		stFlushBackPage();
 	_gfx.setLayer(_backPage, _vid->_w);
 		drawSetShape(_memoSetShape2Data, 0, (int16_t)memoSetPos[_memoSetOffset + 1], (int16_t)memoSetPos[_memoSetOffset + 2], paletteLut);
 		_memoSetOffset += 3;
@@ -1111,14 +1093,12 @@ void Cutscene::op_drawTextAtPos() {
 			const uint8_t *str = _res->getCineString(strId & 0xFFF);
 			if (str) {
 				const uint8_t color = 0xD0 + (strId >> 0xC);
-				stFlushBackPage();
 				drawText(x, y, str, color, _backPage, kTextJustifyCenter);
 			}
 			// 'voyage' - cutscene script redraws the string to refresh the screen
 			if (_id == kCineVoyage && (strId & 0xFFF) == 0x45) {
 				if ((_cmdPtr - _cmdStartPtr) == 0xA) {
 					#ifdef ATARIST
-		stFlushBackPage();
 		_stub->copyRectPlanar(0, 0, _vid->_w, _vid->_h, _backPage);
 #else
 		_stub->copyRect(0, 0, _vid->_w, _vid->_h, _backPage, _vid->_w);
@@ -1197,6 +1177,23 @@ void Cutscene::stPrescanPalette(uint16_t num) {
 	// 32->16 mapping from that, and hold it for the whole scene:
 	// palette changes then only rewrite the 16 hardware registers,
 	// which is what the Amiga original did and costs nothing.
+	// The pass runs the real interpreter, so everything it would
+	// carry into the played pass is put back: mainLoop() re-inits the
+	// command pointer and _paletteNum, but not the palette buffer,
+	// not the clear mode (which picks the shape colour bank) and not
+	// the credits text cursor.
+	uint8_t savedPalBuf[sizeof(_palBuf)];
+	memcpy(savedPalBuf, _palBuf, sizeof(_palBuf));
+	const uint8_t savedClearScreen = _clearScreen;
+	const bool savedNewPal = _newPal;
+	const bool savedSlowText = _creditsSlowText;
+	const bool savedKeepText = _creditsKeepText;
+	const uint8_t *savedTextPtr = _textCurPtr;
+	uint8_t *savedTextBuf = _textCurBuf;
+	const int16_t savedTextCounter = _creditsTextCounter;
+	const int savedTextIndex = _creditsTextIndex;
+	const int savedTextLen = _creditsTextLen;
+
 	ST_cutscenePalReset();
 	_stPrescan = true;
 	_stPrescanOps = 0;
@@ -1204,6 +1201,17 @@ void Cutscene::stPrescanPalette(uint16_t num) {
 	ST_cutscenePalPart(0);
 	mainLoop(num);
 	_stPrescan = false;
+
+	memcpy(_palBuf, savedPalBuf, sizeof(_palBuf));
+	_clearScreen = savedClearScreen;
+	_newPal = savedNewPal;
+	_creditsSlowText = savedSlowText;
+	_creditsKeepText = savedKeepText;
+	_textCurPtr = savedTextPtr;
+	_textCurBuf = savedTextBuf;
+	_creditsTextCounter = savedTextCounter;
+	_creditsTextIndex = savedTextIndex;
+	_creditsTextLen = savedTextLen;
 	_interrupted = false;
 	_stop = false;
 	_stPart = 0;
@@ -1254,7 +1262,9 @@ void Cutscene::mainLoop(uint16_t num) {
 	while (!_stub->_pi.quit && !_interrupted && !_stop) {
 		if (_stPrescan && ++_stPrescanOps > 20000) {
 			// scripts can sit in a jump loop waiting for input, which
-			// never arrives with drawing disabled
+			// never arrives with drawing disabled; parts past here get
+			// no palette of their own
+			warning("Cutscene %d prescan hit the opcode cap", _id);
 			break;
 		}
 		uint8_t op = fetchNextCmdByte();
@@ -1439,7 +1449,6 @@ void Cutscene::playText(const char *str) {
 #endif
 	drawText(0, y, (const uint8_t *)str, 0xC1, _backPage, kTextJustifyAlign);
 	#ifdef ATARIST
-		stFlushBackPage();
 		_stub->copyRectPlanar(0, 0, _vid->_w, _vid->_h, _backPage);
 #else
 		_stub->copyRect(0, 0, _vid->_w, _vid->_h, _backPage, _vid->_w);
@@ -1617,7 +1626,6 @@ void Cutscene::playSet(const uint8_t *p, int offset) {
 	}
 
 	prepare();
-	stFlushBackPage();
 	_gfx.setLayer(_backPage, _vid->_w);
 
 	offset = 10;
@@ -1677,7 +1685,6 @@ void Cutscene::playSet(const uint8_t *p, int offset) {
 		}
 
 		#ifdef ATARIST
-		stFlushBackPage();
 		_stub->copyRectPlanar(0, 0, _vid->_w, _vid->_h, _backPage);
 #else
 		_stub->copyRect(0, 0, _vid->_w, _vid->_h, _backPage, _vid->_w);

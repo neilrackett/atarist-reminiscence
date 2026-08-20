@@ -87,9 +87,19 @@ static void ST_splash(Game *g) {
 		// visibly lost
 		ST_drawSprite(g->_vid._frontLayer, buf, 8, x, 104, 8, 16, map16, 0, false);
 	}
-	// bottom-centred: between the squash-dropped lines 206 and 215,
-	// or flush with the crop window's last visible row (211)
-	const int urlY = g_options.crop_screen ? 203 : 207;
+	// bottom-centred, on the lowest 8-row band that is fully visible
+	// under whichever 224->200 mapping is in force
+	int urlY = 207;
+	while (urlY > 160) {
+		int line = 0;
+		while (line < 8 && ST_rowVisible(urlY + line)) {
+			++line;
+		}
+		if (line == 8) {
+			break;
+		}
+		--urlY;
+	}
 	g->_vid.drawString(kLine2, (Video::GAMESCREEN_W - (int)strlen(kLine2) * Video::CHAR_W) / 2, urlY, 2);
 	g->_vid.fullRefresh();
 	g->_vid.updateScreen();

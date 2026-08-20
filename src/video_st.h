@@ -76,6 +76,11 @@ inline void ST_buildMap16(uint8_t colMask, uint8_t *map16) {
 	}
 }
 
+// Is source row y actually displayed? The 224->200 mapping (squash
+// drop list, or the crop window) lives in the stub; callers placing
+// content by hand must ask instead of reproducing the arithmetic.
+bool ST_rowVisible(int y);
+
 // full chunky (256-wide, 8bpp) to planar conversion - load time only
 void ST_convertChunky(uint8_t *layer, const uint8_t *src, int h);
 

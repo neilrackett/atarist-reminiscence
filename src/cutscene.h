@@ -74,8 +74,6 @@ struct Cutscene {
 	uint16_t _id;
 	uint16_t _deathCutsceneId;
 	bool _interrupted;
-	bool _stClearPending;
-	void stFlushBackPage();
 	// ST: the script is walked once with drawing disabled to learn
 	// which palettes the scene uses, so the 32->16 colour mapping is
 	// fixed before the first pixel is baked (see stPrescanPalette)

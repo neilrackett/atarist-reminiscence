@@ -127,7 +127,19 @@ uint16_t Game::col_getGridPos(LivePGE *pge, int16_t dx) const {
 	}
 
 	x = (x + 8) >> 4;
-	y = (y - 8) / 72;
+	// (y - 8) / 72 is a library call on 68000; the result only ever
+	// picks one of three rows, and C truncates toward zero, so
+	// -71..71 all land on row 0 exactly as the divide did
+	const int16_t t = y - 8;
+	if (t >= 144) {
+		y = (t >= 216) ? 3 : 2;
+	} else if (t >= 72) {
+		y = 1;
+	} else if (t > -72) {
+		y = 0;
+	} else {
+		y = -1;
+	}
 	if (x < 0 || x > 15 || y < 0 || y > 2) {
 		return 0xFFFF;
 	} else {

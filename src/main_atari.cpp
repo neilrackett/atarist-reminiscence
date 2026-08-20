@@ -75,6 +75,7 @@ static void initOptions() {
 	g_options.bypass_protection = true;
 	g_options.enable_password_menu = false;
 	g_options.enable_language_selection = false;
+	g_options.use_tile_data = false;
 	// palette fades are free on ST hardware: SystemStub::fadeScreen
 	// scales the 16 palette registers instead of re-blitting 17 times
 	g_options.fade_out_palette = false;
@@ -100,6 +101,12 @@ static void initOptions() {
 	} opts[] = {
 		{ "bypass_protection", &g_options.bypass_protection },
 		{ "enable_password_menu", &g_options.enable_password_menu },
+		{ "enable_language_selection", &g_options.enable_language_selection },
+		{ "use_tile_data", &g_options.use_tile_data },
+		{ "use_seq_cutscenes", &g_options.use_seq_cutscenes },
+		{ "use_words_protection", &g_options.use_words_protection },
+		{ "use_prf_music", &g_options.use_prf_music },
+		{ "play_gamesaved_sound", &g_options.play_gamesaved_sound },
 		{ "fade_out_palette", &g_options.fade_out_palette },
 		{ "use_text_cutscenes", &g_options.use_text_cutscenes },
 		{ "use_white_tshirt", &g_options.use_white_tshirt },

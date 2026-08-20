@@ -96,6 +96,7 @@ struct SystemStub_STDL : SystemStub {
 	virtual void unlockAudio() {}
 
 	void buildRemap();
+	void fadedColours(STDL_Colour *c);
 	void writeHwPalette();
 	void convertRegion(int x, int y, int w, int h, const uint8_t *buf, int pitch, bool useShadow);
 	void reconvertFromShadow();
@@ -308,6 +309,13 @@ void ST_setCutscenePalMode(bool enable) {
 	}
 }
 
+bool ST_rowVisible(int y) {
+	if (y < 0 || y >= kMaxSrcH) {
+		return false;
+	}
+	return g_stub->_yDrop[y] == 0;
+}
+
 bool ST_cutscenePalMode() {
 	return g_cutscenePal;
 }
@@ -324,6 +332,14 @@ void ST_getOrMap(uint8_t colour8, uint8_t *orMap) {
 		const uint8_t L = g_stub->_cutsceneRep[s];
 		orMap[s] = g_stub->_remap[L | (colour8 & 0xF8)];
 	}
+}
+
+// Which logical entries the current mode quantises: the cutscene
+// banks 0xC0-0xEF in cutscene mode, everything but 0xC0-0xDF in game
+// mode (a finished cutscene's colours must not crowd out the game's).
+static inline bool excludedEntry(int i) {
+	const bool cutEntry = (i >= 0xC0 && i < 0xF0);
+	return g_cutscenePal ? !cutEntry : (i >= 0xC0 && i < 0xE0);
 }
 
 // Manhattan colour distance (green-weighted): the quantiser runs on
@@ -537,7 +553,13 @@ void ST_cutscenePalLock(int part) {
 		part = kCutParts - 1;
 	}
 	if (part < 0 || !g_partUsed[part]) {
-		return;             // no palette of its own: keep the current
+		// A part the prescan never reached plays under the previous
+		// part's 16 colours, which looks exactly like a quantiser
+		// fault, so say so rather than degrade silently.
+		if (part > 0) {
+			warning("Cutscene part %d has no collected palette", part);
+		}
+		return;
 	}
 	SystemStub_STDL *stub = g_stub;
 	const uint16_t *rep = g_partRep[part];
@@ -703,8 +725,7 @@ void SystemStub_STDL::buildRemap() {
 	// same path with the registers clamping per channel).
 	int num = 0, den = 0;
 	for (int i = 0; i < 256; ++i) {
-		const bool cutEntry = (i >= 0xC0 && i < 0xF0);
-		if (g_cutscenePal ? !cutEntry : (i >= 0xC0 && i < 0xE0)) {
+		if (excludedEntry(i)) {
 			continue;
 		}
 		const int bsum = _basePal[i].r + _basePal[i].g + _basePal[i].b;
@@ -723,16 +744,25 @@ void SystemStub_STDL::buildRemap() {
 	// at their nearest current hardware colour. A real scene change
 	// replaces most of the palette and still rebuilds below.
 	if (!_remapStale && den > 0) {
+		// Scale each base channel by num/den through a table: inline
+		// that is three multiplies and three DIVIDES per entry, all
+		// library calls on 68000 - about 1350 of them per palette
+		// change, just to decide whether anything moved.
+		const int fade = num * 256 / den;
+		uint8_t scaled[256];
+		for (int v = 0; v < 256; ++v) {
+			const int t = v * fade >> 8;
+			scaled[v] = (uint8_t)(t > 255 ? 255 : t);
+		}
 		uint8_t changed[16];
 		int nchg = 0;
 		for (int i = 0; i < 256; ++i) {
-			const bool cutEntry = (i >= 0xC0 && i < 0xF0);
-			if (g_cutscenePal ? !cutEntry : (i >= 0xC0 && i < 0xE0)) {
+			if (excludedEntry(i)) {
 				continue;
 			}
-			const int er = _basePal[i].r * num / den - _pal[i].r;
-			const int eg = _basePal[i].g * num / den - _pal[i].g;
-			const int eb = _basePal[i].b * num / den - _pal[i].b;
+			const int er = scaled[_basePal[i].r] - _pal[i].r;
+			const int eg = scaled[_basePal[i].g] - _pal[i].g;
+			const int eb = scaled[_basePal[i].b] - _pal[i].b;
 			const int d = (er < 0 ? -er : er) + 2 * (eg < 0 ? -eg : eg) + (eb < 0 ? -eb : eb);
 			if (d > 40) {
 				if (nchg == 16) {
@@ -756,16 +786,12 @@ void SystemStub_STDL::buildRemap() {
 				}
 				_remap[i] = (uint8_t)bs;
 			}
-			_fade = num * 256 / den;
-			if (_fade > 1023) {
-				_fade = 1023;
-			}
+			_fade = (fade > 1023) ? 1023 : fade;
 			_hwDirty = true;
 			return;
 		}
 	}
 	_fade = 256;
-	info("Quantise %s", g_cutscenePal ? "cutscene" : "game");
 
 	// Gather distinct 4-bit colours with usage counts. Logical
 	// entries 0xC0-0xDF belong to cutscenes only (the game's slots
@@ -781,8 +807,7 @@ void SystemStub_STDL::buildRemap() {
 	uint8_t entryCluster[256];
 	int n = 0;
 	for (int i = 0; i < 256; ++i) {
-		const bool cutEntry = (i >= 0xC0 && i < 0xF0);
-		if (g_cutscenePal ? !cutEntry : (i >= 0xC0 && i < 0xE0)) {
+		if (excludedEntry(i)) {
 			entryCluster[i] = 0xFF;
 			continue;
 		}
@@ -850,8 +875,9 @@ void SystemStub_STDL::buildRemap() {
 	}
 }
 
-void SystemStub_STDL::writeHwPalette() {
-	STDL_Colour c[16];
+// the 16 hardware colours at the current fade level; _fade can
+// exceed 256 (brightening fades), so every channel is clamped
+void SystemStub_STDL::fadedColours(STDL_Colour *c) {
 	for (int i = 0; i < 16; ++i) {
 		int r = _hwPal[i].r * _fade >> 8;
 		int g = _hwPal[i].g * _fade >> 8;
@@ -861,6 +887,11 @@ void SystemStub_STDL::writeHwPalette() {
 		c[i].b = (uint8_t)(b > 255 ? 255 : b);
 		c[i].unused = 0;
 	}
+}
+
+void SystemStub_STDL::writeHwPalette() {
+	STDL_Colour c[16];
+	fadedColours(c);
 	STDL_SetColours(_screen, c, 0, 16);
 	_hwDirty = false;
 }
@@ -954,12 +985,14 @@ void SystemStub_STDL::updateScreen(int shakeOffset) {
 // (in practice the engine always redraws and re-sets palettes after
 // fading out).
 void SystemStub_STDL::fadeScreen() {
+	STDL_Colour base[16];
+	fadedColours(base);
 	for (int step = 7; step >= 0; --step) {
 		STDL_Colour c[16];
 		for (int i = 0; i < 16; ++i) {
-			c[i].r = (_hwPal[i].r * _fade >> 8) * step >> 3;
-			c[i].g = (_hwPal[i].g * _fade >> 8) * step >> 3;
-			c[i].b = (_hwPal[i].b * _fade >> 8) * step >> 3;
+			c[i].r = (uint8_t)(base[i].r * step >> 3);
+			c[i].g = (uint8_t)(base[i].g * step >> 3);
+			c[i].b = (uint8_t)(base[i].b * step >> 3);
 			c[i].unused = 0;
 		}
 		STDL_SetColours(_screen, c, 0, 16);

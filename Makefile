@@ -15,8 +15,13 @@ STRIP  = m68k-atari-mint-strip
 STDL     = stdl
 STDL_LIB = $(STDL)/libstdl.a
 
+# -MMD -MP: without header dependencies, editing a header rebuilds
+# only the .cpp files touched in the same pass. Game holds a Cutscene
+# by value, so a stale object compiled against a different cutscene.h
+# puts every member after it at the wrong offset - silent memory
+# corruption that surfaces as bus errors far from the edit.
 CXXFLAGS = -O2 -fomit-frame-pointer -fno-exceptions -fno-rtti \
-	-fno-strict-aliasing \
+	-fno-strict-aliasing -MMD -MP \
 	-Wall -Wno-unused-parameter \
 	-I$(STDL)/include -DATARIST -DNDEBUG
 
@@ -34,6 +39,7 @@ SRCS = collision.cpp cpc_player.cpp cutscene.cpp decode_mac.cpp file.cpp \
 	main_atari.cpp systemstub_stdl.cpp video_st.cpp
 
 OBJS = $(SRCS:%.cpp=build/%.o)
+DEPS = $(OBJS:.o=.d)
 
 TARGET = dist/FLASHBAK.TOS
 
@@ -55,5 +61,7 @@ build dist:
 
 clean:
 	rm -rf build $(TARGET)
+
+-include $(DEPS)
 
 .PHONY: all clean

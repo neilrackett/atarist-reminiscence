@@ -18,8 +18,20 @@ struct Video {
 	enum {
 		GAMESCREEN_W = 256,
 		GAMESCREEN_H = 224,
+#ifdef ATARIST
+		// ST_restoreDirty and copyRectPlanar both round to a 16-pixel
+		// planar group, so a finer grid only costs scanning
+		SCREENBLOCK_W = 16,
+#else
 		SCREENBLOCK_W = 8,
+#endif
 		SCREENBLOCK_H = 8,
+		// dirty-block lifecycle: mark -> blit -> shown -> restore ->
+		// owed (one more blit) -> blit -> clean
+		kBlockClean = 0,
+		kBlockOwed = 1,
+		kBlockDirty = 2,
+		kBlockShown = 0x80,
 		CHAR_W = 8,
 		CHAR_H = 8,
 		PALETTE_INDEX_CONRAD = 4,

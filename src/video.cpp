@@ -69,10 +69,11 @@ void Video::ST_rebakeRoom() {
 // Restore only the screen blocks the last frame drew (anything drawn
 // goes through markBlockAsDirty). Block lifecycle on the ST:
 //
-//   mark (2) --blit--> 0x80 --restore--> 1 --blit--> 0
+//   kBlockDirty --blit--> kBlockShown --restore--> kBlockOwed
+//               --blit--> kBlockClean
 //
 // A mark is blitted and tagged; the next frame's restore puts the
-// background back in the front layer and re-tags the block (1) so
+// background back in the front layer and re-tags the block (owed) so
 // the following blit shows the restored background on screen - skip
 // that and a moving sprite leaves its old image on screen forever
 // (the front layer is clean, the screen never hears about it).
@@ -88,13 +89,13 @@ void Video::ST_restoreDirty() {
 	for (int j = 0; j < _h / SCREENBLOCK_H; ++j) {
 		int i = 0;
 		while (i < cols) {
-			if (p[i] != 0x80) {
+			if (p[i] != kBlockShown) {
 				++i;
 				continue;
 			}
 			int i2 = i;
-			while (i2 < cols && p[i2] == 0x80) {
-				p[i2] = 1;      /* restored: one blit still owed */
+			while (i2 < cols && p[i2] == kBlockShown) {
+				p[i2] = kBlockOwed;
 				++i2;
 			}
 			const int gx0 = (i * SCREENBLOCK_W) >> 4;
@@ -133,15 +134,18 @@ void Video::ST_restoreDirty() {
 
 void Video::markBlockAsDirty(int16_t x, int16_t y, uint16_t w, uint16_t h, int scale) {
 	debug(DBG_VIDEO, "Video::markBlockAsDirty(%d, %d, %d, %d)", x, y, w, h);
-	int bx1 = scale * x / SCREENBLOCK_W;
-	int by1 = scale * y / SCREENBLOCK_H;
-	int bx2 = scale * (x + w - 1) / SCREENBLOCK_W;
-	int by2 = scale * (y + h - 1) / SCREENBLOCK_H;
+	// 16-bit operands keep these as muls.w: a plain int product is a
+	// __mulsi3 call, and this runs once per sprite piece, glyph and icon
+	const int cols = _w / SCREENBLOCK_W;
+	int bx1 = ((int16_t)scale * (int16_t)x) / SCREENBLOCK_W;
+	int by1 = ((int16_t)scale * (int16_t)y) / SCREENBLOCK_H;
+	int bx2 = ((int16_t)scale * (int16_t)(x + w - 1)) / SCREENBLOCK_W;
+	int by2 = ((int16_t)scale * (int16_t)(y + h - 1)) / SCREENBLOCK_H;
 	if (bx1 < 0) {
 		bx1 = 0;
 	}
-	if (bx2 > (_w / SCREENBLOCK_W) - 1) {
-		bx2 = (_w / SCREENBLOCK_W) - 1;
+	if (bx2 > cols - 1) {
+		bx2 = cols - 1;
 	}
 	if (by1 < 0) {
 		by1 = 0;
@@ -149,10 +153,13 @@ void Video::markBlockAsDirty(int16_t x, int16_t y, uint16_t w, uint16_t h, int s
 	if (by2 > (_h / SCREENBLOCK_H) - 1) {
 		by2 = (_h / SCREENBLOCK_H) - 1;
 	}
+	if (bx2 < bx1) {
+		return;
+	}
+	uint8_t *row = _screenBlocks + (int16_t)by1 * (int16_t)cols;
 	for (; by1 <= by2; ++by1) {
-		for (int i = bx1; i <= bx2; ++i) {
-			_screenBlocks[by1 * (_w / SCREENBLOCK_W) + i] = 2;
-		}
+		memset(row + bx1, kBlockDirty, bx2 - bx1 + 1);
+		row += cols;
 	}
 }
 
@@ -176,10 +183,10 @@ void Video::updateScreen() {
 			int nh = 0;
 			for (i = 0; i < _w / SCREENBLOCK_W; ++i) {
 #ifdef ATARIST
-				// fresh marks (2) blit then await restore (0x80);
-				// restored blocks (1) blit once more and are done
-				if (p[i] != 0 && p[i] != 0x80) {
-					p[i] = (p[i] == 1) ? 0 : 0x80;
+				// a fresh mark blits and then awaits its restore;
+				// a restored block blits once more and is done
+				if (p[i] != kBlockClean && p[i] != kBlockShown) {
+					p[i] = (p[i] == kBlockOwed) ? kBlockClean : kBlockShown;
 					++nh;
 				} else if (nh != 0) {
 #else
