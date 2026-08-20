@@ -39,7 +39,8 @@ set in `RS.CFG` (same `key=value` format as the SDL build's `rs.cfg`).
 | Arrow keys      | move Conrad                       |
 | Shift           | talk / use / run / shoot          |
 | Enter           | use the current inventory object  |
-| Backspace / Tab | display inventory / skip cutscene |
+| Backspace / Tab | display inventory                 |
+| Any key         | skip the current cutscene         |
 | Escape          | display options                   |
 | Ctrl S / Ctrl L | save / load game state            |
 | Ctrl + / Ctrl - | change game state slot            |
@@ -77,11 +78,48 @@ Other platforms' data files (DOS floppy/CD, Macintosh `FLASHBACK.BIN`
 music sets [4]) are supported by the SDL build — see the upstream
 [README](https://github.com/cyxx/REminiscence) for details.
 
+## Configuration
+
+Options go in `RS.CFG`, a plain text file next to `FLASHBAK.TOS`,
+one `name=value` per line (`true`/`1` to enable). Lines starting
+with `#` are ignored, and the file is optional — every option
+defaults to off.
+
+| Option                     | Effect                                                                 |
+| -------------------------- | ---------------------------------------------------------------------- |
+| `skip_intro`               | Go straight to the title screen, skipping the intro sequence           |
+| `crop_screen`              | Crop 12 lines off the top and bottom instead of squashing 224 into 200 |
+| `bypass_protection`        | Skip the copy-protection screen                                        |
+| `enable_password_menu`     | Show the level password menu                                           |
+| `fade_out_palette`         | Fade the palette out between screens                                   |
+| `use_text_cutscenes`       | Replace missing cutscenes with their text                              |
+| `use_white_tshirt`         | Conrad's t-shirt is white in the intro                                 |
+| `play_asc_cutscene`        | Play the ASC cutscene (level 2 fuse)                                   |
+| `play_caillou_cutscene`    | Play the CAILLOU cutscene (save checkpoints)                           |
+| `play_metro_cutscene`      | Play the METRO cutscene                                                |
+| `play_serrure_cutscene`    | Play the SERRURE cutscene                                              |
+| `play_carte_cutscene`      | Play the CARTE cutscene (keys)                                         |
+| `restore_memo_cutscene`    | Draw the extra shapes in the MEMO cutscene                             |
+| `order_inventory_original` | Order inventory items as the original did                              |
+
+The two ST-specific ones are `crop_screen` and `skip_intro`.
+
+`crop_screen` chooses how the game's 224 lines reach the ST's 200:
+by default every ninth line is dropped, which keeps the whole
+playfield visible but slices through sprites and text. Cropping
+instead hides the top and bottom 12 lines — every displayed line
+stays intact and the screen copy is one contiguous run, at the cost
+of hiding the edges of each room. The Amiga and DOS releases never
+had to choose: DOS programmed a ~256x224 VGA mode, and NTSC Amigas
+opened a display taller than 200 lines. The ST's 200-line low
+resolution is fixed in the Shifter.
+
 ## To-do
 
 - Non-STE sound effects
 - Non-STE music
-- Make it faster (current ~10 fps on a stock 8MHz ST, ~19 fps on a 16MHz Mega STE)
+- Make it faster (current ~10 fps on a stock 8MHz ST, ~19 fps on a 16MHz Mega STE).
+  Cutscenes already run at the frame delays their scripts ask for.
 
 ## Credits
 
