@@ -128,9 +128,10 @@ struct SprEntry {
 	uint8_t flags;
 	uint8_t w, h;
 	int groups;
+	uint16_t *block;        // allocation base (guard words first)
 	uint16_t *planes;       // groups*4 words per row
-	uint16_t *mask;         // groups words per row, 1 = opaque
-	int cap;                // words allocated at planes
+	uint16_t *mask;         // groups words per row
+	int cap;                // usable words at planes
 };
 
 static SprEntry g_spr[kSprSlots];
@@ -145,21 +146,25 @@ static bool bakeSprite(SprEntry *e, const uint8_t *src, int pitch, int w, int h,
 	const int groups = (w + 15) >> 4;
 	const int planeWords = groups * 4 * h;
 	const int words = planeWords + groups * h;
-	// The shift chain reads one group past the end of a row, so the
-	// block carries guard words - the borrowed-surface contract in
-	// stdl_surface.h asks for the slack rather than clipped reads.
-	enum { kGuard = 8 };
-	if (e->cap < words + kGuard) {
+	// The unaligned blit path reads one group either side of the
+	// rows, so the block carries guard words at both ends: borrowed
+	// blocks owe the same slack library surfaces have (see
+	// STDL_CreateSurfaceFrom). A leading read is masked off by the
+	// edge mask, but the contract asks for the room regardless.
+	enum { kGuard = 4 };
+	if (e->cap < words) {
 		// grow only: a slot large enough for one frame is large
 		// enough for the next one that lands in it, so after warm-up
 		// a miss costs no allocation at all
-		free(e->planes);
-		e->planes = (uint16_t *)malloc((words + kGuard) * sizeof(uint16_t));
-		e->cap = e->planes ? words + kGuard : 0;
+		free(e->block);
+		e->block = (uint16_t *)malloc((words + 2 * kGuard) * sizeof(uint16_t));
+		e->cap = e->block ? words : 0;
 	}
-	if (!e->planes) {
+	if (!e->block) {
+		e->planes = 0;
 		return false;
 	}
+	e->planes = e->block + kGuard;
 	e->mask = e->planes + planeWords;
 	e->groups = groups;
 	// STDL's source-mask convention is bit set = destination
@@ -189,6 +194,7 @@ static bool bakeSprite(SprEntry *e, const uint8_t *src, int pitch, int w, int h,
 	scratch->clip.w = (uint16_t)(groups * 16);
 	scratch->clip.h = (uint16_t)h;
 	STDL_BlitIndexed8(scratch, src, pitch, 0, 0, w, h, map16, f);
+	memset(e->block, 0, kGuard * sizeof(uint16_t));
 	memset(e->planes + words, 0, kGuard * sizeof(uint16_t));
 	return true;
 }
