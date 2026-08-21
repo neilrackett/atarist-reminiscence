@@ -9,6 +9,39 @@
 #include "systemstub.h"
 #include "util.h"
 
+// A room is 224 rows tall, so pos_y / 72 and pos_y / 36 only ever
+// pick one of a handful of bands - but written as a divide they are
+// __divsi3 calls, ~700 cycles each, on paths the script interpreter
+// runs for every entity every frame. C truncates toward zero, and
+// the divide stays as the fallback outside a room's range.
+static inline int gridRow72(int y) {
+	if (y >= 0) {
+		if (y < 72) return 0;
+		if (y < 144) return 1;
+		if (y < 216) return 2;
+		if (y < 288) return 3;
+	} else if (y > -72) {
+		return 0;
+	}
+	return y / 72;
+}
+
+static inline int gridRow36(int y) {
+	if (y >= 0) {
+		if (y < 36) return 0;
+		if (y < 72) return 1;
+		if (y < 108) return 2;
+		if (y < 144) return 3;
+		if (y < 180) return 4;
+		if (y < 216) return 5;
+		if (y < 252) return 6;
+	} else if (y > -36) {
+		return 0;
+	}
+	return y / 36;
+}
+
+
 void Game::pge_resetMessages() {
 	memset(_pge_messagesTable, 0, sizeof(_pge_messagesTable));
 	MessagePGE *le = &_pge_messages[0];
@@ -220,7 +253,7 @@ set_anim:
 		++_dl;
 	}
 	pge->anim_seq = _dh;
-	_col_currentPiegeGridPosY = (pge->pos_y / 36) & ~1;
+	_col_currentPiegeGridPosY = gridRow36(pge->pos_y) & ~1;
 	_col_currentPiegeGridPosX = (pge->pos_x + 8) >> 4;
 }
 
@@ -1024,7 +1057,7 @@ int Game::pge_o_unk0x40(ObjectOpcodeArgs *args) {
 		return 0;
 	}
 	int16_t grid_pos_x = (args->pge->pos_x + 8) >> 4;
-	int16_t grid_pos_y = args->pge->pos_y / 72;
+	int16_t grid_pos_y = (int16_t)gridRow72(args->pge->pos_y);
 	if (grid_pos_y >= 0 && grid_pos_y <= 2) {
 		grid_pos_y *= 16;
 		int16_t _cx = args->a;
@@ -1470,7 +1503,7 @@ int Game::pge_o_unk0x6A(ObjectOpcodeArgs *args) {
 		return 0;
 	}
 	int16_t grid_pos_x = (_si->pos_x + 8) >> 4;
-	int16_t grid_pos_y = (_si->pos_y / 72);
+	int16_t grid_pos_y = (int16_t)gridRow72(_si->pos_y);
 	if (grid_pos_y >= 0 && grid_pos_y <= 2) {
 		grid_pos_y *= 16;
 		int16_t _cx = args->a;
@@ -1656,7 +1689,7 @@ int Game::pge_op_exitInvMessage(ObjectOpcodeArgs *args) {
 
 int Game::pge_o_unk0x72(ObjectOpcodeArgs *args) {
 	const int8_t *grid_data = &_res._ctData[0x100] + args->pge->room_location * 0x70;
-	int16_t pge_pos_y = ((args->pge->pos_y / 36) & ~1) + args->a;
+	int16_t pge_pos_y = (int16_t)((gridRow36(args->pge->pos_y) & ~1) + args->a);
 	int16_t pge_pos_x = (args->pge->pos_x + 8) >> 4;
 	grid_data += pge_pos_y * 16 + pge_pos_x;
 
@@ -1702,7 +1735,7 @@ int Game::pge_op_isBelowConrad(ObjectOpcodeArgs *args) {
 	LivePGE *_si = args->pge;
 	LivePGE *pge_conrad = &_pgeLive[0];
 	if (pge_conrad->room_location == _si->room_location) {
-		if ((pge_conrad->pos_y - 8) / 72 < _si->pos_y / 72) {
+		if (gridRow72(pge_conrad->pos_y - 8) < gridRow72(_si->pos_y)) {
 			return 0xFFFF;
 		}
 	} else if (_si->room_location < 0x40) {
@@ -1717,7 +1750,7 @@ int Game::pge_op_isAboveConrad(ObjectOpcodeArgs *args) {
 	LivePGE *_si = args->pge;
 	LivePGE *pge_conrad = &_pgeLive[0];
 	if (pge_conrad->room_location == _si->room_location) {
-		if ((pge_conrad->pos_y - 8) / 72 > _si->pos_y / 72) {
+		if (gridRow72(pge_conrad->pos_y - 8) > gridRow72(_si->pos_y)) {
 			return 0xFFFF;
 		}
 	} else if (_si->room_location < 0x40) {
@@ -1731,7 +1764,7 @@ int Game::pge_op_isAboveConrad(ObjectOpcodeArgs *args) {
 int Game::pge_op_testConradLeft(ObjectOpcodeArgs *args) {
 	LivePGE *pge = args->pge;
 	LivePGE *pge_conrad = &_pgeLive[0];
-	if (pge->pos_y / 72 == (pge_conrad->pos_y - 8) / 72) { // same grid cell
+	if (gridRow72(pge->pos_y) == gridRow72(pge_conrad->pos_y - 8)) { // same grid cell
 		if (pge->room_location == pge_conrad->room_location) {
 			if (args->a == 0) {
 				if (_pge_currentPiegeFacingDir) {
@@ -1772,7 +1805,7 @@ int Game::pge_op_testConradLeft(ObjectOpcodeArgs *args) {
 int Game::pge_op_testConradRight(ObjectOpcodeArgs *args) {
 	LivePGE *pge = args->pge;
 	LivePGE *pge_conrad = &_pgeLive[0];
-	if (pge->pos_y / 72 == (pge_conrad->pos_y - 8) / 72) {
+	if (gridRow72(pge->pos_y) == gridRow72(pge_conrad->pos_y - 8)) {
 		if (pge->room_location == pge_conrad->room_location) {
 			if (args->a == 0) {
 				if (_pge_currentPiegeFacingDir) {

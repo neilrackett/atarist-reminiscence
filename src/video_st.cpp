@@ -57,29 +57,56 @@ static inline uint16_t *prioPtr(uint8_t *layer, int x, int y) {
 	return (uint16_t *)(layer + kSTPlaneBytes + y * kSTPrioRowBytes + ((x >> 4) << 1));
 }
 
+// Positioned-pattern table: for pixel position i and 4-bit value v,
+// the plane bits that pixel contributes, packed two planes to a long.
+// Building the four plane words a bit at a time cost five
+// accumulators and about 220 cycles a pixel - gcc 4.6 spills that
+// shape - where an indexed OR of two longs costs a fraction.
+struct CvtCell { uint32_t d01, d23; };
+static CvtCell g_cvt[16][16];
+static bool g_cvtReady;
+
+static void initCvt() {
+	for (int i = 0; i < 16; ++i) {
+		const uint16_t bit = (uint16_t)(1 << (15 - i));
+		for (int v = 0; v < 16; ++v) {
+			const uint16_t p0 = (v & 1) ? bit : 0;
+			const uint16_t p1 = (v & 2) ? bit : 0;
+			const uint16_t p2 = (v & 4) ? bit : 0;
+			const uint16_t p3 = (v & 8) ? bit : 0;
+			g_cvt[i][v].d01 = ((uint32_t)p0 << 16) | p1;
+			g_cvt[i][v].d23 = ((uint32_t)p2 << 16) | p3;
+		}
+	}
+	g_cvtReady = true;
+}
+
 void ST_convertChunky(uint8_t *layer, const uint8_t *src, int h) {
+	if (!g_cvtReady) {
+		initCvt();
+	}
 	const uint8_t *remap = ST_getRemap();
 	uint16_t *dst = (uint16_t *)layer;
 	uint16_t *prio = (uint16_t *)(layer + kSTPlaneBytes);
 	for (int y = 0; y < h; ++y) {
 		for (int g = 0; g < kSTLayerW / 16; ++g) {
-			uint16_t p0 = 0, p1 = 0, p2 = 0, p3 = 0, pr = 0;
+			uint32_t a01 = 0, a23 = 0;
+			uint16_t pr = 0;
+			const CvtCell *row = &g_cvt[0][0];
 			for (int i = 0; i < 16; ++i) {
-				const uint8_t c = src[i];
-				const uint8_t v = remap[c];
-				p0 += p0 + (v & 1);
-				p1 += p1 + ((v >> 1) & 1);
-				p2 += p2 + ((v >> 2) & 1);
-				p3 += p3 + ((v >> 3) & 1);
-				pr += pr + (c >> 7);
+				const uint8_t c = *src++;
+				const CvtCell *cell = row + remap[c];
+				a01 |= cell->d01;
+				a23 |= cell->d23;
+				pr = (uint16_t)(pr + pr + (c >> 7));
+				row += 16;
 			}
-			dst[0] = p0;
-			dst[1] = p1;
-			dst[2] = p2;
-			dst[3] = p3;
+			dst[0] = (uint16_t)(a01 >> 16);
+			dst[1] = (uint16_t)a01;
+			dst[2] = (uint16_t)(a23 >> 16);
+			dst[3] = (uint16_t)a23;
 			*prio++ = pr;
 			dst += 4;
-			src += 16;
 		}
 	}
 }
