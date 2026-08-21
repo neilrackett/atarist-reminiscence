@@ -61,6 +61,7 @@ Video::~Video() {
 }
 
 #ifdef ATARIST
+uint32_t g_cvtMs;   // TEMP
 void Video::ST_rebakeRoom() {
 	ST_convertChunky(_backLayer, _stagingLayer, GAMESCREEN_H);
 	memcpy(_frontLayer, _backLayer, _layerSize);
@@ -503,25 +504,39 @@ static void AMIGA_planar8(uint8_t *dst, int w, int h, const uint8_t *src) {
 
 static void AMIGA_planar_mask(uint8_t *dst, int x0, int y0, int w, int h, uint8_t *src, uint8_t *mask, int size) {
 	dst += y0 * Video::GAMESCREEN_W + x0;
+	const int size2 = size * 2;
+	const int size3 = size * 3;
 	for (int y = 0; y < h; ++y) {
+		const int py = y0 + y;
+		const bool rowVisible = (py >= 0 && py < Video::GAMESCREEN_H);
 		for (int x = 0; x < w * 2; ++x) {
-			for (int i = 0; i < 8; ++i) {
-				const int c_mask = 1 << (7 - i);
-				int color = 0;
-				for (int j = 0; j < 4; ++j) {
-					if (mask[j * size] & c_mask) {
-						color |= 1 << j;
-					}
-				}
-				if (*src & c_mask) {
-					const int px = x0 + 8 * x + i;
-					const int py = y0 + y;
-					if (px >= 0 && px < Video::GAMESCREEN_W && py >= 0 && py < Video::GAMESCREEN_H) {
-						dst[8 * x + i] = color;
+			// The four plane bytes were addressed as mask[j * size],
+			// a runtime 32-bit multiply - a __mulsi3 call on 68000 -
+			// per plane per PIXEL. Read them once per byte instead,
+			// and only build the colour for pixels actually drawn.
+			const uint8_t s0 = *src++;
+			if (s0 != 0 && rowVisible) {
+				const uint8_t m0 = mask[0];
+				const uint8_t m1 = mask[size];
+				const uint8_t m2 = mask[size2];
+				const uint8_t m3 = mask[size3];
+				uint8_t *d = dst + 8 * x;
+				const int px0 = x0 + 8 * x;
+				for (int i = 0; i < 8; ++i) {
+					const int c_mask = 1 << (7 - i);
+					if (s0 & c_mask) {
+						int color = 0;
+						if (m0 & c_mask) color |= 1;
+						if (m1 & c_mask) color |= 2;
+						if (m2 & c_mask) color |= 4;
+						if (m3 & c_mask) color |= 8;
+						const int px = px0 + i;
+						if (px >= 0 && px < Video::GAMESCREEN_W) {
+							d[i] = (uint8_t)color;
+						}
 					}
 				}
 			}
-			++src;
 			++mask;
 		}
 		dst += Video::GAMESCREEN_W;
@@ -767,6 +782,7 @@ void Video::PC98_decodeMap(int level, int room) {
 }
 
 void Video::AMIGA_decodeLev(int level, int room) {
+	const uint32_t lv0 = _stub->getTimeStamp();
 	uint8_t *tmp = _res->_scratchBuffer;
 	const int offset = READ_BE_UINT32(_res->_lev + room * 4);
 	if (!bytekiller_unpack(tmp, Resource::kScratchBufferSize, _res->_lev, offset)) {
@@ -808,6 +824,7 @@ void Video::AMIGA_decodeLev(int level, int room) {
 			}
 		}
 	} while((d0 & 0x8000) == 0);
+	const uint32_t lv1 = _stub->getTimeStamp();
 #ifdef ATARIST
 	// build the room in the chunky staging buffer; it is converted
 	// to planar at the end of this function, after the palettes
@@ -825,8 +842,11 @@ void Video::AMIGA_decodeLev(int level, int room) {
 		offset10 = 0;
 	}
 	DrawTileProc drawTile = _res->isAmiga() ? AMIGA_drawTile : DOS_drawTile;
+	const uint32_t lv2 = _stub->getTimeStamp();
 	decodeLevHelper(roomLayer, tmp, offset10, offset12, buf, tmp[1] != 0, drawTile, _res->_readUint16);
 	free(buf);
+	{ const uint32_t lv3 = _stub->getTimeStamp();
+	  info("LEV unpack+banks %d, sgd %d, tiles %d", (int)(lv1 - lv0), (int)(lv2 - lv1), (int)(lv3 - lv2)); }
 #ifndef ATARIST
 	memcpy(_backLayer, _frontLayer, _layerSize);
 #endif
@@ -856,7 +876,9 @@ void Video::AMIGA_decodeLev(int level, int room) {
 	setPaletteSlotBE(0xA, _mapPalSlot3);
 #ifdef ATARIST
 	// palettes are final: bake the room into the planar layers
-	ST_convertChunky(_frontLayer, _stagingLayer, GAMESCREEN_H);
+	{ extern uint32_t g_cvtMs; const uint32_t c0 = _stub->getTimeStamp();
+	  ST_convertChunky(_frontLayer, _stagingLayer, GAMESCREEN_H);
+	  g_cvtMs += _stub->getTimeStamp() - c0; }
 	memcpy(_backLayer, _frontLayer, _layerSize);
 #endif
 }
