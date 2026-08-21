@@ -1847,18 +1847,6 @@ void Game::loadLevelRoom() {
 		}
 		widescreenUpdated = true;
 	}
-#ifdef ATARIST
-	if (g_options.log_fps) {   // TEMP room-load split
-		const uint32_t t0 = _stub->getTimeStamp();
-		loadLevelRoomHelper(_currentLevel, _currentRoom);
-		const uint32_t t1 = _stub->getTimeStamp();
-		_vid.updateScreen();
-		const uint32_t t2 = _stub->getTimeStamp();
-		{ extern uint32_t g_cvtMs;
-		  info("ROOM helper %d ms (convert %d), update %d ms", (int)(t1 - t0), (int)g_cvtMs, (int)(t2 - t1));
-		  g_cvtMs = 0; }
-	} else
-#endif
 	loadLevelRoomHelper(_currentLevel, _currentRoom);
 	if (!widescreenUpdated) {
 		_vid.updateWidescreen();
