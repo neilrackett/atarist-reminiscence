@@ -2,6 +2,7 @@
 /*
  * REminiscence - Flashback interpreter
  * Copyright (C) 2005-2019 Gregory Montoir (cyx@users.sourceforge.net)
+ * Atari ST port changes Copyright (C) 2026 Neil Rackett
  */
 
 #include "game.h"

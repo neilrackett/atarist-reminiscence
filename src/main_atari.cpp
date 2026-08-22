@@ -1,6 +1,8 @@
 
 /*
  * REminiscence - Flashback interpreter
+ * Atari ST port Copyright (C) 2026 Neil Rackett
+ *
  * Atari ST entry point (no SDL, no getopt - GEMDOS programs launched
  * from the desktop have no command line worth parsing).
  */

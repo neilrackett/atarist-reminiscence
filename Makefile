@@ -1,5 +1,6 @@
 
 # REminiscence - Atari ST port
+# Copyright (C) 2026 Neil Rackett
 #
 # Cross-compiles with m68k-atari-mint-g++ via atarist-toolkit-docker:
 #   STCMD_NO_TTY=1 stcmd make

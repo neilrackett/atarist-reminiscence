@@ -1,6 +1,8 @@
 
 /*
  * REminiscence - Flashback interpreter
+ * Atari ST port Copyright (C) 2026 Neil Rackett
+ *
  * Atari ST planar layer primitives.
  *
  * Layers are ST interleaved planar: 224 rows of 128 bytes (4 plane

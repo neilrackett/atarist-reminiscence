@@ -1,6 +1,8 @@
 
 /*
  * REminiscence - Flashback interpreter
+ * Atari ST port Copyright (C) 2026 Neil Rackett
+ *
  * Atari ST platform layer built on STDL.
  *
  * The engine renders into a 256x224 chunky 8bpp layer with a

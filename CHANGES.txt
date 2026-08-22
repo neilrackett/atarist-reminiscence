@@ -1,3 +1,38 @@
+* release 0.5.6-atari.1
+
+	Atari ST / STE / Mega STE port by Neil Rackett, based on 0.5.6 and
+	made with the permission of Gregory Montoir. The Atari-specific
+	code is not listed here; these are the changes to the core engine,
+	all of which are portable and leave output identical.
+
+	- AMIGA_planar_mask addressed the four bitplanes as mask[j * size]
+	  inside the per-pixel loop. size is a runtime value, so each is a
+	  32-bit multiply - four per pixel, and a library call on 68000.
+	  The plane bytes are now read once per source byte, the colour is
+	  built only for pixels actually drawn, and fully transparent
+	  bytes and off-screen rows are skipped. Worth 5.5s -> 1.7s per
+	  room on an 8MHz-class machine; a smaller win anywhere the
+	  compiler cannot strength-reduce that multiply.
+	- the piege opcodes divided pos_y by 72 or 36 in seven places to
+	  find an entity's grid band, on paths walked for every entity
+	  every frame. A room is 224 rows tall, so the quotient only picks
+	  one of a handful of bands; compare chains replace the divides,
+	  which remain as an out-of-range fallback.
+	- col_getGridPos divided by 72 per collision cell per entity per
+	  frame; same treatment.
+	- markBlockAsDirty made five 32-bit multiplies per call, one of
+	  them inside the per-block loop, and re-derived the column count
+	  per block. 16-bit operands, a hoisted column count, and a memset
+	  per run instead of a store per block.
+	- drawIcon ran AMIGA_decodeIcn every frame for the inventory item
+	  on display - walking the icon list, then unpacking four
+	  bitplanes. Decoded icons are now cached (16 entries, flushed
+	  when level data reloads).
+	- decoded sprite frames are cached (64 entries, grow-only slabs)
+	  rather than re-decoded per draw.
+	- SDL: RS_DUMP=<relative dir> writes every 25th frame as a BMP,
+	  for cross-checking a port's renderer against this one.
+
 * release 0.5.6
 	- added fluidsynth output for DOS .prf music
 	- fixed random number generation for 'DEMO' inputs with Macintosh version

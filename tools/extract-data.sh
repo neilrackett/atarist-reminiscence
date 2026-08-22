@@ -1,5 +1,6 @@
 #!/bin/bash
 # Extract the Flashback Amiga data files from CAPS IPF disk images
+# Copyright (C) 2026 Neil Rackett
 # into dist/DATA with GEMDOS-safe uppercase 8.3 names.
 #
 # Usage: tools/extract-data.sh disk1.ipf disk2.ipf disk3.ipf disk4.ipf

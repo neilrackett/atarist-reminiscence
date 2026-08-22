@@ -11,9 +11,9 @@ that I was most disappointed about was Flashback (Delphine Software, 1992).
 
 So, using [STDL](https://github.com/neilrackett/atarist-stdl)
 (the `stdl/` submodule) and the Amiga data files, I've ported
-[REminiscence](https://github.com/cyxx/REminiscence), an open source
-re-implementation of the original game engine, to the Atari ST and
-just three decades later...
+[REminiscence](https://github.com/cyxx/REminiscence) 0.5.6, Gregory
+Montoir's re-implementation of the original game engine, to the Atari
+ST and just three decades later...
 
 **_Say hello to Flashback for Atari ST._**
 
@@ -34,17 +34,17 @@ set in `RS.CFG` (same `key=value` format as the SDL build's `rs.cfg`).
 
 ## Controls
 
-| Key             | Action                            |
-| --------------- | --------------------------------- |
-| Arrow keys      | move Conrad                       |
-| Shift           | talk / use / run / shoot          |
-| Enter           | use the current inventory object  |
-| Backspace / Tab | display inventory                 |
-| Any key         | skip the current cutscene         |
-| Escape          | display options                   |
-| Ctrl S / Ctrl L | save / load game state            |
-| Ctrl + / Ctrl - | change game state slot            |
-| Ctrl Q          | quit                              |
+| Key             | Action                           |
+| --------------- | -------------------------------- |
+| Arrow keys      | move Conrad                      |
+| Shift           | talk / use / run / shoot         |
+| Enter           | use the current inventory object |
+| Backspace / Tab | display inventory                |
+| Any key         | skip the current cutscene        |
+| Escape          | display options                  |
+| Ctrl S / Ctrl L | save / load game state           |
+| Ctrl + / Ctrl - | change game state slot           |
+| Ctrl Q          | quit                             |
 
 A joystick in port 1 maps to the arrow keys with fire as Shift.
 
@@ -126,7 +126,7 @@ resolution is fixed in the Shifter.
 
 ## Credits
 
-- A massive thank you to [Gregory Montoir for REminiscence](https://github.com/cyxx/REminiscence).
+- A massive thank you to [Gregory Montoir for REminiscence](https://github.com/cyxx/REminiscence) and agreeing to let me use it.
 - Delphine Software, obviously, for making another great game.
 - Yaz0r, Pixel and gawd for sharing information they gathered on the game.
 
@@ -138,3 +138,23 @@ If you'd like more information about Flashback:
 - [2] http://en.wikipedia.org/wiki/Flashback:_The_Quest_for_Identity
 - [3] http://ramal.free.fr/fb_en.htm
 - [4] https://www.exotica.org.uk/wiki/Flashback
+
+## License
+
+**This repository is not open source.**
+
+The REminiscence engine is copyright
+[Gregory Montoir](https://github.com/cyxx) with no OSS licence — parts of
+it are a direct translation of the game's disassembly, so none fitted.
+This port exists by his express permission, given to me for this port
+and not as a licence to you: to reuse the engine, ask him. Core-engine
+changes made here are listed in [CHANGES.txt](CHANGES.txt), as requested.
+
+Atari ST port related code is copyright (C) 2026 Neil Rackett
+
+[STDL](https://github.com/neilrackett/atarist-stdl), the display and audio
+library underneath, is a separate project of mine under the
+LGPL-2.1-or-later.
+
+Flashback and its data files are copyright Delphine Software; no game data
+is distributed here.

@@ -1,4 +1,5 @@
 /* ipf2adf: decode a CAPS IPF image's AmigaDOS tracks into an ADF.
+ * Copyright (C) 2026 Neil Rackett
  * Links against capsimg; MFM sector decoding done here. */
 #include <stdio.h>
 #include <stdlib.h>
