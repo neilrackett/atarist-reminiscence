@@ -176,7 +176,10 @@ Game::Game(SystemStub *stub, FileSystem *fs, const char *savePath, int level, Re
 
 
 void Game::run() {
-	_randSeed = time(0);
+	// bench mode needs the same sequence every run: a clock seed is
+	// what made enemy behaviour, and so the sprite count, differ from
+	// one measurement to the next
+	_randSeed = g_options.bench ? 0x4A5B6C7D : (uint32_t)time(0);
 
 	_res.init();
 	_res.load_TEXT();
@@ -587,6 +590,29 @@ void Game::mainLoop() {
 }
 
 void Game::updateTiming() {
+#ifdef ATARIST
+	// Benchmark: a fixed number of gameplay frames with no input, no
+	// frame limiter and a fixed seed, timed on the ST's own 200Hz
+	// counter so the figure is emulated time and fast-forward does
+	// not distort it. Prints one line and quits.
+	if (g_options.bench) {
+		enum { kBenchFrames = 512 };
+		static int frames;
+		static uint32_t t0;
+		if (frames == 0) {
+			t0 = _stub->getTimeStamp();
+		}
+		if (++frames > kBenchFrames) {
+			const uint32_t d = _stub->getTimeStamp() - t0;
+			info("BENCH %d frames %d ms, %d.%02d ms/frame, %d.%d fps",
+				kBenchFrames, (int)d,
+				(int)(d / kBenchFrames), (int)((d * 100 / kBenchFrames) % 100),
+				(int)(kBenchFrames * 1000 / d), (int)((kBenchFrames * 10000 / d) % 10));
+			_stub->_pi.quit = true;
+		}
+		return;
+	}
+#endif
 #ifdef ATARIST
 	// log_fps: average over 64 frames, to RS.LOG. The engine asks for
 	// 30Hz and sleeps when it is ahead, so anything below 30 is what

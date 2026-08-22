@@ -144,6 +144,7 @@ struct Options {
 	bool skip_intro;
 	bool crop_screen;
 	bool log_fps;
+	bool bench;
 };
 
 struct Features {

@@ -90,6 +90,7 @@ defaults to off.
 | `skip_intro`               | Go straight to the title screen, skipping the intro sequence           |
 | `crop_screen`              | Crop 12 lines off the top and bottom instead of squashing 224 into 200 |
 | `log_fps`                  | Log the frame rate to `RS.LOG`, averaged over 64 frames                |
+| `bench`                    | Run 512 gameplay frames with a fixed seed and no input, log the timing, quit |
 | `bypass_protection`        | Skip the copy-protection screen                                        |
 | `enable_password_menu`     | Show the level password menu                                           |
 | `fade_out_palette`         | Fade the palette out between screens                                   |
@@ -103,7 +104,11 @@ defaults to off.
 | `restore_memo_cutscene`    | Draw the extra shapes in the MEMO cutscene                             |
 | `order_inventory_original` | Order inventory items as the original did                              |
 
-The ST-specific ones are `crop_screen`, `skip_intro` and `log_fps`.
+The ST-specific ones are `crop_screen`, `skip_intro`, `log_fps` and
+`bench`. `bench` exists because frame rates measured against live play
+are not comparable between runs — the random seed and input timing
+change what is on screen — so it fixes the seed, takes no input and
+runs a set number of frames.
 
 `crop_screen` chooses how the game's 224 lines reach the ST's 200:
 by default every ninth line is dropped, which keeps the whole
