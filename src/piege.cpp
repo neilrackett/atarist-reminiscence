@@ -1420,6 +1420,10 @@ int Game::pge_op_locateMessage(ObjectOpcodeArgs *args) {
 	return 0;
 }
 
+static inline uint16_t mod16(uint16_t a, uint16_t b) {
+	return (uint16_t)(a % b);
+}
+
 int Game::pge_op_isInRandomRange(ObjectOpcodeArgs *args) {
 	uint16_t n = args->a;
 	if (n != 0) {
@@ -1431,7 +1435,9 @@ int Game::pge_op_isInRandomRange(ObjectOpcodeArgs *args) {
 			}
 			return (x % n) == 0 ? 1 : 0;
 		}
-		if ((getRandomNumber() % n) == 0) {
+		// both operands are 16-bit; done in int the modulo is a
+		// __modsi3 call, where a 68000 has divu.w for exactly this
+		if (mod16(getRandomNumber(), n) == 0) {
 			return 1;
 		}
 	}
@@ -2338,7 +2344,15 @@ int Game::pge_collideTestIfTypeAndDifferentDirection(LivePGE *pge1, LivePGE *pge
 }
 
 int Game::pge_collideTestByNumber(LivePGE *pge1, LivePGE *pge2, uint8_t comp, uint8_t comp2) {
-	return pge1 - pge2;
+	// Subtracting the pointers divides the byte distance by
+	// sizeof(LivePGE), which is not a power of two, so the compiler
+	// emits a __divsi3 call on every collision pair tested. The only
+	// caller (pge_collideTest) tests the result against zero; this
+	// keeps the sign as well, without the divide.
+	if (pge1 == pge2) {
+		return 0;
+	}
+	return (pge1 > pge2) ? 1 : -1;
 }
 
 static int pge_zoomDx(int prev_x, int cur_x) {

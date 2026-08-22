@@ -20,6 +20,16 @@
 	  which remain as an out-of-range fallback.
 	- col_getGridPos divided by 72 per collision cell per entity per
 	  frame; same treatment.
+	- pge_collideTestByNumber returned a pointer difference, which
+	  divides the byte distance by sizeof(LivePGE) - not a power of
+	  two, so a __divsi3 call for every collision pair tested. Its one
+	  caller only tests the result against zero, so it now compares
+	  the pointers directly and keeps the sign.
+	- pge_op_isInRandomRange took a modulo of two 16-bit values, which
+	  C promotes to a 32-bit divide and the compiler turns into a
+	  __modsi3 call; a 68000 has divu.w for exactly that. Narrowing
+	  the operands is the same arithmetic, so the random sequence is
+	  unchanged.
 	- markBlockAsDirty made five 32-bit multiplies per call, one of
 	  them inside the per-block loop, and re-derived the column count
 	  per block. 16-bit operands, a hoisted column count, and a memset
