@@ -153,6 +153,12 @@ static void initOptions() {
 		}
 		fclose(fp);
 	}
+	if (g_options.bench) {
+		// A benchmark run ends by quitting, which looks exactly like
+		// a crash to anyone who forgot the option was set: say so up
+		// front, so the log explains the exit that follows.
+		info("bench=true in RS.CFG: this is a benchmark run and the game will quit after 512 gameplay frames");
+	}
 }
 
 extern SystemStub *SystemStub_STDL_create();

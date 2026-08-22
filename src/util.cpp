@@ -53,7 +53,11 @@ void error(const char *msg, ...) {
 	va_start(va, msg);
 	vsnprintf(buf, sizeof(buf), msg, va);
 	va_end(va);
+#ifdef ATARIST
+	logLine("ERROR: ", buf);
+#else
 	fprintf(stderr, "ERROR: %s!\n", buf);
+#endif
 #ifdef _WIN32
 	MessageBox(0, buf, g_caption, MB_ICONERROR);
 #endif

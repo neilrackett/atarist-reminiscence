@@ -90,7 +90,7 @@ defaults to off.
 | `skip_intro`               | Go straight to the title screen, skipping the intro sequence           |
 | `crop_screen`              | Crop 12 lines off the top and bottom instead of squashing 224 into 200 |
 | `log_fps`                  | Log the frame rate to `RS.LOG`, averaged over 64 frames                |
-| `bench`                    | Run 512 gameplay frames with a fixed seed and no input, log the timing, quit |
+| `bench`                    | Benchmark: time 512 gameplay frames, log the result, then **quit**     |
 | `bypass_protection`        | Skip the copy-protection screen                                        |
 | `enable_password_menu`     | Show the level password menu                                           |
 | `fade_out_palette`         | Fade the palette out between screens                                   |
@@ -108,7 +108,10 @@ The ST-specific ones are `crop_screen`, `skip_intro`, `log_fps` and
 `bench`. `bench` exists because frame rates measured against live play
 are not comparable between runs — the random seed and input timing
 change what is on screen — so it fixes the seed, takes no input and
-runs a set number of frames.
+runs a set number of frames. It ends by quitting to the desktop,
+which is indistinguishable from a crash if you have forgotten it is
+on, so it announces itself in `RS.LOG` at startup. Turn it off
+before playing.
 
 `crop_screen` chooses how the game's 224 lines reach the ST's 200:
 by default every ninth line is dropped, which keeps the whole
@@ -128,6 +131,7 @@ resolution is fixed in the Shifter.
   ~26 fps on a 16MHz Mega STE. The sprite blit is the remaining hot
   path and wants hand-written 68000 assembly.
   Cutscenes already run at the frame delays their scripts ask for.
+- SDL 1.2 version for TT and Falcon
 
 ## Credits
 

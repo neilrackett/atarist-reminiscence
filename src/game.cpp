@@ -604,7 +604,7 @@ void Game::updateTiming() {
 		}
 		if (++frames > kBenchFrames) {
 			const uint32_t d = _stub->getTimeStamp() - t0;
-			info("BENCH %d frames %d ms, %d.%02d ms/frame, %d.%d fps",
+			info("BENCH complete, quitting: %d frames %d ms, %d.%02d ms/frame, %d.%d fps",
 				kBenchFrames, (int)d,
 				(int)(d / kBenchFrames), (int)((d * 100 / kBenchFrames) % 100),
 				(int)(kBenchFrames * 1000 / d), (int)((kBenchFrames * 10000 / d) % 10));
@@ -646,6 +646,7 @@ void Game::playCutscene(int id) {
 		_cut._id = id;
 	}
 	if (_cut._id != 0xFFFF) {
+		info("Cutscene %02X start", _cut._id);
 		ToggleWidescreenStack tws(_stub, false);
 		_mix.stopMusic();
 		if (_res._hasSeqData) {
@@ -733,6 +734,7 @@ void Game::playCutscene(int id) {
 			_cut.playCredits();
 		}
 		_mix.stopMusic();
+		info("Cutscene done");
 	}
 }
 
