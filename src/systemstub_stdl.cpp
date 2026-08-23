@@ -235,8 +235,30 @@ void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int
 	// black screen until the first frame arrives
 	memset(_screen->pixels, 0, kScreenStride * kDstH);
 	writeHwPalette();
-	// joystick as arrows + fire = shift (Flashback's main action key)
+	// Joystick and pad both drive the game as synthesised keypresses,
+	// so the input code below needs to know nothing about either.
+	//
+	// Arrows and fire are all an ST joystick has, and fire is Shift,
+	// Flashback's main verb. The rest exist only when a controller is
+	// present; binding them on a machine without one is harmless, as
+	// unbound inputs stay silent.
+	//
+	// Save, load, quit and the state-slot keys are deliberately absent:
+	// they are Ctrl combinations, and emulation synthesises one key per
+	// input, so they stay on the keyboard where they belong.
 	STDL_JoyKeyMapping(STDLK_UP, STDLK_DOWN, STDLK_LEFT, STDLK_RIGHT, STDLK_RSHIFT);
+
+	STDL_JoyKeyBind(STDL_JOYKEY_EAST,   STDLK_RETURN);     // use item
+	STDL_JoyKeyBind(STDL_JOYKEY_NORTH,  STDLK_BACKSPACE);  // inventory
+	STDL_JoyKeyBind(STDL_JOYKEY_WEST,   STDLK_SPACE);
+	STDL_JoyKeyBind(STDL_JOYKEY_START,  STDLK_ESCAPE);     // options
+	STDL_JoyKeyBind(STDL_JOYKEY_SELECT, STDLK_BACKSPACE);  // inventory
+
+	// The two you reach for constantly, put where a thumb is not
+	// needed: inventory and use, on the shoulders.
+	STDL_JoyKeyBind(STDL_JOYKEY_TL, STDLK_BACKSPACE);
+	STDL_JoyKeyBind(STDL_JOYKEY_TR, STDLK_RETURN);
+
 	STDL_JoyKeyEmulation(1);
 }
 

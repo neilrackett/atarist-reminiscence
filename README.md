@@ -48,6 +48,22 @@ set in `RS.CFG` (same `key=value` format as the SDL build's `rs.cfg`).
 
 A joystick in port 1 maps to the arrow keys with fire as Shift.
 
+A controller works too, when an Xpad provider is present (a SidecarTridge
+running MD/Sidepad, for example). It drives the game as keypresses, so
+nothing in the game knows the difference:
+
+| Pad                     | Key           | Action                   |
+| ----------------------- | ------------- | ------------------------ |
+| D-pad / left stick      | Arrow keys    | move Conrad              |
+| A                       | Shift         | talk / use / run / shoot |
+| B, right shoulder       | Enter         | use the inventory object |
+| Y, Select, left shoulder| Backspace     | display inventory        |
+| X                       | Space         |                          |
+| Start                   | Escape        | display options          |
+
+Save, load, quit and the state-slot keys stay on the keyboard: they are
+Ctrl combinations, and a pad button emulates a single key.
+
 ## Building
 
 With [atarist-toolkit-docker](https://github.com/sidecartridge/atarist-toolkit-docker)
