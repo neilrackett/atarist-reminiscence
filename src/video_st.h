@@ -86,6 +86,7 @@ inline void ST_buildMap16(uint8_t colMask, uint8_t *map16) {
 // drop list, or the crop window) lives in the stub; callers placing
 // content by hand must ask instead of reproducing the arithmetic.
 bool ST_rowVisible(int y);
+void ST_invalidateBakedRange(const uint8_t *p, uint32_t len);
 
 // full chunky (256-wide, 8bpp) to planar conversion - load time only
 void ST_convertChunky(uint8_t *layer, const uint8_t *src, int h);

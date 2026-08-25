@@ -165,9 +165,43 @@ struct SprEntry {
 
 static SprEntry g_spr[kSprSlots];
 
+// Bake on the second sighting (see below): remembers sources seen
+// once, so a bake is only spent on frames that repeat.
+enum { kSeen = 48 };
+static const uint8_t *g_seenSrc[kSeen];
+static uint8_t g_seenMask[kSeen];
+static int g_seenPos;
+
 void ST_flushSpriteCache() {
 	for (int i = 0; i < kSprSlots; ++i) {
 		g_spr[i].src = 0;
+	}
+	for (int i = 0; i < kSeen; ++i) {
+		g_seenSrc[i] = 0;
+	}
+}
+
+// The planar cache keys on source pointers, and everything those
+// pointers reach through gets recycled under it: the decode caches
+// reuse their slabs, and the resource bank arena resets wholesale
+// when it fills mid-game (Resource::clearBankData). The same
+// address then holds a different sprite, so each recycler reports
+// its range here and the bakes keyed inside it die with the old
+// content - without this, a stale bake keeps being drawn (seen as
+// confetti fireflies after a room entry, when the bank arena
+// wrapped between a fly's two sightings). Ranges, not single
+// pointers: draw calls pass clip- and mirror-adjusted pointers
+// into the middle of these buffers.
+void ST_invalidateBakedRange(const uint8_t *p, uint32_t len) {
+	for (int i = 0; i < kSprSlots; ++i) {
+		if ((uint32_t)(g_spr[i].src - p) < len) {
+			g_spr[i].src = 0;
+		}
+	}
+	for (int i = 0; i < kSeen; ++i) {
+		if ((uint32_t)(g_seenSrc[i] - p) < len) {
+			g_seenSrc[i] = 0;
+		}
 	}
 }
 
@@ -245,7 +279,12 @@ static void blitBaked(uint8_t *layer, const SprEntry *e, int x, int y, bool resp
 		if (!view) {
 			return;
 		}
-		STDL_SetColourKey(view, 1, 0);
+		// STDL_TRANSPARENT: use the bake's mask as-is. A numeric
+		// key would rebuild the mask by scanning the plane words,
+		// and a bake's fully-masked words are uninitialised - the
+		// first entry through here had its mask clobbered from
+		// garbage, and that sprite drew as confetti ever after.
+		STDL_SetColourKey(view, 1, STDL_TRANSPARENT);
 	}
 	view->pixels = (uint8_t *)e->planes;
 	view->w = (int16_t)(e->groups * 16);
@@ -278,6 +317,7 @@ static void blitBaked(uint8_t *layer, const SprEntry *e, int x, int y, bool resp
 }
 
 void ST_drawSpriteCached(uint8_t *layer, const uint8_t *src, int pitch, int x, int y, int w, int h, uint8_t colMask, unsigned flags, bool setPrio) {
+
 	if (w <= 0 || h <= 0 || w > kSprMaxW || h > kSprMaxH
 	    || x >= kSTLayerW || y >= kSTLayerH || x + w <= 0 || y + h <= 0) {
 		if (w > kSprMaxW || h > kSprMaxH) {
@@ -305,21 +345,17 @@ void ST_drawSpriteCached(uint8_t *layer, const uint8_t *src, int pitch, int x, i
 		// second sighting: one-off frames cost exactly what they did
 		// before, repeated ones (every animation cycle) go fast.
 		{
-			enum { kSeen = 48 };
-			static const uint8_t *seenSrc[kSeen];
-			static uint8_t seenMask[kSeen];
-			static int seenPos;
 			int slot = -1;
 			for (int i = 0; i < kSeen; ++i) {
-				if (seenSrc[i] == src && seenMask[i] == colMask) {
+				if (g_seenSrc[i] == src && g_seenMask[i] == colMask) {
 					slot = i;
 					break;
 				}
 			}
 			if (slot < 0) {
-				seenSrc[seenPos] = src;
-				seenMask[seenPos] = colMask;
-				seenPos = (seenPos + 1) % kSeen;
+				g_seenSrc[g_seenPos] = src;
+				g_seenMask[g_seenPos] = colMask;
+				g_seenPos = (g_seenPos + 1) % kSeen;
 				uint8_t map16[16];
 				ST_buildMap16(colMask, map16);
 				ST_drawSprite(layer, src, pitch, x, y, w, h, map16, flags, setPrio);

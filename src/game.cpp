@@ -58,6 +58,11 @@ struct SpriteCache {
 			buf[i] = (uint8_t *)malloc(size);
 			cap[i] = buf[i] ? size : 0;
 		}
+		if (buf[i]) {
+			// this slab is about to hold a different sprite: any
+			// planar bake keyed into it must go with the old one
+			ST_invalidateBakedRange(buf[i], (uint32_t)cap[i]);
+		}
 		key[i] = buf[i] ? p : 0;
 		return buf[i];
 	}
@@ -93,6 +98,8 @@ struct IconCache {
 	uint8_t *insert(uint8_t num) {
 		const int i = pos;
 		pos = (pos + 1) & (N - 1);
+		// same recycling contract as SpriteCache::insert
+		ST_invalidateBakedRange(buf[i], kSize);
 		key[i] = num;
 		used[i] = true;
 		return buf[i];
@@ -734,7 +741,15 @@ void Game::playCutscene(int id) {
 			_cut.playCredits();
 		}
 		_mix.stopMusic();
+#ifdef ATARIST
+		{
+			extern uint32_t ST_overscanMisses();
+			info("Cutscene done (overscan misses %u)",
+				(unsigned)ST_overscanMisses());
+		}
+#else
 		info("Cutscene done");
+#endif
 	}
 }
 
@@ -2132,7 +2147,13 @@ void Game::drawIcon(uint8_t iconNum, int16_t x, int16_t y, uint8_t colMask) {
 		break;
 	}
 	if (_res._type != kResourceTypeMac) {
-		memcpy(_icnCache.insert(iconNum), buf, IconCache::kSize);
+		// draw from the cached copy, never the stack scratch: the
+		// planar cache keys on the source address, and a stack
+		// buffer is the same address with different content every
+		// call
+		uint8_t *kept = _icnCache.insert(iconNum);
+		memcpy(kept, buf, IconCache::kSize);
+		buf = kept;
 	}
 drawCached:
 #ifdef ATARIST
