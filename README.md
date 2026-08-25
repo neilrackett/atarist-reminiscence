@@ -105,6 +105,7 @@ defaults to off.
 | -------------------------- | ---------------------------------------------------------------------- |
 | `skip_intro`               | Go straight to the title screen, skipping the intro sequence           |
 | `crop_screen`              | Crop 12 lines off the top and bottom instead of squashing 224 into 200 |
+| `overscan`                 | Open the top border: all 224 lines shown natively, nothing dropped     |
 | `log_fps`                  | Log the frame rate to `RS.LOG`, averaged over 64 frames                |
 | `bench`                    | Benchmark: time 512 gameplay frames, log the result, then **quit**     |
 | `bypass_protection`        | Skip the copy-protection screen                                        |
@@ -120,8 +121,8 @@ defaults to off.
 | `restore_memo_cutscene`    | Draw the extra shapes in the MEMO cutscene                             |
 | `order_inventory_original` | Order inventory items as the original did                              |
 
-The ST-specific ones are `crop_screen`, `skip_intro`, `log_fps` and
-`bench`. `bench` exists because frame rates measured against live play
+The ST-specific ones are `overscan`, `crop_screen`, `skip_intro`,
+`log_fps` and `bench`. `bench` exists because frame rates measured against live play
 are not comparable between runs — the random seed and input timing
 change what is on screen — so it fixes the seed, takes no input and
 runs a set number of frames. It ends by quitting to the desktop,
@@ -129,15 +130,19 @@ which is indistinguishable from a crash if you have forgotten it is
 on, so it announces itself in `RS.LOG` at startup. Turn it off
 before playing.
 
-`crop_screen` chooses how the game's 224 lines reach the ST's 200:
-by default every ninth line is dropped, which keeps the whole
-playfield visible but slices through sprites and text. Cropping
-instead hides the top and bottom 12 lines — every displayed line
-stays intact and the screen copy is one contiguous run, at the cost
-of hiding the edges of each room. The Amiga and DOS releases never
-had to choose: DOS programmed a ~256x224 VGA mode, and NTSC Amigas
-opened a display taller than 200 lines. The ST's 200-line low
-resolution is fixed in the Shifter.
+`overscan` and `crop_screen` choose how the game's 224 lines reach
+the ST's 200: by default every ninth line is dropped, which keeps
+the whole playfield visible but slices through sprites and text.
+Cropping instead hides the top and bottom 12 lines — every
+displayed line stays intact, at the cost of hiding the edges of
+each room. Overscan removes the top border so all 224 lines display
+natively with nothing dropped or hidden — the picture reaches the
+top edge of the tube and sits ~27 lines higher than a stock screen
+on a CRT. A 60Hz/NTSC machine is switched to 50Hz while the game
+runs (the border trick needs a PAL frame), and it costs about 2ms
+a frame in extra blitting. The Amiga and DOS releases never had
+to choose: DOS programmed a ~256x224 VGA mode, and NTSC Amigas
+opened a display taller than 200 lines.
 
 ## To-do
 

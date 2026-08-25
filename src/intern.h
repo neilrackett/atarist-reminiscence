@@ -143,6 +143,7 @@ struct Options {
 	bool fix_fmopl_e0_reg;
 	bool skip_intro;
 	bool crop_screen;
+	bool overscan;
 	bool log_fps;
 	bool bench;
 };

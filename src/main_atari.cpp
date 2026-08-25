@@ -97,6 +97,7 @@ static void initOptions() {
 	g_options.fix_fmopl_e0_reg = false;
 	g_options.skip_intro = false;
 	g_options.crop_screen = false;
+	g_options.overscan = false;
 	g_options.log_fps = false;
 	g_options.bench = false;
 	struct {
@@ -123,6 +124,7 @@ static void initOptions() {
 		{ "order_inventory_original", &g_options.order_inventory_original },
 		{ "skip_intro", &g_options.skip_intro },
 		{ "crop_screen", &g_options.crop_screen },
+		{ "overscan", &g_options.overscan },
 		{ "log_fps", &g_options.log_fps },
 		{ "bench", &g_options.bench },
 		{ 0, 0 }

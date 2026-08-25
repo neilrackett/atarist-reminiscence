@@ -34,7 +34,6 @@ extern "C" {
 
 static const int kMaxSrcW = 320;
 static const int kMaxSrcH = 224;
-static const int kDstH = 200;
 static const int kScreenStride = 160;
 
 struct SystemStub_STDL : SystemStub {
@@ -60,6 +59,7 @@ struct SystemStub_STDL : SystemStub {
 	bool _shadowValid;
 	uint8_t _yMap[kMaxSrcH];   // source line -> screen line
 	uint8_t _yDrop[kMaxSrcH];  // 1 = line not displayed
+	bool _ovscOpen;            // top border open: display starts line 34
 	// key releases are applied at the start of the *next* poll so a
 	// press+release inside one slow frame is still seen by the game
 	uint8_t _upDirMask;
@@ -146,6 +146,19 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 	// loop below - measured faster than the per-call blit setup.
 	// The layer is viewed maskless or the copy would key on the
 	// priority plane.
+	// With the top border open, display fetch starts at line 34
+	// instead of 63: a full-page copy that used to hide in the
+	// border now races the beam and loses intermittently (ghosting),
+	// and the shared-mode BLiTTER (mandatory while a border is open,
+	// see STDL) is slower than the CPU loop anyway. So while the
+	// border is open, big copies skip the BLiTTER, and full-page
+	// ones start at the VBL: the CPU loop writes rows faster than
+	// the beam displays them, so the copy stays ahead - no tearing.
+	if (_ovscOpen) {
+		if (h >= kSTLayerH - 8) {
+			STDL_WaitVBL();
+		}
+	} else
 	if (h >= 32 && gx1 - gx0 >= 8 && _srcW == kSTLayerW
 	    && STDL_GetMachineInfo()->has_blitter) {
 		STDL_Surface *bare = ST_layerSurfaceBare((uint8_t *)layer);
@@ -212,11 +225,30 @@ void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int
 	_fade = 256;
 	_shadow = (uint8_t *)malloc(kMaxSrcW * kMaxSrcH);
 	_shadowValid = false;
-	// 224 -> 200: either crop 12 lines off the top and bottom
-	// (every displayed line is intact and screen copies stay one
-	// contiguous run, but the edges of the playfield are hidden),
-	// or squash with dst = y * 25 / 28, dropping collisions
-	if (g_options.crop_screen) {
+	// 224 lines onto the ST's 200: open the top border so all 224
+	// display natively (50Hz screens only - a 60Hz picture already
+	// starts on the first possible line), or crop 12 lines off the
+	// top and bottom (every displayed line is intact and screen
+	// copies stay one contiguous run, but the edges of the playfield
+	// are hidden), or squash with dst = y * 25 / 28, dropping
+	// collisions
+	_ovscOpen = false;
+	if (g_options.overscan) {
+		if (STDL_OpenTopBorder() != 0) {
+			_ovscOpen = true;
+			info("Top border open: 224 lines shown natively");
+		} else {
+			warning("Overscan unavailable (%s), using %s",
+				STDL_GetError(),
+				g_options.crop_screen ? "crop" : "squash");
+		}
+	}
+	if (_ovscOpen) {
+		for (int y = 0; y < kMaxSrcH; ++y) {
+			_yDrop[y] = 0;
+			_yMap[y] = y;
+		}
+	} else if (g_options.crop_screen) {
 		for (int y = 0; y < kMaxSrcH; ++y) {
 			const bool off = (y < 12) || (y >= kMaxSrcH - 12);
 			_yDrop[y] = off ? 1 : 0;
@@ -233,7 +265,7 @@ void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int
 	}
 	setScreenSize(w, h);
 	// black screen until the first frame arrives
-	memset(_screen->pixels, 0, kScreenStride * kDstH);
+	memset(_screen->pixels, 0, kScreenStride * _screen->h);
 	writeHwPalette();
 	// Joystick and pad both drive the game as synthesised keypresses,
 	// so the input code below needs to know nothing about either.
@@ -280,7 +312,7 @@ void SystemStub_STDL::setScreenSize(int w, int h) {
 		_srcH = h;
 		_xOffset = ((320 - w) / 2) & ~15;
 		_shadowValid = false;
-		memset(_screen->pixels, 0, kScreenStride * kDstH);
+		memset(_screen->pixels, 0, kScreenStride * _screen->h);
 	}
 }
 
@@ -1007,6 +1039,10 @@ void SystemStub_STDL::copyRect(int x, int y, int w, int h, const uint8_t *buf, i
 	}
 }
 
+uint32_t ST_overscanMisses() {
+	return STDL_OverscanMisses();
+}
+
 void SystemStub_STDL::updateScreen(int shakeOffset) {
 	if (_palDirty) {
 		buildRemap();
@@ -1033,7 +1069,7 @@ void SystemStub_STDL::fadeScreen() {
 		STDL_SetColours(_screen, c, 0, 16);
 		STDL_Delay(40);
 	}
-	memset(_screen->pixels, 0, kScreenStride * kDstH);
+	memset(_screen->pixels, 0, kScreenStride * _screen->h);
 	_shadowValid = false;
 	_hwDirty = true;
 }
