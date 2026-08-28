@@ -172,6 +172,18 @@ static const uint8_t *g_seenSrc[kSeen];
 static uint8_t g_seenMask[kSeen];
 static int g_seenPos;
 
+// [g_bakeLo, g_bakeHi]: bounds of every source address the bake and
+// seen tables have referenced. Most recycled slabs never fed a bake,
+// so the common invalidation is two compares instead of a 112-entry
+// scan. Bounds only grow; the full flush resets them.
+static const uint8_t *g_bakeLo = (const uint8_t *)~(uintptr_t)0;
+static const uint8_t *g_bakeHi;
+
+static inline void bakeBoundsAdd(const uint8_t *p) {
+	if (p < g_bakeLo) g_bakeLo = p;
+	if (p > g_bakeHi) g_bakeHi = p;
+}
+
 void ST_flushSpriteCache() {
 	for (int i = 0; i < kSprSlots; ++i) {
 		g_spr[i].src = 0;
@@ -179,6 +191,8 @@ void ST_flushSpriteCache() {
 	for (int i = 0; i < kSeen; ++i) {
 		g_seenSrc[i] = 0;
 	}
+	g_bakeLo = (const uint8_t *)~(uintptr_t)0;
+	g_bakeHi = 0;
 }
 
 // The planar cache keys on source pointers, and everything those
@@ -193,6 +207,9 @@ void ST_flushSpriteCache() {
 // pointers: draw calls pass clip- and mirror-adjusted pointers
 // into the middle of these buffers.
 void ST_invalidateBakedRange(const uint8_t *p, uint32_t len) {
+	if (p > g_bakeHi || p + len <= g_bakeLo) {
+		return;
+	}
 	for (int i = 0; i < kSprSlots; ++i) {
 		if ((uint32_t)(g_spr[i].src - p) < len) {
 			g_spr[i].src = 0;
@@ -355,7 +372,10 @@ void ST_drawSpriteCached(uint8_t *layer, const uint8_t *src, int pitch, int x, i
 			if (slot < 0) {
 				g_seenSrc[g_seenPos] = src;
 				g_seenMask[g_seenPos] = colMask;
-				g_seenPos = (g_seenPos + 1) % kSeen;
+				bakeBoundsAdd(src);
+				if (++g_seenPos == kSeen) {   // 48 is no power of two:
+					g_seenPos = 0;            // % would be a __modsi3
+				}
 				uint8_t map16[16];
 				ST_buildMap16(colMask, map16);
 				ST_drawSprite(layer, src, pitch, x, y, w, h, map16, flags, setPrio);
@@ -377,6 +397,7 @@ void ST_drawSpriteCached(uint8_t *layer, const uint8_t *src, int pitch, int x, i
 			return;
 		}
 		e->src = src;
+		bakeBoundsAdd(src);
 		e->gen = gen;
 		e->colMask = colMask;
 		e->flags = (uint8_t)bakeFlags;

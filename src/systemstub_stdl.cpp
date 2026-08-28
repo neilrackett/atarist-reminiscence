@@ -154,13 +154,18 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 	// border is open, big copies skip the BLiTTER, and full-page
 	// ones start at the VBL: the CPU loop writes rows faster than
 	// the beam displays them, so the copy stays ahead - no tearing.
-	if (_ovscOpen) {
-		if (h >= kSTLayerH - 8) {
-			STDL_WaitVBL();
-		}
-	} else
-	if (h >= 32 && gx1 - gx0 >= 8 && _srcW == kSTLayerW
-	    && STDL_GetMachineInfo()->has_blitter) {
+	if (h >= 32) {
+		if (_ovscOpen) {
+			// beam race: a full-page copy started at the VBL stays
+			// ahead of the display for every row; unsynced it loses
+			// intermittently and tears. When the caller says it is
+			// already behind schedule, the 20ms sync costs more
+			// than the risk of one crossing.
+			if (h >= kSTLayerH - 8 && g_copyPaced) {
+				STDL_WaitVBL();
+			}
+		} else if (gx1 - gx0 >= 8 && _srcW == kSTLayerW
+		    && STDL_GetMachineInfo()->has_blitter) {
 		STDL_Surface *bare = ST_layerSurfaceBare((uint8_t *)layer);
 		if (bare) {
 			int j = 0;
@@ -186,6 +191,7 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 				j = j2;
 			}
 			return;
+			}
 		}
 	}
 	const int n32 = bytes >> 3;
@@ -901,7 +907,8 @@ void SystemStub_STDL::buildRemap() {
 	// cluster. Pin its cluster: the jacket keeps its exact colour
 	// and one slot, matching the cutscene close-ups. In cutscene
 	// mode the entry is excluded above, so the pin is a no-op there.
-	const int pinned = (entryCluster[0x17] != 0xFF) ? entryCluster[0x17] : -1;
+	const int pinned = (entryCluster[kSTConradJacketEntry] != 0xFF)
+		? entryCluster[kSTConradJacketEntry] : -1;
 	quantiseClusters(col, cnt, n, alias, slotOf, pinned);
 	uint8_t newRemap[256];
 	memset(_cutsceneRep, 0xC0, sizeof(_cutsceneRep));
@@ -1048,6 +1055,12 @@ void SystemStub_STDL::copyRect(int x, int y, int w, int h, const uint8_t *buf, i
 
 uint32_t ST_overscanMisses() {
 	return STDL_OverscanMisses();
+}
+
+static bool g_copyPaced = true;
+
+void ST_copyPaced(bool paced) {
+	g_copyPaced = paced;
 }
 
 void SystemStub_STDL::updateScreen(int shakeOffset) {

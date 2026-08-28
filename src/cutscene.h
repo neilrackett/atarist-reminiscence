@@ -87,6 +87,11 @@ struct Cutscene {
 	const uint8_t *_cmdStartPtr;
 	uint32_t _tstamp;
 	uint8_t _frameDelay;
+	// per-scene pacing stats, logged when the scene ends: late
+	// frames mean the machine is not keeping up with the scripted
+	// frameDelay budgets (50-116ms each)
+	uint16_t _statFrames, _statLate;
+	uint32_t _statWork, _statBudget, _statCopy;
 	bool _newPal;
 	uint8_t _palBuf[16 * sizeof(uint16_t) * 2];
 	uint16_t _baseOffset;

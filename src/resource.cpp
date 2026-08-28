@@ -9,6 +9,7 @@
 #include "fs.h"
 #include "resource.h"
 #include "unpack.h"
+#include "video_st.h"
 #include "util.h"
 
 static const bool kCalculateAudioPeak = false;
@@ -1381,7 +1382,6 @@ void Resource::clearBankData() {
 #ifdef ATARIST
 	// every pointer into the arena is about to mean something else;
 	// the planar sprite cache keys on such pointers (video_st.cpp)
-	extern void ST_invalidateBakedRange(const uint8_t *p, uint32_t len);
 	ST_invalidateBakedRange(_bankData, (uint32_t)(_bankDataTail - _bankData));
 #endif
 	_bankBuffersCount = 0;

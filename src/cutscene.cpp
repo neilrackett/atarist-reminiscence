@@ -61,9 +61,19 @@ void Cutscene::sync(int frameDelay) {
 	static const int frameHz = 60;
 	const int32_t delay = _stub->getTimeStamp() - _tstamp;
 	const int32_t pause = frameDelay * (1000 / frameHz) - delay;
+	++_statFrames;
+	_statWork += (uint32_t)delay;
+	_statBudget += (uint32_t)(frameDelay * (1000 / frameHz));
 	if (pause > 0) {
 		_stub->sleep(pause);
+	} else {
+		++_statLate;
 	}
+#ifdef ATARIST
+	// behind schedule: let the next full-page copy skip its VBL
+	// sync rather than spend up to another 20ms waiting
+	ST_copyPaced(pause > 0);
+#endif
 	_tstamp = _stub->getTimeStamp();
 }
 
@@ -96,11 +106,16 @@ void Cutscene::updateScreen() {
 	updatePalette();
 	SWAP(_frontPage, _backPage);
 #ifdef ATARIST
-	_stub->copyRectPlanar(0, 0, _vid->_w, _vid->_h, _frontPage);
+	{
+		const uint32_t t0 = _stub->getTimeStamp();
+		_stub->copyRectPlanar(0, 0, _vid->_w, _vid->_h, _frontPage);
+		_stub->updateScreen(0);
+		_statCopy += _stub->getTimeStamp() - t0;
+	}
 #else
 	_stub->copyRect(0, 0, _vid->_w, _vid->_h, _frontPage, _vid->_w);
-#endif
 	_stub->updateScreen(0);
+#endif
 }
 
 #if 1
@@ -1471,6 +1486,8 @@ void Cutscene::play() {
 		_textCurBuf = NULL;
 		debug(DBG_CUT, "Cutscene::play() _id=0x%X", _id);
 		_creditsSequence = false;
+		_statFrames = _statLate = 0;
+		_statWork = _statBudget = _statCopy = 0;
 		prepare();
 #ifdef ATARIST
 		ST_setCutscenePalMode(true);

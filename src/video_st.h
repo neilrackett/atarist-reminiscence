@@ -88,6 +88,20 @@ inline void ST_buildMap16(uint8_t colMask, uint8_t *map16) {
 bool ST_rowVisible(int y);
 void ST_invalidateBakedRange(const uint8_t *p, uint32_t len);
 
+// frames whose overscan border flip was missed (see STDL); 0 when
+// overscan is off
+uint32_t ST_overscanMisses();
+
+// pacing hint from the cutscene player: false = the scene is behind
+// its scripted schedule, so full-page copies skip the VBL sync and
+// take a possible one-frame tear over another 20ms of waiting
+void ST_copyPaced(bool paced);
+
+// Conrad's jacket: logical entry 7 of the Amiga sprite palette
+// (bank 1). The quantiser pins this entry's cluster so a screenful
+// of scenery can never vote the jacket into another colour's slot.
+enum { kSTConradJacketEntry = 0x17 };
+
 // full chunky (256-wide, 8bpp) to planar conversion - load time only
 void ST_convertChunky(uint8_t *layer, const uint8_t *src, int h);
 
