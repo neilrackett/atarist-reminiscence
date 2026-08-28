@@ -92,6 +92,19 @@ void ST_invalidateBakedRange(const uint8_t *p, uint32_t len);
 // overscan is off
 uint32_t ST_overscanMisses();
 
+// ST_hspan with the colour pre-remapped (see fillArea)
+void ST_hspanV(uint8_t *layer, int x1, int x2, int y, uint8_t v, bool setPrio);
+
+// walk a drawPolygon run list (y, then x1,x2 pairs, x1 < 0 ends) in
+// one call with incremental row pointers
+void ST_fillArea(uint8_t *layer, const int16_t *pts, int crx, int cry,
+		int crw, uint8_t v, bool setPrio);
+
+// fast path for opaque 3+-point non-flat polygons; returns false
+// when the caller must use the reference converter
+bool ST_drawPolygonFast(uint8_t *layer, const void *pts, int n,
+		uint8_t colour8, int crx, int cry, int crw, int crh);
+
 // pacing hint from the cutscene player: false = the scene is behind
 // its scripted schedule, so full-page copies skip the VBL sync and
 // take a possible one-frame tear over another 20ms of waiting

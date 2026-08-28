@@ -103,6 +103,7 @@ void Cutscene::updateScreen() {
 		return;
 	}
 	sync(_frameDelay - 1);
+	
 	updatePalette();
 	SWAP(_frontPage, _backPage);
 #ifdef ATARIST
@@ -421,6 +422,7 @@ void Cutscene::checkShape(uint16_t shapeOffset) {
 
 void Cutscene::drawShape(const uint8_t *data, int16_t x, int16_t y) {
 	debug(DBG_CUT, "Cutscene::drawShape()");
+	
 	if (_stPrescan) {
 		return;
 	}
@@ -598,6 +600,7 @@ void Cutscene::op_refreshAll() {
 }
 
 void Cutscene::drawShapeScale(const uint8_t *data, int16_t zoom, int16_t b, int16_t c, int16_t d, int16_t e, int16_t f, int16_t g) {
+	
 	debug(DBG_CUT, "Cutscene::drawShapeScale(%d, %d, %d, %d, %d, %d, %d)", zoom, b, c, d, e, f, g);
 	if (_stPrescan) {
 		return;
@@ -788,6 +791,7 @@ void Cutscene::op_drawShapeScale() {
 }
 
 void Cutscene::drawShapeScaleRotate(const uint8_t *data, int16_t zoom, int16_t b, int16_t c, int16_t d, int16_t e, int16_t f, int16_t g) {
+	
 	debug(DBG_CUT, "Cutscene::drawShapeScaleRotate(%d, %d, %d, %d, %d, %d, %d)", zoom, b, c, d, e, f, g);
 	if (_stPrescan) {
 		return;

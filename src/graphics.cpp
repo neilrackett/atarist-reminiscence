@@ -216,18 +216,19 @@ void Graphics::fillArea(uint8_t color, bool hasAlpha) {
 	int16_t x1 = *pts++;
 	if (x1 >= 0) {
 		const bool orMode = (hasAlpha && color > 0xC7);
-		do {
-			const int16_t x2 = MIN<int16_t>(_crw - 1, *pts++);
-			if (x1 <= x2) {
-				if (orMode) {
+		if (orMode) {
+			do {
+				const int16_t x2 = MIN<int16_t>(_crw - 1, *pts++);
+				if (x1 <= x2) {
 					ST_hspanOr(_layer, _crx + x1, _crx + x2, y, color);
-				} else {
-					ST_hspan(_layer, _crx + x1, _crx + x2, y, color);
 				}
-			}
-			++y;
-			x1 = *pts++;
-		} while (x1 >= 0);
+				++y;
+				x1 = *pts++;
+			} while (x1 >= 0);
+		} else {
+			ST_fillArea(_layer, _areaPoints, _crx, _cry, _crw,
+				ST_getRemap()[color], (color & 0x80) != 0);
+		}
 	}
 	return;
 #else
@@ -367,6 +368,19 @@ static void drawPolygonHelper2(int32_t &x, int16_t &y, int32_t &step, int16_t *&
 
 void Graphics::drawPolygon(uint8_t color, bool hasAlpha, const Point *pts, uint8_t numPts) {
 	debug(DBG_VIDEO, "Graphics::drawPolygon()");
+#ifdef ATARIST
+	// alpha/shadow polygons keep the reference converter; everything
+	// else takes the port's fast rasteriser (video_st.cpp)
+	if (!(hasAlpha && color > 0xC7)
+	    && ST_drawPolygonFast(_layer, pts, numPts, color,
+	                          _crx, _cry, _crw, _crh)) {
+		return;
+	}
+#endif
+	drawPolygonRef(color, hasAlpha, pts, numPts);
+}
+
+void Graphics::drawPolygonRef(uint8_t color, bool hasAlpha, const Point *pts, uint8_t numPts) {
 	assert(numPts * 4 < 0x100);
 
 	int16_t *apts1 = &_areaPoints[AREA_POINTS_SIZE];
