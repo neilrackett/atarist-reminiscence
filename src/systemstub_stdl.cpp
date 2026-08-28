@@ -120,6 +120,14 @@ const uint8_t *ST_getRemap() {
 	return g_stub->_remap;
 }
 
+static bool g_copyPaced = true;
+
+// The cutscene player reports whether it is on schedule; a late
+// scene's full-page copies skip their VBL sync (see copyRectPlanar).
+void ST_copyPaced(bool paced) {
+	g_copyPaced = paced;
+}
+
 // Copy a planar layer region to the screen: pure word moves with the
 // 224->200 line squash and horizontal centring. x/w widen to 16px.
 void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *layer) {
@@ -155,16 +163,18 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 	// ones start at the VBL: the CPU loop writes rows faster than
 	// the beam displays them, so the copy stays ahead - no tearing.
 	if (h >= 32) {
-		if (_ovscOpen) {
+		if (_ovscOpen && h >= kSTLayerH - 8 && g_copyPaced) {
 			// beam race: a full-page copy started at the VBL stays
 			// ahead of the display for every row; unsynced it loses
 			// intermittently and tears. When the caller says it is
 			// already behind schedule, the 20ms sync costs more
-			// than the risk of one crossing.
-			if (h >= kSTLayerH - 8 && g_copyPaced) {
-				STDL_WaitVBL();
-			}
-		} else if (gx1 - gx0 >= 8 && _srcW == kSTLayerW
+			// than the risk of one crossing. The BLiTTER (restart
+			// idiom while the border is open, so interrupts still
+			// land) is over twice the CPU loop's speed, and with
+			// the identity line map the whole page is one run.
+			STDL_WaitVBL();
+		}
+		if (gx1 - gx0 >= 8 && _srcW == kSTLayerW
 		    && STDL_GetMachineInfo()->has_blitter) {
 		STDL_Surface *bare = ST_layerSurfaceBare((uint8_t *)layer);
 		if (bare) {
@@ -1055,12 +1065,6 @@ void SystemStub_STDL::copyRect(int x, int y, int w, int h, const uint8_t *buf, i
 
 uint32_t ST_overscanMisses() {
 	return STDL_OverscanMisses();
-}
-
-static bool g_copyPaced = true;
-
-void ST_copyPaced(bool paced) {
-	g_copyPaced = paced;
 }
 
 void SystemStub_STDL::updateScreen(int shakeOffset) {
