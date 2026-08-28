@@ -103,7 +103,6 @@ void Cutscene::updateScreen() {
 		return;
 	}
 	sync(_frameDelay - 1);
-	
 	updatePalette();
 	SWAP(_frontPage, _backPage);
 #ifdef ATARIST
@@ -238,7 +237,11 @@ void Cutscene::clearBackPage() {
 		return;
 	}
 	if (_clearScreen == 0) {
+#ifdef ATARIST
+		ST_copyLayer(_backPage, _auxPage);
+#else
 		memcpy(_backPage, _auxPage, _vid->_layerSize);
+#endif
 	} else {
 #ifdef ATARIST
 		ST_clearLayer(_backPage, 0xC0);
@@ -403,7 +406,11 @@ void Cutscene::op_waitForSync() {
 				_creditsTextCounter = _res->isDOS() ? 20 : 60;
 			}
 			if (!_stPrescan) {
+#ifdef ATARIST
+				ST_copyLayer(_backPage, _frontPage);
+#else
 				memcpy(_backPage, _frontPage, _vid->_layerSize);
+#endif
 			}
 			drawCreditsText();
 			updateScreen();
@@ -511,7 +518,11 @@ void Cutscene::op_drawShape() {
 		drawShape(primitiveVertices, x + dx, y + dy);
 	}
 	if (_clearScreen != 0 && !_stPrescan) {
+#ifdef ATARIST
+		ST_copyLayer(_auxPage, _backPage);
+#else
 		memcpy(_auxPage, _backPage, _vid->_layerSize);
+#endif
 	}
 }
 
@@ -1069,7 +1080,11 @@ void Cutscene::op_copyScreen() {
 		++_creditsTextCounter;
 	}
 	if (!_stPrescan) {
+#ifdef ATARIST
+		ST_copyLayer(_backPage, _frontPage);
+#else
 		memcpy(_backPage, _frontPage, _vid->_layerSize);
+#endif
 	}
 	_frameDelay = 10;
 

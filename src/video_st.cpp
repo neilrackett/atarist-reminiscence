@@ -1084,6 +1084,37 @@ void ST_drawPoint(uint8_t *layer, int x, int y, uint8_t colour8) {
 	}
 }
 
+// Whole-layer copy. The bus allows ~2MB/s at 8MHz whatever does the
+// moving; a 12-register movem burst gets closest (mintlib's memcpy
+// managed 1.6). Copies planes and the priority plane in one run -
+// the layer is one contiguous block.
+void ST_copyLayer(uint8_t *dst, const uint8_t *src) {
+	enum { kBytes = kSTPlaneBytes + kSTPrioRowBytes * kSTLayerH };
+#ifdef __m68k__
+	__asm__ volatile(
+		"move.w %2,%%d0\n"
+		"1:\n\t"
+		"movem.l (%1)+,%%d1-%%d7/%%a2-%%a6\n\t"
+		"movem.l %%d1-%%d7/%%a2-%%a6,(%0)\n\t"
+		"lea 48(%0),%0\n\t"
+		"dbra %%d0,1b"
+		: "+a"(dst), "+a"(src)
+		: "i"(kBytes / 48 - 1)
+		: "d0","d1","d2","d3","d4","d5","d6","d7",
+		  "a2","a3","a4","a5","a6","memory","cc");
+	// kBytes % 48 tail
+	{
+		const uint32_t *s32 = (const uint32_t *)src;
+		uint32_t *d32 = (uint32_t *)dst;
+		for (int n = (kBytes % 48) / 4; --n >= 0; ) {
+			*d32++ = *s32++;
+		}
+	}
+#else
+	memcpy(dst, src, kBytes);
+#endif
+}
+
 void ST_clearLayer(uint8_t *layer, uint8_t colour8) {
 	const uint8_t v = ST_getRemap()[colour8];
 	uint16_t row[4];

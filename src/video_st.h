@@ -115,6 +115,9 @@ void ST_copyPaced(bool paced);
 // of scenery can never vote the jacket into another colour's slot.
 enum { kSTConradJacketEntry = 0x17 };
 
+// whole-layer copy (planes via the BLiTTER where present)
+void ST_copyLayer(uint8_t *dst, const uint8_t *src);
+
 // full chunky (256-wide, 8bpp) to planar conversion - load time only
 void ST_convertChunky(uint8_t *layer, const uint8_t *src, int h);
 
