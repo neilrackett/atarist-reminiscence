@@ -50,7 +50,7 @@ struct SystemStub_STDL : SystemStub {
 	// (for the shadow-effect hw->hw lookup)
 	uint8_t _cutsceneRep[16];
 	bool _palLocked;        // fixed cutscene mapping, see video_st.h
-	void quantiseClusters(uint16_t *col, uint16_t *cnt, int n, uint8_t *alias, uint8_t *slotOf);
+	void quantiseClusters(uint16_t *col, uint16_t *cnt, int n, uint8_t *alias, uint8_t *slotOf, int pinned);
 	bool _hwDirty;          // hardware registers need reprogramming
 	int _fade;              // 256 = full brightness (uniform scale)
 	int _srcW, _srcH;
@@ -422,8 +422,9 @@ static inline int colDist(const Color &a, const Color &b) {
 // that outlives a palette change only stays correct if unchanged
 // colours keep their slots. Fills alias[] (cluster union-find) and
 // slotOf[] (cluster -> slot), and updates _hwPal.
-void SystemStub_STDL::quantiseClusters(uint16_t *col, uint16_t *cnt, int n, uint8_t *alias, uint8_t *slotOf) {
-	// greedy merge to 16 clusters
+void SystemStub_STDL::quantiseClusters(uint16_t *col, uint16_t *cnt, int n, uint8_t *alias, uint8_t *slotOf, int pinned) {
+	// greedy merge to 16 clusters; a pinned cluster never merges, so
+	// its colour stays exact and it holds a slot of its own
 	for (int i = 0; i < n; ++i) {
 		alias[i] = i;
 	}
@@ -432,12 +433,12 @@ void SystemStub_STDL::quantiseClusters(uint16_t *col, uint16_t *cnt, int n, uint
 		int bi = -1, bj = -1;
 		long best = 0x7FFFFFFF;
 		for (int i = 0; i < n; ++i) {
-			if (alias[i] != i) {
+			if (alias[i] != i || i == pinned) {
 				continue;
 			}
 			const int r1 = (col[i] >> 8) & 15, g1 = (col[i] >> 4) & 15, b1 = col[i] & 15;
 			for (int j = i + 1; j < n; ++j) {
-				if (alias[j] != j) {
+				if (alias[j] != j || j == pinned) {
 					continue;
 				}
 				int dr = r1 - ((col[j] >> 8) & 15); if (dr < 0) dr = -dr;
@@ -895,7 +896,13 @@ void SystemStub_STDL::buildRemap() {
 
 	uint8_t alias[256];
 	uint8_t slotOf[256];
-	quantiseClusters(col, cnt, n, alias, slotOf);
+	// Conrad's jacket (logical entry 0x17 in the sprite bank) is a
+	// brown a screenful of jungle otherwise outvotes into the green
+	// cluster. Pin its cluster: the jacket keeps its exact colour
+	// and one slot, matching the cutscene close-ups. In cutscene
+	// mode the entry is excluded above, so the pin is a no-op there.
+	const int pinned = (entryCluster[0x17] != 0xFF) ? entryCluster[0x17] : -1;
+	quantiseClusters(col, cnt, n, alias, slotOf, pinned);
 	uint8_t newRemap[256];
 	memset(_cutsceneRep, 0xC0, sizeof(_cutsceneRep));
 	bool repSet[16];
