@@ -120,14 +120,6 @@ const uint8_t *ST_getRemap() {
 	return g_stub->_remap;
 }
 
-static bool g_copyPaced = true;
-
-// The cutscene player reports whether it is on schedule; a late
-// scene's full-page copies skip their VBL sync (see copyRectPlanar).
-void ST_copyPaced(bool paced) {
-	g_copyPaced = paced;
-}
-
 // Copy a planar layer region to the screen: pure word moves with the
 // 224->200 line squash and horizontal centring. x/w widen to 16px.
 void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *layer) {
@@ -162,20 +154,21 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 	// border is open, big copies skip the BLiTTER, and full-page
 	// ones start at the VBL: the CPU loop writes rows faster than
 	// the beam displays them, so the copy stays ahead - no tearing.
-	if (h >= 32) {
-		if (_ovscOpen && h >= kSTLayerH - 8 && g_copyPaced) {
-			// beam race: a full-page copy started at the VBL stays
-			// ahead of the display for every row; unsynced it loses
-			// intermittently and tears. When the caller says it is
-			// already behind schedule, the 20ms sync costs more
-			// than the risk of one crossing. The BLiTTER (restart
-			// idiom while the border is open, so interrupts still
-			// land) is over twice the CPU loop's speed, and with
-			// the identity line map the whole page is one run.
+	if (_ovscOpen) {
+		// Beam race: with the border open the display starts
+		// fetching at line 34 instead of 63, so a full-page copy
+		// has to start at the VBL to stay ahead of it - unsynced
+		// it loses intermittently and tears. This sync is not
+		// negotiable against frame pacing: skipping it when a
+		// scene runs late (tried Aug 2026) brought the tearing
+		// straight back. The CPU loop below also stays on the
+		// bus predictably, where a BLiTTER copy contends with the
+		// border ISR's own timing.
+		if (h >= kSTLayerH - 8) {
 			STDL_WaitVBL();
 		}
-		if (gx1 - gx0 >= 8 && _srcW == kSTLayerW
-		    && STDL_GetMachineInfo()->has_blitter) {
+	} else if (h >= 32 && gx1 - gx0 >= 8 && _srcW == kSTLayerW
+	    && STDL_GetMachineInfo()->has_blitter) {
 		STDL_Surface *bare = ST_layerSurfaceBare((uint8_t *)layer);
 		if (bare) {
 			int j = 0;
@@ -201,7 +194,6 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 				j = j2;
 			}
 			return;
-			}
 		}
 	}
 	const int n32 = bytes >> 3;

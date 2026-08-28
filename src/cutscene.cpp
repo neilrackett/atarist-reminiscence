@@ -69,11 +69,6 @@ void Cutscene::sync(int frameDelay) {
 	} else {
 		++_statLate;
 	}
-#ifdef ATARIST
-	// behind schedule: let the next full-page copy skip its VBL
-	// sync rather than spend up to another 20ms waiting
-	ST_copyPaced(pause > 0);
-#endif
 	_tstamp = _stub->getTimeStamp();
 }
 

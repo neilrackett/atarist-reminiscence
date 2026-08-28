@@ -105,11 +105,6 @@ void ST_fillArea(uint8_t *layer, const int16_t *pts, int crx, int cry,
 bool ST_drawPolygonFast(uint8_t *layer, const void *pts, int n,
 		uint8_t colour8, int crx, int cry, int crw, int crh);
 
-// pacing hint from the cutscene player: false = the scene is behind
-// its scripted schedule, so full-page copies skip the VBL sync and
-// take a possible one-frame tear over another 20ms of waiting
-void ST_copyPaced(bool paced);
-
 // Conrad's jacket: logical entry 7 of the Amiga sprite palette
 // (bank 1). The quantiser pins this entry's cluster so a screenful
 // of scenery can never vote the jacket into another colour's slot.
