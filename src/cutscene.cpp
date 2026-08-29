@@ -1258,6 +1258,17 @@ void Cutscene::mainLoop(uint16_t num) {
 	for (int i = 0; i < 0x20; ++i) {
 		_stub->setPaletteEntry(0xC0 + i, &c);
 	}
+	// A scene starts on a black palette, so start its buffer black
+	// too: op_setPalette writes one 16-colour bank at a time, and
+	// whatever the previous scene left in the other bank is not this
+	// scene's colour - the hardware entries above have just been
+	// cleared, so keeping the stale values here only makes the two
+	// disagree. It matters on the ST because the prescan collects
+	// this buffer to choose the scene's 16 hardware slots: carried
+	// colours compete for slots the scene never asked for, and the
+	// loser was Conrad's jacket, quantised into the same red as his
+	// skin whenever a cutscene had played before this one.
+	memset(_palBuf, 0, sizeof(_palBuf));
 	_newPal = false;
 	_hasAlphaColor = false;
 	const uint8_t *p = getCommandData();
