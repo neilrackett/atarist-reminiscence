@@ -49,7 +49,11 @@ all: $(TARGET)
 # Depend on the library's own sources: without this the archive is
 # only ever built when missing, so a submodule update leaves a stale
 # libstdl.a linked against fresh headers.
-STDL_SRCS = $(wildcard $(STDL)/src/*.c) $(wildcard $(STDL)/include/stdl/*.h)
+# STDL's own sources, so editing the library rebuilds the archive.
+# xpad arrives through STDL's submodule at lib/xpad rather than its
+# src/, so it needs naming separately or a bump there goes unnoticed.
+STDL_SRCS = $(wildcard $(STDL)/src/*.c) $(wildcard $(STDL)/include/stdl/*.h) \
+            $(wildcard $(STDL)/lib/xpad/src/*.c)
 
 $(STDL_LIB): $(STDL_SRCS)
 	$(MAKE) -C $(STDL) libstdl.a
