@@ -86,6 +86,13 @@ names (`replicant.spm` renamed to `REPLICAN.SPM` for GEMDOS 8.3).
 `tools/extract-data.sh` extracts and lays them out directly from
 CAPS/SPS `.ipf` disk images — see [tools/README.md](tools/README.md).
 
+There is no music in the Amiga data set: the Amiga score ships as
+separate `.mod` files, and they are sampled music no ST can play
+(there is no DMA sound on a plain ST, and no software mixer here).
+`tools/make-music.sh --download` converts those modules into YM2149
+register streams instead, which every ST can play — a chip version
+of the soundtrack rather than the sampled original.
+
 If you can't find your original Amiga disks, try the
 [TOSEC Commodore Amiga collection](https://ia600803.us.archive.org/view_archive.php?archive=/21/items/Commodore_Amiga_TOSEC_2012_04_10/Commodore_Amiga_TOSEC_2012_04_10.zip).
 
@@ -146,12 +153,22 @@ opened a display taller than 200 lines.
 
 ## To-do
 
-- Non-STE sound effects
-- Non-STE music
-- Make it faster. Measured on level 1: ~12-15 fps on a stock 8MHz ST,
-  ~26 fps on a 16MHz Mega STE. The sprite blit is the remaining hot
-  path and wants hand-written 68000 assembly.
-  Cutscenes already run at the frame delays their scripts ask for.
+- Non-STE sound effects (the YM can carry them; the samples cannot)
+- Make the main menu look more like the original game
+- Wire the YM chip music in: `tools/make-music.sh` already converts
+  the Amiga modules to 21 register streams (~106KB) that play on any
+  ST, but nothing loads them yet. Needs a track-number to filename
+  map in the ST audio path and a decision on shipping them in `DATA\`.
+- Make it faster. Measured on level 1 with `bench`: ~16.5 fps on a
+  stock 8MHz ST, ~29.5 fps on a 16MHz Mega STE. The shifted sprite
+  blit is hand-written 68000 now, so the remaining wins are
+  structural: drawing sprites straight to the screen instead of
+  through the front layer, or baking sprites pre-shifted.
+- Cutscenes still run behind their scripted frame delays: the intro
+  wants ~57s of work against a 27s budget on an 8MHz machine, so
+  they play slow rather than at the pace the scripts ask for.
+  Closing that needs fewer full-page copies and less fill volume,
+  not faster instructions.
 - SDL 1.2 version for TT and Falcon
 
 ## Credits
