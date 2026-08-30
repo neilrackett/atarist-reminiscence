@@ -91,7 +91,13 @@ separate `.mod` files, and they are sampled music no ST can play
 (there is no DMA sound on a plain ST, and no software mixer here).
 `tools/make-music.sh --download` converts those modules into YM2149
 register streams instead, which every ST can play — a chip version
-of the soundtrack rather than the sampled original.
+of the soundtrack rather than the sampled original. Copy the
+resulting `.STM` files into `DATA\` and set `music=true` in
+`RS.CFG`. Without them the game plays as before: each missing track
+is noted once in `RS.LOG` and the scene runs silent. Unlike the
+sampled sound effects this needs no STE — the YM2149 is in every
+ST, and the replay costs nothing measurable (35.20 vs 35.11
+ms/frame).
 
 If you can't find your original Amiga disks, try the
 [TOSEC Commodore Amiga collection](https://ia600803.us.archive.org/view_archive.php?archive=/21/items/Commodore_Amiga_TOSEC_2012_04_10/Commodore_Amiga_TOSEC_2012_04_10.zip).
@@ -113,6 +119,7 @@ defaults to off.
 | `skip_intro`               | Go straight to the title screen, skipping the intro sequence           |
 | `crop_screen`              | Crop 12 lines off the top and bottom instead of squashing 224 into 200 |
 | `overscan`                 | Open the top border: all 224 lines shown natively, nothing dropped     |
+| `music`                    | YM chip music, if the tracks have been built (see below)               |
 | `log_fps`                  | Log the frame rate to `RS.LOG`, averaged over 64 frames                |
 | `bench`                    | Benchmark: time 512 gameplay frames, log the result, then **quit**     |
 | `bypass_protection`        | Skip the copy-protection screen                                        |
@@ -155,10 +162,6 @@ opened a display taller than 200 lines.
 
 - Non-STE sound effects (the YM can carry them; the samples cannot)
 - Make the main menu look more like the original game
-- Wire the YM chip music in: `tools/make-music.sh` already converts
-  the Amiga modules to 21 register streams (~106KB) that play on any
-  ST, but nothing loads them yet. Needs a track-number to filename
-  map in the ST audio path and a decision on shipping them in `DATA\`.
 - Make it faster. Measured on level 1 with `bench`: ~16.5 fps on a
   stock 8MHz ST, ~29.5 fps on a 16MHz Mega STE. The shifted sprite
   blit is hand-written 68000 now, so the remaining wins are

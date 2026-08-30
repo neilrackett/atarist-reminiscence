@@ -76,13 +76,15 @@ for path in sorted(glob.glob(os.path.join(src, "*.mod"))):
     stem = base[:-4]
     if stem.startswith("flashback-"):
         stem = stem[len("flashback-"):]
-    # GEMDOS 8.3, uppercase, uniquified: teleport2/teleporta would
-    # otherwise both truncate to TELEPORT
-    name = stem.upper().replace("_", "")[:8]
-    n, i = name, 1
-    while n in used:
-        n = name[:7] + str(i)
-        i += 1
+    # GEMDOS 8.3, uppercase, underscore dropped. Where a name is too
+    # long, keep its LAST character rather than truncating: teleporta
+    # and teleport2 differ only there and would both become TELEPORT.
+    # The game derives the same name from its own track table
+    # (ATARIST_musicName in src/mixer.cpp) - keep the two in step.
+    up = stem.upper().replace("_", "")
+    n = (up[:7] + up[-1]) if len(up) > 8 else up
+    if n in used:
+        print("  !! %s and %s both map to %s" % (stem, used[n], n))
     used[n] = stem
 
     mid = os.path.join(out, stem + ".mid")

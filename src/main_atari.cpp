@@ -98,6 +98,7 @@ static void initOptions() {
 	g_options.skip_intro = false;
 	g_options.crop_screen = false;
 	g_options.overscan = false;
+	g_options.music = false;
 	g_options.log_fps = false;
 	g_options.bench = false;
 	struct {
@@ -125,6 +126,7 @@ static void initOptions() {
 		{ "skip_intro", &g_options.skip_intro },
 		{ "crop_screen", &g_options.crop_screen },
 		{ "overscan", &g_options.overscan },
+		{ "music", &g_options.music },
 		{ "log_fps", &g_options.log_fps },
 		{ "bench", &g_options.bench },
 		{ 0, 0 }

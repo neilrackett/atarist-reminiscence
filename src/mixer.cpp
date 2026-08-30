@@ -52,6 +52,92 @@ static void ATARIST_playSample(const uint8_t *data, uint32_t len, uint16_t freq,
 }
 #endif
 
+/*
+ * YM chip music. The Amiga score is sampled and this port has no
+ * software mixer, so the modules are converted offline into YM2149
+ * register streams (tools/make-music.sh) and replayed by STDL_Music
+ * off the 50Hz sound tick. That costs almost nothing and works on a
+ * plain ST, where the sampled effects cannot play at all.
+ *
+ * Everything here fails quiet: the streams are not shipped with the
+ * game (they are derived from someone else's copyrighted score), so
+ * a player who has not built them simply gets no music, exactly as
+ * before. Each track is reported missing once, to RS.LOG, rather
+ * than every time the engine asks for it.
+ */
+static STDL_Music *_ymMusic;
+static int _ymTrack = -1;
+static uint32_t _ymMissing;          /* one bit per track, log once */
+
+// DATA\ is GEMDOS 8.3: strip the underscore, uppercase, and where a
+// name is too long keep its last character rather than truncating -
+// teleporta and teleport2 differ only there, and would otherwise
+// both become TELEPORT. tools/make-music.sh names its output with
+// this same rule.
+static void ATARIST_musicName(const char *src, char *out) {
+	char tmp[16];
+	int n = 0;
+	for (const char *p = src; *p && n < 15; ++p) {
+		if (*p != '_') {
+			const char c = *p;
+			tmp[n++] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c;
+		}
+	}
+	tmp[n] = 0;
+	if (n > 8) {
+		memcpy(out, tmp, 7);
+		out[7] = tmp[n - 1];
+		n = 8;
+	} else {
+		memcpy(out, tmp, n);
+	}
+	out[n] = 0;
+}
+
+static bool ATARIST_playMusic(int num) {
+	if (!g_options.music || num < 0 || num * 2 >= ModPlayer::_namesCount) {
+		return false;
+	}
+	if (_ymMusic != 0 && num == _ymTrack && STDL_PlayingMusic()) {
+		return true;                 // already playing this track
+	}
+	// the alternate name is the one the module sets carry
+	const char *want = ModPlayer::_names[num * 2 + 1];
+	if (want == 0) {
+		want = ModPlayer::_names[num * 2];
+	}
+	char stem[16];
+	ATARIST_musicName(want, stem);
+	char path[32];
+	snprintf(path, sizeof(path), "DATA\\%s.STM", stem);
+
+	STDL_Music *m = STDL_LoadMusic(path);
+	if (m == 0) {
+		if (num < 32 && !(_ymMissing & (1u << num))) {
+			_ymMissing |= 1u << num;
+			warning("No music for track %d (%s) - run tools/make-music.sh", num, path);
+		}
+		return false;
+	}
+	if (_ymMusic != 0) {
+		STDL_HaltMusic();
+		STDL_FreeMusic(_ymMusic);
+	}
+	_ymMusic = m;
+	_ymTrack = num;
+	STDL_PlayMusic(_ymMusic, -1);    // loop until the scene ends
+	return true;
+}
+
+static void ATARIST_stopMusic() {
+	if (_ymMusic != 0) {
+		STDL_HaltMusic();
+		STDL_FreeMusic(_ymMusic);
+		_ymMusic = 0;
+		_ymTrack = -1;
+	}
+}
+
 Mixer::Mixer(FileSystem *fs, SystemStub *stub, const PrfMidiDriver *midiDriver, const char *midiSoundFont)
 	: _stub(stub), _musicType(MT_NONE), _cpc(this, fs), _mod(this, fs), _ogg(this, fs), _prf(this, fs, midiDriver, midiSoundFont), _sfx(this) {
 	_musicTrack = -1;
@@ -176,6 +262,14 @@ void Mixer::playMusic(int num, int tempo) {
 			_musicType = MT_SFX;
 		}
 	} else { // cutscene
+#ifdef ATARIST
+		// YM chip music stands in for the .mod score, which needs a
+		// software mixer this port does not have
+		if (ATARIST_playMusic(num)) {
+			_musicType = MT_MOD;
+			return;
+		}
+#endif
 		_mod.play(num, tempo);
 		if (_mod._playing) {
 			_musicType = MT_MOD;
@@ -193,6 +287,9 @@ void Mixer::playMusic(int num, int tempo) {
 
 void Mixer::stopMusic() {
 	debug(DBG_SND, "Mixer::stopMusic()");
+#ifdef ATARIST
+	ATARIST_stopMusic();
+#endif
 	switch (_musicType) {
 	case MT_NONE:
 		break;
