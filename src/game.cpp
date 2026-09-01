@@ -451,6 +451,7 @@ void Game::displayTitleScreenAmiga() {
 	_stub->updateScreen(0);
 	_vid.AMIGA_decodeCmp(_res._scratchBuffer + 6, buf);
 	int h = 0;
+	int shownLevel = -1;   // which selection the screen is showing
 	while (1) {
 		if (h <= kH / 2) {
 			const int y = kH / 2 - h;
@@ -458,16 +459,43 @@ void Game::displayTitleScreenAmiga() {
 			_stub->updateScreen(0);
 			h += 2;
 		} else {
-			static const uint8_t selectedColor = 0xE4;
-			static const uint8_t defaultColor = 0xE8;
-			for (int i = 0; i < Menu::LEVELS_COUNT; ++i) {
-				const char *str = Menu::_levelNames[i];
-				const uint8_t color = (_currentLevel == i) ? selectedColor : defaultColor;
-				const int x = 24;
-				const int y = 24 + i * 16;
-				for (int j = 0; str[j]; ++j) {
-					_vid.AMIGA_drawStringChar(buf, kW, x + j * Video::CHAR_W, y, _res._fnt, color, str[j]);
+			// Only the highlighted line changes here, and a full
+			// 320x224 chunky-to-planar conversion costs 100ms on a
+			// Mega STE and three times that on a plain ST. Redrawing
+			// every pass left the loop polling input once per frame,
+			// which is long enough to miss a joystick tap or a short
+			// keypress outright: several presses could go by before
+			// one happened to straddle a poll. Draw when the
+			// selection moves and spend the rest of the time
+			// listening.
+			if (shownLevel != _currentLevel) {
+				static const int kTextY = 24;   // first name, 16-pixel pitch
+				static const uint8_t selectedColor = 0xE4;
+				static const uint8_t defaultColor = 0xE8;
+				for (int i = 0; i < Menu::LEVELS_COUNT; ++i) {
+					// after the first pass only two lines change colour
+					if (shownLevel >= 0 && i != shownLevel && i != _currentLevel) {
+						continue;
+					}
+					const char *str = Menu::_levelNames[i];
+					const uint8_t color = (_currentLevel == i) ? selectedColor : defaultColor;
+					const int x = 24;
+					const int y = kTextY + i * 16;
+					for (int j = 0; str[j]; ++j) {
+						_vid.AMIGA_drawStringChar(buf, kW, x + j * Video::CHAR_W, y, _res._fnt, color, str[j]);
+					}
 				}
+				// the picture behind the names is untouched, so blit
+				// the lines that swapped colour rather than the screen
+				if (shownLevel < 0) {
+					const int textH = (Menu::LEVELS_COUNT - 1) * 16 + Video::CHAR_H;
+					_stub->copyRect(0, kTextY, kW, textH, buf, kW);
+				} else {
+					_stub->copyRect(0, kTextY + shownLevel * 16, kW, Video::CHAR_H, buf, kW);
+					_stub->copyRect(0, kTextY + _currentLevel * 16, kW, Video::CHAR_H, buf, kW);
+				}
+				_stub->updateScreen(0);
+				shownLevel = _currentLevel;
 			}
 			if (_stub->_pi.dirMask & PlayerInput::DIR_UP) {
 				_stub->_pi.dirMask &= ~PlayerInput::DIR_UP;
@@ -481,8 +509,6 @@ void Game::displayTitleScreenAmiga() {
 					++_currentLevel;
 				}
 			}
-			_stub->copyRect(0, 0, kW, kH, buf, kW);
-			_stub->updateScreen(0);
 		}
 		_stub->processEvents();
 		if (_stub->_pi.quit) {

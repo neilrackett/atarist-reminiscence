@@ -1122,8 +1122,37 @@ void Video::DOS_drawChar(uint8_t c, int16_t y, int16_t x, bool forceDefaultFont)
 
 void Video::AMIGA_drawStringChar(uint8_t *dst, int pitch, int x, int y, const uint8_t *src, uint8_t color, uint8_t chr) {
 	assert(chr >= 32);
+#ifdef ATARIST
+	// AMIGA_decodeIcn walks the icon list from the start and then
+	// unpacks a whole 16x16 cell one bit at a time, which costs 5ms
+	// a character on a Mega STE: drawing a screenful of text took
+	// over a second. Only the top-left 8x8 of each cell is ever
+	// drawn, so keep that much per character and decode each one
+	// once. The font pointer says which font the cache holds, which
+	// is enough here: the Amiga resources load one font and keep it.
+	static const uint8_t *cachedFnt;
+	static uint8_t cache[96][8 * 16];
+	static uint8_t cached[96];
+	const int idx = chr - 32;
+	if (idx < 96) {
+		if (src != cachedFnt) {
+			memset(cached, 0, sizeof(cached));
+			cachedFnt = src;
+		}
+		if (!cached[idx]) {
+			AMIGA_decodeIcn(src, idx, _res->_scratchBuffer);
+			memcpy(cache[idx], _res->_scratchBuffer, sizeof(cache[idx]));
+			cached[idx] = 1;
+		}
+		src = cache[idx];
+	} else {
+		AMIGA_decodeIcn(src, idx, _res->_scratchBuffer);
+		src = _res->_scratchBuffer;
+	}
+#else
 	AMIGA_decodeIcn(src, chr - 32, _res->_scratchBuffer);
 	src = _res->_scratchBuffer;
+#endif
 #ifdef ATARIST
 	// pitch 256 = a planar layer / cutscene page; anything else is a
 	// plain chunky buffer (the 320-wide Amiga title screen)
