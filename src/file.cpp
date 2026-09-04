@@ -47,12 +47,16 @@ struct StdioFile : File_impl {
 	uint32_t size() {
 		uint32_t sz = 0;
 		if (_fp) {
+#ifndef __m68k__
+			// on TOS the stat converts the DOS timestamp with mktime,
+			// which costs the 68000 over 100 ms; seeking is a trap
 			const int f = fileno(_fp);
 			struct stat st;
 			if (fstat(f, &st) == 0) {
 				return st.st_size;
 			}
 			warning("Failed to stat() fileno %d", f);
+#endif
 			const int pos = ftell(_fp);
 			fseek(_fp, 0, SEEK_END);
 			sz = ftell(_fp);

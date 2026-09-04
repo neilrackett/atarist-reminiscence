@@ -122,6 +122,38 @@ void FileSystem_impl::getPathListFromDirectory(const char *dir) {
 		FindClose(h);
 	}
 }
+#elif defined(__m68k__)
+#include <mint/osbind.h>
+// TOS: walk the directory with Fsfirst/Fsnext, whose DTA carries the
+// attribute byte. The readdir+stat route below costs a DOS-to-unix
+// time conversion per entry (mktime with 64-bit divisions in the C
+// library), well over 100 ms each on a 68000 - a quarter of a minute
+// for the data directory.
+void FileSystem_impl::getPathListFromDirectory(const char *dir) {
+	_DTA dta;
+	_DTA *saved = Fgetdta();
+	Fsetdta(&dta);
+	char searchPath[MAXPATHLEN];
+	snprintf(searchPath, sizeof(searchPath), "%s\\*.*", dir);
+	for (char *p = searchPath; *p; ++p) {
+		if (*p == '/') {
+			*p = '\\';
+		}
+	}
+	for (long r = Fsfirst(searchPath, FA_RDONLY | FA_HIDDEN | FA_SYSTEM | FA_DIR); r == 0; r = Fsnext()) {
+		if (dta.dta_name[0] == '.') {
+			continue;
+		}
+		if (dta.dta_attribute & FA_DIR) {
+			char filePath[MAXPATHLEN];
+			snprintf(filePath, sizeof(filePath), "%s/%s", dir, dta.dta_name);
+			getPathListFromDirectory(filePath); // restores our DTA
+		} else {
+			addPath(dir, dta.dta_name);
+		}
+	}
+	Fsetdta(saved);
+}
 #else
 void FileSystem_impl::getPathListFromDirectory(const char *dir) {
 	DIR *d = opendir(dir);
