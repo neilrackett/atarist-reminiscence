@@ -38,10 +38,11 @@ Cutscene::Cutscene(Resource *res, SystemStub *stub, Video *vid)
 	_stPrescan = false;
 	_stPrescanOps = 0;
 	_stSkipDraw = false;
+	_stSkipShow = false;
 	_stUsesCopyScreen = false;
 	_stSkipRun = 0;
 	_stSched = 0;
-	_statSkipped = 0;
+	_statSkipped = _statNoShow = 0;
 	_stPart = 0;
 }
 
@@ -128,10 +129,19 @@ void Cutscene::updateScreen() {
 		++_statSkipped;
 	} else {
 		SWAP(_frontPage, _backPage);
-		const uint32_t t0 = _stub->getTimeStamp();
-		_stub->copyRectPlanar(0, 0, _vid->_w, _vid->_h, _frontPage);
-		_stub->updateScreen(0);
-		_statCopy += _stub->getTimeStamp() - t0;
+		if (_stSkipShow) {
+			// The frame was drawn - it had to be, the next one builds
+			// on it - but nobody has to see it: pushing a page to the
+			// screen is a full-page copy behind a VBL wait, and this
+			// scene is already behind. The pages themselves are
+			// untouched, so the next frame shown is whole.
+			++_statNoShow;
+		} else {
+			const uint32_t t0 = _stub->getTimeStamp();
+			_stub->copyRectPlanar(0, 0, _vid->_w, _vid->_h, _frontPage);
+			_stub->updateScreen(0);
+			_statCopy += _stub->getTimeStamp() - t0;
+		}
 	}
 	stDecideSkip();
 #else
@@ -147,13 +157,25 @@ void Cutscene::updateScreen() {
 // frame ahead, a few in a row at most so the scene never freezes.
 void Cutscene::stDecideSkip() {
 	_stSkipDraw = false;
-	if (!g_options.frame_skip || _creditsSequence || _stUsesCopyScreen) {
+	_stSkipShow = false;
+	if (!g_options.frame_skip || _creditsSequence) {
 		return;
 	}
 	static const int kSkipMax = 3;
-	const int32_t debt = _stub->getTimeStamp() - _stSched;
-	if (debt > 1000 / 60 && _stSkipRun < kSkipMax) {
-		_stSkipDraw = true;
+	// Three frames' worth of lateness, not one: the scripted clock
+	// absorbs a frame that overruns on its own, and a scene with
+	// budget to spare would otherwise drop half its frames to buy
+	// time it was going to spend sleeping anyway.
+	static const int32_t kDebtSkip = 50;
+	const int32_t debt = (int32_t)(_stub->getTimeStamp() - _stSched);
+	if (debt > kDebtSkip && _stSkipRun < kSkipMax) {
+		// A scene that builds each frame on the last has to draw
+		// them all, but it does not have to show them all.
+		if (_stUsesCopyScreen) {
+			_stSkipShow = true;
+		} else {
+			_stSkipDraw = true;
+		}
 		++_stSkipRun;
 	} else {
 		_stSkipRun = 0;
@@ -1410,6 +1432,7 @@ void Cutscene::mainLoop(uint16_t num) {
 #ifdef ATARIST
 	_stSched = _tstamp;
 	_stSkipDraw = false;
+	_stSkipShow = false;
 	_stSkipRun = 0;
 #endif
 
@@ -1671,7 +1694,7 @@ void Cutscene::play() {
 		_textCurBuf = NULL;
 		debug(DBG_CUT, "Cutscene::play() _id=0x%X", _id);
 		_creditsSequence = false;
-		_statFrames = _statLate = _statSkipped = 0;
+		_statFrames = _statLate = _statSkipped = _statNoShow = 0;
 		_statWork = _statBudget = _statCopy = 0;
 		prepare();
 #ifdef ATARIST

@@ -88,10 +88,12 @@ struct Cutscene {
 	// cleared (_clearScreen != 0) always draw: they capture the
 	// background the following frames restore from.
 	bool _stSkipDraw;
+	bool _stSkipShow;         // drawn, but not pushed to the screen
 	bool _stUsesCopyScreen;   // scene builds frames on the previous one
 	int _stSkipRun;
 	uint32_t _stSched;        // scripted clock, in stub time
 	uint16_t _statSkipped;
+	uint16_t _statNoShow;
 	bool stSkipDraw() const { return _stSkipDraw && _clearScreen == 0; }
 	void stDecideSkip();
 	bool _stop;
