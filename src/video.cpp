@@ -28,6 +28,11 @@ Video::Video(Resource *res, SystemStub *stub, WidescreenMode widescreenMode)
 	_tempLayer = (uint8_t *)calloc(1, _layerSize);
 	_tempLayer2 = (uint8_t *)calloc(1, _layerSize);
 	_screenBlocks = (uint8_t *)calloc(1, (_w / SCREENBLOCK_W) * (_h / SCREENBLOCK_H));
+#ifdef ATARIST
+	memset(_blkDirty, 0, sizeof(_blkDirty));
+	memset(_blkShown, 0, sizeof(_blkShown));
+	memset(_blkOwed, 0, sizeof(_blkOwed));
+#endif
 	_fullRefresh = true;
 	_shakeOffset = 0;
 	_charFrontColor = 0;
@@ -78,51 +83,61 @@ void Video::ST_rebakeRoom() {
 // (the front layer is clean, the screen never hears about it).
 // Compared with upstream's 2->1->0, blocks restore once instead of
 // twice.
-// Which blocks of one grid row still owe the screen a blit, as a bit
-// per column (leftmost is the top bit), moving each one on: a fresh
-// mark blits and then awaits its restore, a restored block blits
-// once more and is done. The grid is read a long at a time - a block
-// is clean or already shown when its low seven bits are zero, so
-// four are dismissed with one and-test, and in most frames most of
-// them are.
-static uint16_t blockRowToBlit(uint8_t *p, int cols) {
-	uint16_t mask = 0;
-	for (int i = 0; i < cols; i += 4) {
-		const uint32_t v = *(const uint32_t *)(p + i);
-		if ((v & 0x7f7f7f7fu) == 0) {
-			continue;
+// bits for columns [i, 15] and for columns [0, i]
+static const uint16_t kColsFrom[16] = {
+	0xFFFF, 0x7FFF, 0x3FFF, 0x1FFF, 0x0FFF, 0x07FF, 0x03FF, 0x01FF,
+	0x00FF, 0x007F, 0x003F, 0x001F, 0x000F, 0x0007, 0x0003, 0x0001
+};
+static const uint16_t kColsTo[16] = {
+	0x8000, 0xC000, 0xE000, 0xF000, 0xF800, 0xFC00, 0xFE00, 0xFF00,
+	0xFF80, 0xFFC0, 0xFFE0, 0xFFF0, 0xFFF8, 0xFFFC, 0xFFFE, 0xFFFF
+};
+
+// The copies live in their own functions on purpose: gcc 4.6 ran
+// out of registers in the walk below and spilled the loop counters
+// to the frame, so every iteration of these was three memory
+// read-modify-writes before it moved a byte.
+static void restorePlanes(uint8_t *dst, const uint8_t *src, int groups, int lines) {
+	uint32_t *d = (uint32_t *)dst;
+	const uint32_t *s = (const uint32_t *)src;
+	if (groups == 1) {   // one 16-pixel group is the common case
+		for (int line = lines; --line >= 0; ) {
+			d[0] = s[0];
+			d[1] = s[1];
+			s += kSTRowBytes / 4;
+			d += kSTRowBytes / 4;
 		}
-		for (int k = i; k < i + 4; ++k) {
-			const uint8_t b = p[k];
-			if ((b & 0x7f) == 0) {
-				continue;
-			}
-			p[k] = (b == Video::kBlockOwed) ? Video::kBlockClean : Video::kBlockShown;
-			mask |= (uint16_t)(0x8000 >> k);
-		}
+		return;
 	}
-	return mask;
+	const int skip = (kSTRowBytes >> 2) - groups * 2;
+	for (int line = lines; --line >= 0; ) {
+		for (int n = groups; --n >= 0; ) {
+			*d++ = *s++;
+			*d++ = *s++;
+		}
+		s += skip;
+		d += skip;
+	}
 }
 
-// The same for the blocks that need their background back: those are
-// the ones shown last frame, which is the one state with its top bit
-// set, so four blocks test as one long again.
-static uint16_t blockRowToRestore(uint8_t *p, int cols) {
-	uint16_t mask = 0;
-	for (int i = 0; i < cols; i += 4) {
-		const uint32_t v = *(const uint32_t *)(p + i);
-		if ((v & 0x80808080u) == 0) {
-			continue;
+// the priority plane, two bytes a group: long moves where a pair of
+// groups is aligned, words for what is left
+static void restorePrio(uint8_t *dst, const uint8_t *src, int groups, int lines, int longs) {
+	const int words = groups - longs * 2;
+	for (int line = lines; --line >= 0; ) {
+		const uint32_t *ls = (const uint32_t *)src;
+		uint32_t *ld = (uint32_t *)dst;
+		for (int n = longs; --n >= 0; ) {
+			*ld++ = *ls++;
 		}
-		for (int k = i; k < i + 4; ++k) {
-			if ((p[k] & 0x80) == 0) {
-				continue;
-			}
-			p[k] = Video::kBlockOwed;
-			mask |= (uint16_t)(0x8000 >> k);
+		const uint16_t *ws = (const uint16_t *)ls;
+		uint16_t *wd = (uint16_t *)ld;
+		for (int n = words; --n >= 0; ) {
+			*wd++ = *ws++;
 		}
+		src += kSTPrioRowBytes;
+		dst += kSTPrioRowBytes;
 	}
-	return mask;
 }
 
 void Video::ST_restoreDirty() {
@@ -141,22 +156,16 @@ void Video::ST_restoreDirty() {
 	const int pbx1 = prioAny ? (px1 / SCREENBLOCK_W) : -1;
 	const int pby0 = prioAny ? (py0 / SCREENBLOCK_H) : 0;
 	const int pby1 = prioAny ? (py1 / SCREENBLOCK_H) : -1;
-	uint16_t rowMask[GAMESCREEN_H / SCREENBLOCK_H];
-	uint8_t *p = _screenBlocks;
-	for (int j = 0; j < rows; ++j) {
-		rowMask[j] = blockRowToRestore(p, cols);
-		p += cols;
-	}
 	// Rows that need the same blocks back are restored together, so a
 	// tall sprite costs one setup instead of one per eight-pixel band.
 	for (int j = 0; j < rows; ) {
-		const uint16_t m = rowMask[j];
+		const uint16_t m = _blkShown[j];
 		if (m == 0) {
 			++j;
 			continue;
 		}
 		int j2 = j + 1;
-		while (j2 < rows && rowMask[j2] == m) {
+		while (j2 < rows && _blkShown[j2] == m) {
 			++j2;
 		}
 		const int yy = j * SCREENBLOCK_H;
@@ -179,56 +188,24 @@ void Video::ST_restoreDirty() {
 			const int gx0 = (i * SCREENBLOCK_W) >> 4;
 			const int groups = ((i2 * SCREENBLOCK_W - 1) >> 4) - gx0 + 1;
 			{
-				const uint32_t *s = (const uint32_t *)(_backLayer + yy * kSTRowBytes + gx0 * 8);
-				uint32_t *d = (uint32_t *)(_frontLayer + yy * kSTRowBytes + gx0 * 8);
-				const int skip = (kSTRowBytes - groups * 8) >> 2;
-				if (groups == 1) {
-					// one 16-pixel group is the common case: two long
-					// moves a line and nothing to step through
-					for (int line = lines; --line >= 0; ) {
-						d[0] = s[0];
-						d[1] = s[1];
-						s += kSTRowBytes / 4;
-						d += kSTRowBytes / 4;
-					}
-				} else {
-					for (int line = lines; --line >= 0; ) {
-						for (int n = groups; --n >= 0; ) {
-							*d++ = *s++;
-							*d++ = *s++;
-						}
-						s += skip;
-						d += skip;
-					}
-				}
+				const int off = yy * kSTRowBytes + gx0 * 8;
+				restorePlanes(_frontLayer + off, _backLayer + off, groups, lines);
 				if (j > pby1 || j2 - 1 < pby0 || i > pbx1 || i2 - 1 < pbx0) {
 					i = i2;
 					continue;
 				}
-				// the priority plane, two bytes a group: long moves
-				// where a pair of groups is aligned, words elsewhere
-				const uint8_t *pb = _backLayer + kSTPlaneBytes + yy * kSTPrioRowBytes + gx0 * 2;
-				uint8_t *pf = _frontLayer + kSTPlaneBytes + yy * kSTPrioRowBytes + gx0 * 2;
-				const int longs = ((gx0 & 1) == 0) ? (groups >> 1) : 0;
-				const int words = groups - longs * 2;
-				for (int line = lines; --line >= 0; ) {
-					const uint32_t *ls = (const uint32_t *)pb;
-					uint32_t *ld = (uint32_t *)pf;
-					for (int n = longs; --n >= 0; ) {
-						*ld++ = *ls++;
-					}
-					const uint16_t *ws = (const uint16_t *)ls;
-					uint16_t *wd = (uint16_t *)ld;
-					for (int n = words; --n >= 0; ) {
-						*wd++ = *ws++;
-					}
-					pb += kSTPrioRowBytes;
-					pf += kSTPrioRowBytes;
-				}
+				const int poff = kSTPlaneBytes + yy * kSTPrioRowBytes + gx0 * 2;
+				restorePrio(_frontLayer + poff, _backLayer + poff, groups, lines,
+					((gx0 & 1) == 0) ? (groups >> 1) : 0);
 			}
 			i = i2;
 		}
 		j = j2;
+	}
+	// what was on screen has its background back and owes one blit
+	for (int j = 0; j < rows; ++j) {
+		_blkOwed[j] |= _blkShown[j];
+		_blkShown[j] = 0;
 	}
 }
 #endif
@@ -257,9 +234,15 @@ void Video::markBlockAsDirty(int16_t x, int16_t y, uint16_t w, uint16_t h, int s
 	if (bx2 < bx1) {
 		return;
 	}
+#ifdef ATARIST
+	// one OR a row: the marks are what the two frame walks used to go
+	// looking for, and this is where they were already known
+	const uint16_t m = (uint16_t)(kColsFrom[bx1] & kColsTo[bx2]);
+	for (; by1 <= by2; ++by1) {
+		_blkDirty[by1] |= m;
+	}
+#else
 	uint8_t *row = _screenBlocks + (int16_t)by1 * (int16_t)cols;
-	// the runs are a few blocks wide, where a memset call costs more
-	// than the stores it makes
 	const int n = bx2 - bx1 + 1;
 	for (; by1 <= by2; ++by1) {
 		uint8_t *p = row + bx1;
@@ -268,6 +251,7 @@ void Video::markBlockAsDirty(int16_t x, int16_t y, uint16_t w, uint16_t h, int s
 		}
 		row += cols;
 	}
+#endif
 }
 
 void Video::updateScreen() {
@@ -283,6 +267,11 @@ void Video::updateScreen() {
 		_stub->updateScreen(_shakeOffset);
 		_fullRefresh = false;
 #ifdef ATARIST
+		memset(_blkDirty, 0, sizeof(_blkDirty));
+		memset(_blkShown, 0, sizeof(_blkShown));
+		memset(_blkOwed, 0, sizeof(_blkOwed));
+#endif
+#ifdef ATARIST
 	// A fresh mark blits and then awaits its restore; a restored
 	// block blits once more and is done. Rows needing the same
 	// blocks go up in one call: a sprite spans several eight-pixel
@@ -290,21 +279,15 @@ void Video::updateScreen() {
 	} else {
 		const int cols = _w / SCREENBLOCK_W;
 		const int rows = _h / SCREENBLOCK_H;
-		uint16_t rowMask[GAMESCREEN_H / SCREENBLOCK_H];
-		uint8_t *p = _screenBlocks;
 		int count = 0;
-		for (int j = 0; j < rows; ++j) {
-			rowMask[j] = blockRowToBlit(p, cols);
-			p += cols;
-		}
 		for (int j = 0; j < rows; ) {
-			const uint16_t m = rowMask[j];
+			const uint16_t m = (uint16_t)(_blkDirty[j] | _blkOwed[j]);
 			if (m == 0) {
 				++j;
 				continue;
 			}
 			int j2 = j + 1;
-			while (j2 < rows && rowMask[j2] == m) {
+			while (j2 < rows && (uint16_t)(_blkDirty[j2] | _blkOwed[j2]) == m) {
 				++j2;
 			}
 			int i = 0;
@@ -328,6 +311,13 @@ void Video::updateScreen() {
 				i = i2;
 			}
 			j = j2;
+		}
+		// a fresh mark has been blitted and now awaits its restore;
+		// a restored block has had its second blit and is done
+		for (int j = 0; j < rows; ++j) {
+			_blkShown[j] = _blkDirty[j];
+			_blkDirty[j] = 0;
+			_blkOwed[j] = 0;
 		}
 		if (count != 0) {
 			_stub->updateScreen(_shakeOffset);
@@ -387,6 +377,11 @@ void Video::fullRefresh() {
 	debug(DBG_VIDEO, "Video::fullRefresh()");
 	_fullRefresh = true;
 	memset(_screenBlocks, 0, (_w / SCREENBLOCK_W) * (_h / SCREENBLOCK_H));
+#ifdef ATARIST
+	memset(_blkDirty, 0, sizeof(_blkDirty));
+	memset(_blkShown, 0, sizeof(_blkShown));
+	memset(_blkOwed, 0, sizeof(_blkOwed));
+#endif
 }
 
 void Video::fadeOut() {

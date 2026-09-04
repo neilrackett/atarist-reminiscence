@@ -56,6 +56,16 @@ struct Video {
 	uint8_t *_tempLayer;
 	uint8_t *_tempLayer2;
 #ifdef ATARIST
+	// Dirty-block bookkeeping, a bit per 16-pixel column and three
+	// masks a row: what has been drawn since the last update, what
+	// is on screen awaiting its restore, and what has been restored
+	// and owes the screen one more blit. The same states used to be
+	// a byte a block, which meant walking all 448 of them twice a
+	// frame to find the handful that were set.
+	enum { kBlockRows = GAMESCREEN_H / SCREENBLOCK_H };
+	uint16_t _blkDirty[kBlockRows];
+	uint16_t _blkShown[kBlockRows];
+	uint16_t _blkOwed[kBlockRows];
 	// put the room back in the front layer after a cutscene
 	void ST_rebakeRoom();
 	// restore only recently drawn blocks from the back layer
