@@ -94,7 +94,7 @@ register streams instead, which every ST can play — a chip version
 of the soundtrack rather than the sampled original. Copy the
 resulting `.STM` files into `DATA\` and set `music=true` in
 `RS.CFG`. Without them the game plays as before: each missing track
-is noted once in `RS.LOG` and the scene runs silent. Unlike the
+is noted once in `RS.LOG` (with `logging=true`) and the scene runs silent. Unlike the
 sampled sound effects this needs no STE — the YM2149 is in every
 ST, and the replay costs nothing measurable (35.20 vs 35.11
 ms/frame).
@@ -120,6 +120,7 @@ defaults to off.
 | `crop_screen`              | Crop 12 lines off the top and bottom instead of squashing 224 into 200 |
 | `overscan`                 | Open the top border: all 224 lines shown natively, nothing dropped     |
 | `music`                    | YM chip music, if the tracks have been built (see below)               |
+| `logging`                  | Write progress and warnings to `RS.LOG` (errors are always written)    |
 | `log_fps`                  | Log the frame rate to `RS.LOG`, averaged over 64 frames                |
 | `bench`                    | Benchmark: time 512 gameplay frames, log the result, then **quit**     |
 | `bypass_protection`        | Skip the copy-protection screen                                        |
@@ -136,7 +137,10 @@ defaults to off.
 | `order_inventory_original` | Order inventory items as the original did                              |
 
 The ST-specific ones are `overscan`, `crop_screen`, `skip_intro`,
-`log_fps` and `bench`. `bench` exists because frame rates measured against live play
+`logging`, `log_fps` and `bench`. `logging` is off by default (every
+line is a file append); turn it on to see what the game is doing
+(rooms, cutscenes, missing files),
+and `log_fps` and `bench` switch it on for themselves. `bench` exists because frame rates measured against live play
 are not comparable between runs — the random seed and input timing
 change what is on screen — so it fixes the seed, takes no input and
 runs a set number of frames. It ends by quitting to the desktop,

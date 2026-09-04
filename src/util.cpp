@@ -20,7 +20,9 @@ uint32_t g_debugMask;
 
 #ifdef ATARIST
 // GEMDOS console output lands in screen RAM, so route diagnostics to
-// a log file instead of scribbling over the game.
+// a log file instead of scribbling over the game. Each line is an
+// open/append/close of RS.LOG, so info and warnings are only
+// written with logging=true in RS.CFG; errors always are.
 static void logLine(const char *tag, const char *buf) {
 	FILE *fp = fopen("RS.LOG", "a");
 	if (fp) {
@@ -74,7 +76,9 @@ void warning(const char *msg, ...) {
 	vsnprintf(buf, sizeof(buf), msg, va);
 	va_end(va);
 #ifdef ATARIST
-	logLine("WARNING: ", buf);
+	if (g_options.logging) {
+		logLine("WARNING: ", buf);
+	}
 #else
 	fprintf(stderr, "WARNING: %s!\n", buf);
 #endif
@@ -90,7 +94,9 @@ void info(const char *msg, ...) {
 	vsnprintf(buf, sizeof(buf), msg, va);
 	va_end(va);
 #ifdef ATARIST
-	logLine("", buf);
+	if (g_options.logging) {
+		logLine("", buf);
+	}
 #else
 	fprintf(stdout, "%s\n", buf);
 	fflush(stdout);

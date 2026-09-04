@@ -147,6 +147,7 @@ struct Options {
 	bool music;
 	bool log_fps;
 	bool bench;
+	bool logging;
 };
 
 struct Features {

@@ -101,6 +101,7 @@ static void initOptions() {
 	g_options.music = false;
 	g_options.log_fps = false;
 	g_options.bench = false;
+	g_options.logging = false;
 	struct {
 		const char *name;
 		bool *value;
@@ -129,6 +130,7 @@ static void initOptions() {
 		{ "music", &g_options.music },
 		{ "log_fps", &g_options.log_fps },
 		{ "bench", &g_options.bench },
+		{ "logging", &g_options.logging },
 		{ 0, 0 }
 	};
 	FILE *fp = fopen("RS.CFG", "rb");
@@ -156,6 +158,10 @@ static void initOptions() {
 			}
 		}
 		fclose(fp);
+	}
+	// the two options whose whole output is the log
+	if (g_options.log_fps || g_options.bench) {
+		g_options.logging = true;
 	}
 	if (g_options.bench) {
 		// A benchmark run ends by quitting, which looks exactly like
