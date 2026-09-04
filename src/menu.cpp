@@ -194,6 +194,7 @@ void Menu::displayTitleScreenMac(int num) {
 	if (num == kMacTitleScreen_MacPlay || num == kMacTitleScreen_Presage) {
 		_vid->fullRefresh();
 		_vid->updateScreen();
+		MenuConfirm confirm;
 		do {
 			_stub->sleep(EVENTS_DELAY);
 			_stub->processEvents();
@@ -201,8 +202,7 @@ void Menu::displayTitleScreenMac(int num) {
 				_stub->_pi.escape = false;
 				break;
 			}
-			if (_stub->_pi.enter) {
-				_stub->_pi.enter = false;
+			if (confirm(_stub->_pi)) {
 				break;
 			}
 		} while (!_stub->_pi.quit);
@@ -215,6 +215,7 @@ void Menu::handleInfoScreen() {
 	loadPicture((_res->_lang == LANG_FR) ? "instru_f" : "instru_e");
 	_vid->fullRefresh();
 	_vid->updateScreen();
+	MenuConfirm confirm;
 	do {
 		_stub->sleep(EVENTS_DELAY);
 		_stub->processEvents();
@@ -222,8 +223,7 @@ void Menu::handleInfoScreen() {
 			_stub->_pi.escape = false;
 			break;
 		}
-		if (_stub->_pi.enter) {
-			_stub->_pi.enter = false;
+		if (confirm(_stub->_pi)) {
 			break;
 		}
 	} while (!_stub->_pi.quit);
@@ -236,6 +236,7 @@ void Menu::handleSkillScreen() {
 	_vid->fullRefresh();
 	drawString(_res->getMenuString(LocaleData::LI_12_SKILL_LEVEL), 12, 4, 3);
 	int currentSkill = _skill;
+	MenuConfirm confirm;
 	do {
 		drawString(_res->getMenuString(LocaleData::LI_13_EASY),   15, 14, (currentSkill == 0) ? 2 : 3);
 		drawString(_res->getMenuString(LocaleData::LI_14_NORMAL), 17, 14, (currentSkill == 1) ? 2 : 3);
@@ -271,8 +272,7 @@ void Menu::handleSkillScreen() {
 			_stub->_pi.escape = false;
 			break;
 		}
-		if (_stub->_pi.enter) {
-			_stub->_pi.enter = false;
+		if (confirm(_stub->_pi)) {
 			_skill = currentSkill;
 			return;
 		}
@@ -344,6 +344,7 @@ bool Menu::handleLevelScreen() {
 	_vid->fullRefresh();
 	int currentSkill = _skill;
 	int currentLevel = _level;
+	MenuConfirm confirm;
 	do {
 		for (int i = 0; i < LEVELS_COUNT; ++i) {
 			drawString(_levelNames[i], 5 + i * 2, 4, (currentLevel == i) ? 2 : 3);
@@ -399,8 +400,7 @@ bool Menu::handleLevelScreen() {
 			_stub->_pi.escape = false;
 			break;
 		}
-		if (_stub->_pi.enter) {
-			_stub->_pi.enter = false;
+		if (confirm(_stub->_pi)) {
 			_skill = currentSkill;
 			_level = currentLevel;
 			return true;
@@ -473,6 +473,7 @@ void Menu::handleTitleScreen() {
 		}
 	}
 
+	MenuConfirm confirm;
 	while (!_stub->_pi.quit) {
 
 		int selectedItem = -1;
@@ -523,8 +524,7 @@ void Menu::handleTitleScreen() {
 				currentEntry = 0;
 			}
 		}
-		if (_stub->_pi.enter) {
-			_stub->_pi.enter = false;
+		if (confirm(_stub->_pi)) {
 			selectedItem = currentEntry;
 		}
 		if (selectedItem != -1) {

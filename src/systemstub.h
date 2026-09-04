@@ -43,6 +43,34 @@ struct PlayerInput {
 	bool quit;
 };
 
+// A menu screen's "confirm": Enter, and on the ST the joystick or
+// pad's fire button too. The port delivers fire as Shift, the game's
+// main verb, so it cannot simply be rebound to Enter - without this
+// a player on a stick can move the highlight but has to reach for
+// the keyboard to choose.
+//
+// One of these lives in each menu loop, and starts out assuming fire
+// is held: a button still down when the screen opens (Escape pressed
+// while running, say) has to be released before it counts, or the
+// menu would pick an item the instant it appears.
+struct MenuConfirm {
+	MenuConfirm() : _fireHeld(true) {}
+	bool operator()(PlayerInput &pi) {
+		bool confirmed = pi.enter;
+		pi.enter = false;
+#ifdef ATARIST
+		const bool fire = pi.shift;
+		if (fire && !_fireHeld) {
+			confirmed = true;
+			pi.shift = false;
+		}
+		_fireHeld = fire;
+#endif
+		return confirmed;
+	}
+	bool _fireHeld;
+};
+
 struct ScalerParameters {
 	ScalerType type;
 	char name[32];

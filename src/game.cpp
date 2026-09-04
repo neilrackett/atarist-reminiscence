@@ -452,6 +452,7 @@ void Game::displayTitleScreenAmiga() {
 	_vid.AMIGA_decodeCmp(_res._scratchBuffer + 6, buf);
 	int h = 0;
 	int shownLevel = -1;   // which selection the screen is showing
+	MenuConfirm confirm;
 	while (1) {
 		if (h <= kH / 2) {
 			const int y = kH / 2 - h;
@@ -514,8 +515,7 @@ void Game::displayTitleScreenAmiga() {
 		if (_stub->_pi.quit) {
 			break;
 		}
-		if (_stub->_pi.enter) {
-			_stub->_pi.enter = false;
+		if (confirm(_stub->_pi)) {
 			break;
 		}
 		_stub->sleep(30);
@@ -870,12 +870,12 @@ void Game::showFinalScore() {
 	_vid.drawString(buf, (Video::GAMESCREEN_W - strlen(buf) * Video::CHAR_W) / 2, 40, 0xE5);
 	const char *str = _menu.getLevelPassword(7, _skillLevel);
 	_vid.drawString(str, (Video::GAMESCREEN_W - strlen(str) * Video::CHAR_W) / 2, 16, 0xE7);
+	MenuConfirm confirm;
 	while (!_stub->_pi.quit) {
 		GAME_COPYRECT_FRONT();
 		_stub->updateScreen(0);
 		_stub->processEvents();
-		if (_stub->_pi.enter) {
-			_stub->_pi.enter = false;
+		if (confirm(_stub->_pi)) {
 			break;
 		}
 		_stub->sleep(100);
@@ -965,6 +965,7 @@ bool Game::handleConfigPanel() {
 	enum { MENU_ITEM_ABORT = 1, MENU_ITEM_LOAD = 2, MENU_ITEM_SAVE = 3 };
 	uint8_t colors[] = { 2, 3, 3, 3 };
 	int current = 0;
+	MenuConfirm confirm;
 	while (!_stub->_pi.quit) {
 		_menu.drawString(_res.getMenuString(LocaleData::LI_18_RESUME_GAME), y + 2, 9, colors[0]);
 		_menu.drawString(_res.getMenuString(LocaleData::LI_19_ABORT_GAME), y + 4, 9, colors[1]);
@@ -1005,8 +1006,7 @@ bool Game::handleConfigPanel() {
 		if (prev != current) {
 			SWAP(colors[prev], colors[current]);
 		}
-		if (_stub->_pi.enter) {
-			_stub->_pi.enter = false;
+		if (confirm(_stub->_pi)) {
 			switch (current) {
 			case MENU_ITEM_LOAD:
 				_stub->_pi.load = true;
@@ -1038,6 +1038,7 @@ bool Game::handleContinueAbort() {
 	Color col;
 	_stub->getPaletteEntry(0xE4, &col);
 	memcpy(_vid._tempLayer, _vid._frontLayer, _vid._layerSize);
+	MenuConfirm confirm;
 	while (timeout >= 0 && !_stub->_pi.quit) {
 		const char *str;
 		str = _res.getMenuString(LocaleData::LI_01_CONTINUE_OR_ABORT);
@@ -1066,8 +1067,7 @@ bool Game::handleContinueAbort() {
 				++current_color;
 			}
 		}
-		if (_stub->_pi.enter) {
-			_stub->_pi.enter = false;
+		if (confirm(_stub->_pi)) {
 			return (current_color == 0);
 		}
 		GAME_COPYRECT_FRONT();
