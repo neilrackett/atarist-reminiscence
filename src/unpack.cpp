@@ -7,92 +7,134 @@
 #include "unpack.h"
 #include "util.h"
 
-struct BytekillerCtx {
-	int size;
-	uint32_t crc;
-	uint32_t bits;
-	uint8_t *dst;
-	const uint8_t *src;
-};
+/*
+ * Bytekiller. The stream is read backwards a long at a time and
+ * the output written backwards too; every long carries 32 bits, and
+ * the very first one (the last in the file) has a marker bit above
+ * its data instead of a full 32.
+ *
+ * Bits are taken from the bottom of the current long, most
+ * significant first in the value they build, so an n-bit field is
+ * the bit reverse of the low n bits: one table lookup, where the
+ * reference decoder called a function per bit. Everything lives in
+ * locals, as the Atari ST unpacks every room and sprite bank with
+ * this and it was a visible part of each room change.
+ */
 
-static int nextBit(BytekillerCtx *uc) {
-	int bit = uc->bits & 1;
-	uc->bits >>= 1;
-	if (uc->bits == 0) {
-		uc->bits = READ_BE_UINT32(uc->src); uc->src -= 4;
-		uc->crc ^= uc->bits;
-		bit = uc->bits & 1;
-		uc->bits = (1 << 31) | (uc->bits >> 1);
-	}
-	return bit;
-}
+static uint8_t g_rev8[256];
+static bool g_rev8Ready;
 
-static uint32_t getBits(BytekillerCtx *uc, int count) {
-	uint32_t bits = 0;
-	for (int i = 0; i < count; ++i) {
-		bits = (bits << 1) | nextBit(uc);
-	}
-	return bits;
-}
-
-static void copyBytes(BytekillerCtx *uc, int len, int offset) {
-	uc->size -= len;
-	if (uc->size < 0) {
-		len += uc->size;
-		uc->size = 0;
-	}
-	if (offset != 0) {
-		 for (int i = 0; i < len; ++i, --uc->dst) {
-			*(uc->dst) = *(uc->dst + offset);
+static void initRev8() {
+	for (int b = 0; b < 256; ++b) {
+		uint8_t r = 0;
+		for (int i = 0; i < 8; ++i) {
+			if (b & (1 << i)) {
+				r |= 0x80 >> i;
+			}
 		}
-	} else {
-		for (int i = 0; i < len; ++i, --uc->dst) {
-			*(uc->dst) = (uint8_t)getBits(uc, 8);
-		}
+		g_rev8[b] = r;
 	}
+	g_rev8Ready = true;
 }
+
+// the low n (1..8) bits of x, reversed
+#define BK_REV(x, n) ((uint32_t)g_rev8[(x) & 0xFF] >> (8 - (n)))
+
+#define BK_REFILL() \
+	do { \
+		bits = READ_BE_UINT32(in); in -= 4; \
+		crc ^= bits; \
+		nbits = 32; \
+	} while (0)
+
+// v = the next n (1..8) bits
+#define BK_GET(n, v) \
+	do { \
+		if (nbits >= (n)) { \
+			v = BK_REV(bits, (n)); \
+			bits >>= (n); \
+			nbits -= (n); \
+		} else { \
+			const int k = nbits; \
+			const uint32_t hi = k ? BK_REV(bits, k) : 0; \
+			const int r = (n) - k; \
+			BK_REFILL(); \
+			v = (hi << r) | BK_REV(bits, r); \
+			bits >>= r; \
+			nbits -= r; \
+		} \
+	} while (0)
 
 bool bytekiller_unpack(uint8_t *dst, int dstSize, const uint8_t *src, int srcSize) {
-	BytekillerCtx uc;
-	uc.src = src + srcSize - 4;
-	uc.size = READ_BE_UINT32(uc.src); uc.src -= 4;
-	if (uc.size > dstSize) {
-		warning("Unexpected unpack size %d, buffer size %d", uc.size, dstSize);
+	if (!g_rev8Ready) {
+		initRev8();
+	}
+	const uint8_t *in = src + srcSize - 4;
+	int size = READ_BE_UINT32(in); in -= 4;
+	if (size > dstSize) {
+		warning("Unexpected unpack size %d, buffer size %d", size, dstSize);
 		return false;
 	}
-	uc.dst = dst + uc.size - 1;
-	uc.crc = READ_BE_UINT32(uc.src); uc.src -= 4;
-	uc.bits = READ_BE_UINT32(uc.src); uc.src -= 4;
-	uc.crc ^= uc.bits;
-	while (uc.size > 0) {
-		int code = getBits(&uc, 2);
-		switch (code) {
-		case 0:
-			copyBytes(&uc, getBits(&uc, 3) + 1, 0);
-			break;
-		case 1:
-			copyBytes(&uc, 2, getBits(&uc, 8));
-			break;
-		default:
-			code = ((code & 1) << 1) | nextBit(&uc);
-			switch (code) {
-			case 3:
-				copyBytes(&uc, getBits(&uc, 8) + 9, 0);
-				break;
-			case 2: {
-					const int len = getBits(&uc, 8) + 1;
-					copyBytes(&uc, len, getBits(&uc, 12));
-				}
-				break;
-			default:
-				copyBytes(&uc, code + 3, getBits(&uc, code + 9));
-				break;
+	uint8_t *out = dst + size;
+	uint32_t crc = READ_BE_UINT32(in); in -= 4;
+	uint32_t bits = READ_BE_UINT32(in); in -= 4;
+	crc ^= bits;
+	// the first long's data is whatever sits below its top set bit
+	int nbits = 0;
+	for (uint32_t t = bits; t > 1; t >>= 1) {
+		++nbits;
+	}
+	while (size > 0) {
+		uint32_t code, len, offset;
+		BK_GET(2, code);
+		if (code == 0) {
+			BK_GET(3, len);
+			len += 1;
+			offset = 0;
+		} else if (code == 1) {
+			len = 2;
+			BK_GET(8, offset);
+		} else {
+			uint32_t b;
+			BK_GET(1, b);
+			code = ((code & 1) << 1) | b;
+			if (code == 3) {
+				BK_GET(8, len);
+				len += 9;
+				offset = 0;
+			} else if (code == 2) {
+				BK_GET(8, len);
+				len += 1;
+				BK_GET(8, offset);
+				BK_GET(4, b);
+				offset = (offset << 4) | b;
+			} else {
+				len = code + 3;
+				BK_GET(8, offset);
+				BK_GET(code + 1, b);
+				offset = (offset << (code + 1)) | b;
 			}
-			break;
+		}
+		size -= len;
+		if (size < 0) {
+			len += size;
+			size = 0;
+		}
+		if (offset != 0) {
+			const uint8_t *from = out + offset;
+			while (len-- > 0) {
+				*--out = *--from;
+			}
+		} else {
+			while (len-- > 0) {
+				uint32_t b;
+				BK_GET(8, b);
+				*--out = (uint8_t)b;
+			}
 		}
 	}
-	assert(uc.size == 0);
-	return uc.crc == 0;
+	assert(size == 0);
+	return crc == 0;
 }
 
 struct bitstream_t {
