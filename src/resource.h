@@ -342,6 +342,8 @@ struct Resource {
 	void clearBankData();
 	int getBankDataSize(uint16_t num) const;
 	uint8_t *findBankData(uint16_t num);
+	uint16_t _lastBankNum;      // one-entry memo for findBankData
+	uint8_t *_lastBankPtr;      // 0 when there is nothing to remember
 	uint8_t *loadBankData(uint16_t num);
 
 	void PC98_loadLevelMap(int level);

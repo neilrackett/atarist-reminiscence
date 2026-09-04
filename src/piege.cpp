@@ -156,7 +156,7 @@ void Game::pge_process(LivePGE *pge) {
 		pge_messageAck(pge, le);
 	}
 	const uint8_t *anim_data = _res.getAniData(pge->obj_type);
-	if (_res._readUint16(anim_data) <= pge->anim_seq) {
+	if (_res.readUint16(anim_data) <= pge->anim_seq) {
 		const InitPGE *init_pge = pge->init_PGE;
 		assert(init_pge->obj_node_number < _res._numObjectNodes);
 		ObjectNode *on = _res._objectNodesMap[init_pge->obj_node_number];
@@ -238,11 +238,11 @@ void Game::pge_messageAck(LivePGE *pge, MessagePGE *le) {
 
 set_anim:
 	const uint8_t *anim_data = _res.getAniData(pge->obj_type);
-	uint8_t _dh = _res._readUint16(anim_data);
+	uint8_t _dh = _res.readUint16(anim_data);
 	uint8_t _dl = pge->anim_seq;
 	const uint8_t *anim_frame = anim_data + 6 + _dl * 4;
 	while (_dh > _dl) {
-		if (_res._readUint16(anim_frame) != 0xFFFF) {
+		if (_res.readUint16(anim_frame) != 0xFFFF) {
 			if (_pge_currentPiegeFacingDir) {
 				pge->pos_x -= (int8_t)anim_frame[2];
 			} else {
@@ -277,12 +277,12 @@ void Game::pge_playAnimSound(LivePGE *pge, uint16_t arg2) {
 void Game::pge_setupAnim(LivePGE *pge) {
 	debug(DBG_PGE, "Game::pge_setupAnim() pgeNum=%ld", pge - &_pgeLive[0]);
 	const uint8_t *anim_data = _res.getAniData(pge->obj_type);
-	if (_res._readUint16(anim_data) < pge->anim_seq) {
+	if (_res.readUint16(anim_data) < pge->anim_seq) {
 		pge->anim_seq = 0;
 	}
 	const uint8_t *anim_frame = anim_data + 6 + pge->anim_seq * 4;
-	if (_res._readUint16(anim_frame) != 0xFFFF) {
-		uint16_t fl = _res._readUint16(anim_frame);
+	if (_res.readUint16(anim_frame) != 0xFFFF) {
+		uint16_t fl = _res.readUint16(anim_frame);
 		if (pge->flags & 1) {
 			fl ^= 0x8000;
 			pge->pos_x -= (int8_t)anim_frame[2];
@@ -295,10 +295,10 @@ void Game::pge_setupAnim(LivePGE *pge) {
 			pge->flags |= 2;
 		}
 		pge->flags &= ~8;
-		if (_res._readUint16(anim_data + 4) & 0xFFFF) {
+		if (_res.readUint16(anim_data + 4) & 0xFFFF) {
 			pge->flags |= 8;
 		}
-		pge->anim_number = _res._readUint16(anim_frame) & 0x7FFF;
+		pge->anim_number = _res.readUint16(anim_frame) & 0x7FFF;
 	}
 }
 
@@ -405,22 +405,30 @@ void Game::pge_prepare() {
 			pge = pge->next_PGE_in_room;
 		}
 	}
-	for (uint16_t i = 0; i < _res._pgeNum; ++i) {
-		LivePGE *pge = _pge_liveTable2[i];
-		if (pge && _currentRoom != pge->room_location) {
-			col_preparePiegeState(pge);
+	// A walking pointer and a counter in registers: as an indexed
+	// loop over a member count, gcc 4.6 reloaded both the table
+	// address and the count every iteration, and this runs over
+	// every piege in the level once a frame.
+	{
+		LivePGE **p = _pge_liveTable2;
+		const uint8_t room = _currentRoom;
+		for (int n = _res._pgeNum; --n >= 0; ++p) {
+			LivePGE *pge = *p;
+			if (pge && room != pge->room_location) {
+				col_preparePiegeState(pge);
+			}
 		}
 	}
 }
 
 void Game::pge_setupDefaultAnim(LivePGE *pge) {
 	const uint8_t *anim_data = _res.getAniData(pge->obj_type);
-	if (1 || pge->anim_seq < _res._readUint16(anim_data)) { /* matches disassembly but should probably be >= */
+	if (1 || pge->anim_seq < _res.readUint16(anim_data)) { /* matches disassembly but should probably be >= */
 		pge->anim_seq = 0;
 	}
 	const uint8_t *anim_frame = anim_data + 6 + pge->anim_seq * 4;
-	if (_res._readUint16(anim_frame) != 0xFFFF) {
-		uint16_t f = _res._readUint16(anim_data);
+	if (_res.readUint16(anim_frame) != 0xFFFF) {
+		uint16_t f = _res.readUint16(anim_data);
 		if (pge->flags & 1) {
 			f ^= 0x8000;
 		}
@@ -429,10 +437,10 @@ void Game::pge_setupDefaultAnim(LivePGE *pge) {
 			pge->flags |= 2;
 		}
 		pge->flags &= ~8;
-		if (_res._readUint16(anim_data + 4) & 0xFFFF) {
+		if (_res.readUint16(anim_data + 4) & 0xFFFF) {
 			pge->flags |= 8;
 		}
-		pge->anim_number = _res._readUint16(anim_frame) & 0x7FFF;
+		pge->anim_number = _res.readUint16(anim_frame) & 0x7FFF;
 		debug(DBG_PGE, "Game::pge_setupDefaultAnim() pgeNum=%ld pge->flags=0x%X pge->anim_number=0x%X pge->anim_seq=0x%X", pge - &_pgeLive[0], pge->flags, pge->anim_number, pge->anim_seq);
 	}
 }

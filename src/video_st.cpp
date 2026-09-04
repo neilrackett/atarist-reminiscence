@@ -83,10 +83,19 @@ static STDL_Surface *layerView(uint8_t *layer, bool masked) {
 	enum { N = 8 };
 	static uint8_t *keys[2][N];
 	static STDL_Surface *surfs[2][N];
+	// the caller asks for the same layer over and over - once per
+	// sprite blit - so answer that from one slot before the scan
+	static uint8_t *lastKey[2];
+	static STDL_Surface *lastSurf[2];
 	const int v = masked ? 1 : 0;
+	if (lastKey[v] == layer) {
+		return lastSurf[v];
+	}
 	int i = 0;
 	for (; i < N && keys[v][i]; ++i) {
 		if (keys[v][i] == layer) {
+			lastKey[v] = layer;
+			lastSurf[v] = surfs[v][i];
 			return surfs[v][i];
 		}
 	}
@@ -98,6 +107,8 @@ static STDL_Surface *layerView(uint8_t *layer, bool masked) {
 	                                     masked ? layer + kSTPlaneBytes : 0,
 	                                     masked ? kSTPrioRowBytes : 0);
 	keys[v][i] = layer;
+	lastKey[v] = layer;
+	lastSurf[v] = surfs[v][i];
 	return surfs[v][i];
 }
 

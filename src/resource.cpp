@@ -1387,6 +1387,7 @@ void Resource::clearBankData() {
 #endif
 	_bankBuffersCount = 0;
 	_bankDataHead = _bankData;
+	_lastBankPtr = 0;
 }
 
 int Resource::getBankDataSize(uint16_t num) const {
@@ -1418,9 +1419,17 @@ int Resource::getBankDataSize(uint16_t num) const {
 }
 
 uint8_t *Resource::findBankData(uint16_t num) {
+	// Called a few times a frame while sprites are drawn, and nearly
+	// always for the entry asked for last: the scan below walks every
+	// bank loaded for the room.
+	if (_lastBankPtr && _lastBankNum == num) {
+		return _lastBankPtr;
+	}
 	for (int i = 0; i < _bankBuffersCount; ++i) {
 		if (_bankBuffers[i].entryNum == num) {
-			return _bankBuffers[i].ptr;
+			_lastBankNum = num;
+			_lastBankPtr = _bankBuffers[i].ptr;
+			return _lastBankPtr;
 		}
 	}
 	return 0;
@@ -1445,6 +1454,7 @@ uint8_t *Resource::loadBankData(uint16_t num) {
 	}
 	assert(_bankDataHead + size <= _bankDataTail);
 	if (_bankBuffersCount < (int)ARRAYSIZE(_bankBuffers)) {
+		_lastBankPtr = 0;
 		_bankBuffers[_bankBuffersCount].entryNum = num;
 		_bankBuffers[_bankBuffersCount].ptr = _bankDataHead;
 		++_bankBuffersCount;
