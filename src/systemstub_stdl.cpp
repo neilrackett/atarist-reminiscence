@@ -168,28 +168,21 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 	// loop below - measured faster than the per-call blit setup.
 	// The layer is viewed maskless or the copy would key on the
 	// priority plane.
-	// With the top border open, display fetch starts at line 34
-	// instead of 63: a full-page copy that used to hide in the
-	// border now races the beam and loses intermittently (ghosting),
-	// and the shared-mode BLiTTER (mandatory while a border is open,
-	// see STDL) is slower than the CPU loop anyway. So while the
-	// border is open, big copies skip the BLiTTER, and full-page
-	// ones start at the VBL: the CPU loop writes rows faster than
-	// the beam displays them, so the copy stays ahead - no tearing.
-	if (_ovscOpen) {
-		// Beam race: with the border open the display starts
+	// The BLiTTER is used with a border open as well: STDL now runs
+	// every blit in hog mode and places it from the beam so it ends
+	// before a border ISR window (or splits it around one), so it
+	// neither shares the bus nor delays the flip.
+	if (_ovscOpen && h >= kSTLayerH - 8) {
+		// Beam race: with a border open the display starts
 		// fetching at line 34 instead of 63, so a full-page copy
 		// has to start at the VBL to stay ahead of it - unsynced
 		// it loses intermittently and tears. This sync is not
 		// negotiable against frame pacing: skipping it when a
 		// scene runs late (tried Aug 2026) brought the tearing
-		// straight back. The CPU loop below also stays on the
-		// bus predictably, where a BLiTTER copy contends with the
-		// border ISR's own timing.
-		if (h >= kSTLayerH - 8) {
-			STDL_WaitVBL();
-		}
-	} else if (h >= 32 && gx1 - gx0 >= 8 && _srcW == kSTLayerW
+		// straight back.
+		STDL_WaitVBL();
+	}
+	if (h >= 32 && gx1 - gx0 >= 8 && _srcW == kSTLayerW
 	    && STDL_GetMachineInfo()->has_blitter) {
 		STDL_Surface *bare = ST_layerSurfaceBare((uint8_t *)layer);
 		if (bare) {
@@ -259,7 +252,7 @@ void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int
 	_fade = 256;
 	_shadow = (uint8_t *)malloc(kMaxSrcW * kMaxSrcH);
 	_shadowValid = false;
-	// 224 lines onto the ST's 200: open the top border so all 224
+	// 224 lines onto the ST's 200: open the borders so all 224
 	// display natively (50Hz screens only - a 60Hz picture already
 	// starts on the first possible line), or crop 12 lines off the
 	// top and bottom (every displayed line is intact and screen
@@ -267,10 +260,23 @@ void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int
 	// are hidden), or squash with dst = y * 25 / 28, dropping
 	// collisions
 	_ovscOpen = false;
+	int ovscY = 0;   // screen row the first source line goes to
 	if (g_options.overscan) {
 		if (STDL_OpenTopBorder() != 0) {
 			_ovscOpen = true;
-			info("Top border open: 224 lines shown natively");
+			// Both borders (273 rows) centre the picture: the
+			// 224 lines sit in the middle with black bands above
+			// and below, instead of hanging off the top of the
+			// tube. Costs about 2.5% of an 8MHz frame against
+			// 1.4% for the top border alone.
+			const int both = STDL_OpenBottomBorder();
+			if (both != 0) {
+				ovscY = (both - kMaxSrcH) / 2;
+				info("Both borders open: %d lines, picture centred at row %d", both, ovscY);
+			} else {
+				warning("Bottom border unavailable (%s), picture at the top of the screen",
+					STDL_GetError());
+			}
 		} else {
 			warning("Overscan unavailable (%s), using %s",
 				STDL_GetError(),
@@ -280,7 +286,7 @@ void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int
 	if (_ovscOpen) {
 		for (int y = 0; y < kMaxSrcH; ++y) {
 			_yDrop[y] = 0;
-			_yMap[y] = y;
+			_yMap[y] = (uint8_t)(y + ovscY);
 		}
 	} else if (g_options.crop_screen) {
 		for (int y = 0; y < kMaxSrcH; ++y) {
