@@ -47,6 +47,11 @@ const uint8_t *ST_getRemap();
 // pixels with the mapping already baked in must re-bake when it moves
 uint16_t ST_remapGen();
 
+// as ST_remapGen, but unmoved by a cutscene borrowing the slots: the
+// game's mapping comes back as it was, so room scenery prepared
+// against it is still right
+uint16_t ST_roomGen();
+
 // maskless STDL surface view of a layer (screen copies, layer
 // copies); returns a cached wrapper
 struct STDL_Surface;
@@ -112,9 +117,35 @@ enum { kSTConradJacketEntry = 0x17 };
 
 // whole-layer copy (planes via the BLiTTER where present)
 void ST_copyLayer(uint8_t *dst, const uint8_t *src);
+// planes only: cutscene pages, whose priority plane is not kept
+void ST_copyPage(uint8_t *dst, const uint8_t *src);
 
-// full chunky (256-wide, 8bpp) to planar conversion - load time only
-void ST_convertChunky(uint8_t *layer, const uint8_t *src, int h);
+// Amiga planar sources into a layer with the remap applied (room
+// build). A unit is 8 pixels; a prepared cell is 8 bytes (the
+// remapped plane bytes 0-3, each followed by the mask), and cell
+// buffers sit at even addresses. ST_amigaPrepare reads contiguous planes (plane k
+// at planes + k * planeSize, rows of `units` bytes) and a 1bpp mask
+// of the same shape; ST_amigaTile8 packs one 32-byte 8x8 tile with
+// colour 0 transparent when keyZero. ST_amigaPlace clips to the
+// layer; x is normally a multiple of 8.
+void ST_amigaPrepare(uint8_t *out, const uint8_t *planes, int planeSize, int units, int rows, const uint8_t *mask, uint8_t pal);
+void ST_amigaTile8(uint8_t *out, const uint8_t *tile, uint8_t pal, bool xflip, bool yflip, bool keyZero);
+void ST_amigaPlace(uint8_t *layer, int x, int y, const uint8_t *prep, int units, int rows, bool setPrio);
+
+// ST_amigaPlace for one ST_amigaTile8 cell block that is known to
+// lie inside the layer at a multiple of 8 (the room tile grid)
+void ST_amigaPlaceTile8(uint8_t *layer, int x, int y, const uint8_t *prep, bool setPrio);
+
+// as ST_amigaPlace for a front-to-back build: the layer must start
+// black with a zero priority plane, which serves as per-unit
+// coverage; a cell paints only pixels no earlier call has, so
+// placing a room's list last to first gives the same picture
+// without the overdraw. ST_amigaPlaceCovEnd finishes the build:
+// colour8 goes into every pixel no cell reached (the chunky room's
+// colour 0 was a colour like any other) and the priority plane is
+// cleared for its real job.
+void ST_amigaPlaceCov(uint8_t *layer, int x, int y, const uint8_t *prep, int units, int rows);
+void ST_amigaPlaceCovEnd(uint8_t *layer, uint8_t colour8);
 
 // drawSpriteSub replacement; src indexing matches the chunky code:
 // row-major src[j*pitch +/- i], column-major src[+/-i*pitch + j].

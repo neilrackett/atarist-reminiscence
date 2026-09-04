@@ -20,7 +20,6 @@ Video::Video(Resource *res, SystemStub *stub, WidescreenMode widescreenMode)
 	_h = GAMESCREEN_H * _layerScale;
 #ifdef ATARIST
 	_layerSize = kSTLayerSize;
-	_stagingLayer = (uint8_t *)calloc(1, GAMESCREEN_W * GAMESCREEN_H);
 #else
 	_layerSize = _w * _h;
 #endif
@@ -51,9 +50,6 @@ Video::Video(Resource *res, SystemStub *stub, WidescreenMode widescreenMode)
 }
 
 Video::~Video() {
-#ifdef ATARIST
-	free(_stagingLayer);
-#endif
 	free(_frontLayer);
 	free(_backLayer);
 	free(_tempLayer);
@@ -62,9 +58,11 @@ Video::~Video() {
 }
 
 #ifdef ATARIST
+// The cutscene player used the front layer as a page; the back
+// layer is the room as decoded, with the game's colour mapping,
+// which ST_setCutscenePalMode(false) has just put back.
 void Video::ST_rebakeRoom() {
-	ST_convertChunky(_backLayer, _stagingLayer, GAMESCREEN_H);
-	memcpy(_frontLayer, _backLayer, _layerSize);
+	ST_copyLayer(_frontLayer, _backLayer);
 }
 
 // Restore only the screen blocks the last frame drew (anything drawn
@@ -502,6 +500,7 @@ static void AMIGA_planar8(uint8_t *dst, int w, int h, const uint8_t *src) {
 	}
 }
 
+#ifndef ATARIST
 // bit i of a plane byte (i = 0 leftmost) -> bit 0 of nibble i, so
 // ORing the four planes shifted 0..3 builds eight 4-bit pixels in
 // one 32-bit word instead of 32 bit tests.
@@ -563,7 +562,59 @@ static void AMIGA_planar_mask(uint8_t *dst, int x0, int y0, int w, int h, uint8_
 		dst += Video::GAMESCREEN_W;
 	}
 }
+#endif
 
+#if defined(ATARIST) && defined(__m68k__)
+// The RLE runs are short (a few bytes each), so the memcpy/memset
+// calls of the C version cost more than the bytes they moved: a
+// room's tiles decoded at over a hundred cycles a byte. Straight
+// byte loops, in place.
+__asm__(
+"    .text\n"
+"    .even\n"
+"_AMIGA_decodeRle:\n"
+"    move.l 4(%sp),%a1\n"            /* dst */
+"    move.l 8(%sp),%a0\n"            /* src */
+"    move.l %a2,-(%sp)\n"
+"    moveq  #0,%d0\n"
+"    move.b (%a0)+,%d0\n"
+"    lsl.w  #8,%d0\n"
+"    move.b (%a0)+,%d0\n"
+"    and.w  #0x7FFF,%d0\n"
+"    lea    (%a0,%d0.w),%a2\n"       /* end of the packed data */
+"rle_next:\n"
+"    cmp.l  %a2,%a0\n"
+"    bhs.s  rle_done\n"
+"    moveq  #0,%d0\n"
+"    move.b (%a0)+,%d0\n"
+"    bmi.s  rle_rep\n"
+"    move.l %a0,%d1\n"               /* literal of code+1 bytes, clipped at the end */
+"    add.l  %d0,%d1\n"
+"    addq.l #1,%d1\n"
+"    cmp.l  %a2,%d1\n"
+"    bls.s  rle_lit\n"
+"    move.l %a2,%d0\n"
+"    sub.l  %a0,%d0\n"
+"    subq.w #1,%d0\n"
+"    bmi.s  rle_next\n"
+"rle_lit:\n"
+"    move.b (%a0)+,(%a1)+\n"
+"    dbra   %d0,rle_lit\n"
+"    bra.s  rle_next\n"
+"rle_rep:\n"
+"    neg.w  %d0\n"                   /* 257 - code copies, less one for dbra */
+"    add.w  #256,%d0\n"
+"    move.b (%a0)+,%d1\n"
+"rle_fill:\n"
+"    move.b %d1,(%a1)+\n"
+"    dbra   %d0,rle_fill\n"
+"    bra.s  rle_next\n"
+"rle_done:\n"
+"    move.l (%sp)+,%a2\n"
+"    rts\n"
+);
+extern "C" void AMIGA_decodeRle(uint8_t *dst, const uint8_t *src);
+#else
 static void AMIGA_decodeRle(uint8_t *dst, const uint8_t *src) {
 	const int size = READ_BE_UINT16(src) & 0x7FFF; src += 2;
 	for (int i = 0; i < size; ) {
@@ -583,7 +634,9 @@ static void AMIGA_decodeRle(uint8_t *dst, const uint8_t *src) {
 		dst += code;
 	}
 }
+#endif
 
+#ifndef ATARIST
 static void DOS_drawTileMask(uint8_t *dst, int x0, int y0, int w, int h, uint8_t *m, uint8_t *p, int size) {
 	assert(size == (w * 2 * h));
 	for (int y = 0; y < h; ++y) {
@@ -607,6 +660,170 @@ static void DOS_drawTileMask(uint8_t *dst, int x0, int y0, int w, int h, uint8_t
 	}
 }
 
+#endif
+
+#ifdef ATARIST
+// SGD scenery for the planar layer. A room's placement list names
+// the same tile again and again, out of order, and the original
+// decoder (below) re-unpacks the tile every time the index changes:
+// the jungle rooms place two or three hundred tiles from about a
+// hundred distinct ones, so most of the room build was spent
+// decoding and remapping the same tile for the fifth time.
+//
+// Tiles are prepared once into cells (video_st.cpp) and kept for
+// the whole level, keyed on the SGD data and the room colour
+// mapping: the jungle rooms share most of their scenery, so a
+// second visit or a neighbouring room finds nearly everything
+// ready. The cells live in one pool filled front to back and
+// wrapped; a wrap forgets whatever it overwrites. The pool holds
+// the largest room's set with room to spare, and is released when
+// a level without SGD scenery loads.
+enum {
+	kSgdPoolSize = 96 * 1024,
+	kSgdSlots = 256                     // more than any SGD has tiles
+};
+
+struct SgdSlot {
+	uint8_t *cells;                     // 0: nothing prepared here
+	uint32_t size;                      // bytes of cells
+	uint16_t id;                        // tile index the cells are for
+	uint16_t units;
+	uint16_t rows;
+};
+
+static uint8_t *g_sgdPool;
+static uint32_t g_sgdPos;
+static bool g_sgdWrapped;               // cells beyond g_sgdPos may be live
+static SgdSlot g_sgdSlots[kSgdSlots];
+static const uint8_t *g_sgdData;
+static uint16_t g_sgdGen;
+
+static void ST_sgdForgetAll() {
+	memset(g_sgdSlots, 0, sizeof(g_sgdSlots));
+	g_sgdPos = 0;
+	g_sgdWrapped = false;
+}
+
+static void ST_sgdRelease() {
+	free(g_sgdPool);
+	g_sgdPool = 0;
+	g_sgdData = 0;
+	ST_sgdForgetAll();
+}
+
+// the tile's cells, preparing them if they are not in the pool
+static const SgdSlot *ST_sgdTile(const uint8_t *data, int num, uint8_t *buf, int bufSize) {
+	SgdSlot *slot = &g_sgdSlots[num & (kSgdSlots - 1)];
+	if (slot->cells && slot->id == num) {
+		return slot;
+	}
+	const int32_t offset = READ_BE_UINT32(data + num * 4);
+	if (offset < 0) {
+		const uint8_t *ptr = data - offset;
+		const int size = READ_BE_UINT16(ptr); ptr += 2;
+		assert(size <= bufSize);
+		memcpy(buf, ptr, size);
+	} else {
+		const int size = READ_BE_UINT16(data + offset) & 0x7FFF;
+		assert(size <= bufSize);
+		AMIGA_decodeRle(buf, data + offset);
+	}
+	const int units = ((buf[0] + 1) >> 1) * 2;
+	const int rows = buf[1] + 1;
+	const int planarSize = READ_BE_UINT16(buf + 2);
+	const uint32_t need = (uint32_t)units * rows * 8;
+	assert(need <= kSgdPoolSize);
+	if (g_sgdPos + need > kSgdPoolSize) {
+		g_sgdPos = 0;
+		g_sgdWrapped = true;
+	}
+	uint8_t *cells = g_sgdPool + g_sgdPos;
+	g_sgdPos += need;
+	// whatever was prepared where these cells go is gone
+	if (g_sgdWrapped) {
+		for (int i = 0; i < kSgdSlots; ++i) {
+			SgdSlot *s = &g_sgdSlots[i];
+			if (s->cells && s->cells < cells + need && cells < s->cells + s->size) {
+				s->cells = 0;
+			}
+		}
+	}
+	ST_amigaPrepare(cells, buf + 4 + planarSize, planarSize, units, rows, buf + 4, 0);
+	slot->cells = cells;
+	slot->size = need;
+	slot->id = (uint16_t)num;
+	slot->units = (uint16_t)units;
+	slot->rows = (uint16_t)rows;
+	return slot;
+}
+
+// The list is walked twice: once to resolve every entry to its
+// cells, then backwards to place them front to back with coverage
+// (ST_amigaPlaceCov), so the scenery under later tiles is never
+// painted. Rooms with more entries than the table holds - none in
+// the shipped data - take the plain back-to-front route.
+enum { kSgdMaxPlace = 512 };
+
+struct SgdPlace {
+	const SgdSlot *tile;
+	int16_t x, y;
+};
+
+static void ST_decodeSgd(uint8_t *dst, const uint8_t *src, const uint8_t *data, int level, int room) {
+	if (!g_sgdPool) {
+		g_sgdPool = (uint8_t *)malloc(kSgdPoolSize);
+		if (!g_sgdPool) {
+			error("Unable to allocate SGD cell pool");
+		}
+	}
+	if (g_sgdData != data || g_sgdGen != ST_roomGen()) {
+		ST_sgdForgetAll();
+		g_sgdData = data;
+		g_sgdGen = ST_roomGen();
+	}
+	uint8_t buf[256 * 32];
+	SgdPlace list[kSgdMaxPlace];
+	const SgdSlot *tile = 0;
+	const int count = READ_BE_UINT16(src); src += 2;
+	const bool covered = count <= kSgdMaxPlace;
+	if (!covered) {
+		ST_clearLayer(dst, 0);
+	}
+	int n = 0;
+	for (int i = 0; i < count; ++i) {
+		int d2 = READ_BE_UINT16(src); src += 2;
+		const int x_pos = (int16_t)READ_BE_UINT16(src); src += 2;
+		int y_pos = (int16_t)READ_BE_UINT16(src); src += 2;
+		if (d2 != 0xFFFF) {
+			d2 &= ~(1 << 15);
+			tile = ST_sgdTile(data, d2, buf, sizeof(buf));
+		} else {
+			d2 = tile ? tile->id : -1;
+		}
+		if (level == 0 && room == 26 && d2 == 38 && y_pos == 176) {
+			y_pos += 8;
+		}
+		if (!tile) {
+			continue;
+		}
+		if (!covered) {
+			ST_amigaPlace(dst, x_pos, y_pos, tile->cells, tile->units, tile->rows, false);
+			continue;
+		}
+		list[n].tile = tile;
+		list[n].x = (int16_t)x_pos;
+		list[n].y = (int16_t)y_pos;
+		++n;
+	}
+	if (covered) {
+		while (--n >= 0) {
+			const SgdPlace &p = list[n];
+			ST_amigaPlaceCov(dst, p.x, p.y, p.tile->cells, p.tile->units, p.tile->rows);
+		}
+		ST_amigaPlaceCovEnd(dst, 0);
+	}
+}
+#else
 typedef void (*DrawTileMaskProc)(uint8_t *dst, int x0, int y0, int w, int h, uint8_t *src, uint8_t *mask, int size);
 
 static void decodeSgd(uint8_t *dst, const uint8_t *src, const uint8_t *data, DrawTileMaskProc drawTileMask, int level, int room) {
@@ -646,7 +863,9 @@ static void decodeSgd(uint8_t *dst, const uint8_t *src, const uint8_t *data, Dra
 		drawTileMask(dst, x_pos, y_pos, w, h, buf + 4, buf + 4 + planarSize, planarSize);
 	} while (--count >= 0);
 }
+#endif
 
+#ifndef ATARIST
 static const uint8_t *AMIGA_mirrorTileY(const uint8_t *a2) {
 	static uint8_t buf[32];
 
@@ -675,7 +894,9 @@ static const uint8_t *AMIGA_mirrorTileX(const uint8_t *a2) {
 	return buf;
 }
 
-static void AMIGA_drawTile(uint8_t *dst, int pitch, const uint8_t *src, int pal, const bool xflip, const bool yflip, int colorKey) {
+static void AMIGA_drawTile(uint8_t *dst, int x, int y, const uint8_t *src, int pal, const bool xflip, const bool yflip, int colorKey) {
+	const int pitch = Video::GAMESCREEN_W;
+	dst += y * pitch + x;
 	if (yflip) {
 		src = AMIGA_mirrorTileY(src);
 	}
@@ -700,7 +921,9 @@ static void AMIGA_drawTile(uint8_t *dst, int pitch, const uint8_t *src, int pal,
 	}
 }
 
-static void DOS_drawTile(uint8_t *dst, int pitch, const uint8_t *src, int mask, const bool xflip, const bool yflip, int colorKey) {
+static void DOS_drawTile(uint8_t *dst, int x, int y, const uint8_t *src, int mask, const bool xflip, const bool yflip, int colorKey) {
+	int pitch = Video::GAMESCREEN_W;
+	dst += y * pitch + x;
 	if (yflip) {
 		dst += 7 * pitch;
 		pitch = -pitch;
@@ -726,8 +949,39 @@ static void DOS_drawTile(uint8_t *dst, int pitch, const uint8_t *src, int mask, 
 		dst += pitch;
 	}
 }
+#endif
 
-typedef void (*DrawTileProc)(uint8_t *dst, int pitch, const uint8_t *src, int pal, const bool xflip, const bool yflip, int colorKey);
+#ifdef ATARIST
+// Room tiles straight into the planar layer (see video_st.cpp):
+// prepared once per tile, palette and flip through the colour
+// remap, placed by byte stores. Direct-mapped on the tile's address
+// in the room's bank buffer, and cleared per room, since the cells
+// have that room's remap baked in and the buffer is reallocated.
+// Parallel arrays rather than a struct: a 64-byte cell block
+// indexes by a shift where a struct's odd size costs a multiply
+// call on the 68000.
+static const uint8_t *g_stTileSrc[256];
+static uint8_t g_stTileFlags[256];
+static uint8_t g_stTileCells[256][8 * 8];
+
+static void ST_clearTiles() {
+	memset(g_stTileSrc, 0, sizeof(g_stTileSrc));
+}
+
+static void ST_drawTile(uint8_t *layer, int x, int y, const uint8_t *src, int pal, const bool xflip, const bool yflip, int colorKey) {
+	// pal is 0x00, 0x10, 0x80 or 0x90: bits 4 and 7 only
+	const uint8_t flags = (uint8_t)pal | (xflip ? 1 : 0) | (yflip ? 2 : 0) | (colorKey == 0 ? 4 : 0);
+	const int i = (((uintptr_t)src >> 5) ^ flags) & 255;
+	if (g_stTileSrc[i] != src || g_stTileFlags[i] != flags) {
+		ST_amigaTile8(g_stTileCells[i], src, (uint8_t)pal, xflip, yflip, colorKey == 0);
+		g_stTileSrc[i] = src;
+		g_stTileFlags[i] = flags;
+	}
+	ST_amigaPlaceTile8(layer, x, y, g_stTileCells[i], (pal & 0x80) != 0);
+}
+#endif
+
+typedef void (*DrawTileProc)(uint8_t *dst, int x, int y, const uint8_t *src, int pal, const bool xflip, const bool yflip, int colorKey);
 
 static void decodeLevHelper(uint8_t *dst, const uint8_t *src, int offset10, int offset12, const uint8_t *a5, bool sgdBuf, DrawTileProc drawTile, uint16_t (*read16)(const void *)) {
 	if (offset10 != 0) {
@@ -744,7 +998,7 @@ static void decodeLevHelper(uint8_t *dst, const uint8_t *src, int offset10, int 
 					if ((d3 & 0x8000) != 0) {
 						mask = 0x80 + ((d3 >> 6) & 0x10);
 					}
-					drawTile(dst + y * Video::GAMESCREEN_W + x, Video::GAMESCREEN_W, a2, mask, xflip, yflip, -1);
+					drawTile(dst, x, y, a2, mask, xflip, yflip, -1);
 				}
 			}
 		}
@@ -771,7 +1025,7 @@ static void decodeLevHelper(uint8_t *dst, const uint8_t *src, int offset10, int 
 							mask = 0x90;
 						}
 					}
-					drawTile(dst + y * Video::GAMESCREEN_W + x, Video::GAMESCREEN_W, a2, mask, xflip, yflip, 0);
+					drawTile(dst, x, y, a2, mask, xflip, yflip, 0);
 				}
 			}
 		}
@@ -845,27 +1099,54 @@ void Video::AMIGA_decodeLev(int level, int room) {
 		}
 	} while((d0 & 0x8000) == 0);
 #ifdef ATARIST
-	// build the room in the chunky staging buffer; it is converted
-	// to planar at the end of this function, after the palettes
-	// (and therefore the colour remap) are known
-	uint8_t *roomLayer = _stagingLayer;
-	memset(roomLayer, 0, GAMESCREEN_W * GAMESCREEN_H);
+	// The ST draws the room straight into the planar layer with the
+	// colour remap applied, so the palettes (and therefore the
+	// remap) have to be known before the first tile is drawn.
+	AMIGA_setLevelPalettes(level, tmp);
+	ST_getRemap();                      // the remap is lazy: build it now, so the
+	                                    // generation the caches key on is current
+	ST_clearTiles();
+	if (!_res->_sgd) {
+		ST_sgdRelease();
+	}
+#endif
+#ifdef ATARIST
+	// the chunky room started as colour 0, a colour like any other
+	// once remapped; the SGD decoder fills the layer itself
+	if (tmp[1] != 0) {
+		memset(_frontLayer, 0, _layerSize);
+	} else {
+		ST_clearLayer(_frontLayer, 0);
+	}
 #else
-	uint8_t *roomLayer = _frontLayer;
-	memset(roomLayer, 0, _layerSize);
+	memset(_frontLayer, 0, _layerSize);
 #endif
 	if (tmp[1] != 0) {
 		assert(_res->_sgd);
+#ifdef ATARIST
+		ST_decodeSgd(_frontLayer, tmp + offset10, _res->_sgd, level, room);
+#else
 		DrawTileMaskProc drawTileMask = _res->isAmiga() ? AMIGA_planar_mask : DOS_drawTileMask;
-		decodeSgd(roomLayer, tmp + offset10, _res->_sgd, drawTileMask, level, room);
+		decodeSgd(_frontLayer, tmp + offset10, _res->_sgd, drawTileMask, level, room);
+#endif
 		offset10 = 0;
 	}
+#ifdef ATARIST
+	DrawTileProc drawTile = ST_drawTile;
+#else
 	DrawTileProc drawTile = _res->isAmiga() ? AMIGA_drawTile : DOS_drawTile;
-	decodeLevHelper(roomLayer, tmp, offset10, offset12, buf, tmp[1] != 0, drawTile, _res->_readUint16);
-	free(buf);
-#ifndef ATARIST
-	memcpy(_backLayer, _frontLayer, _layerSize);
 #endif
+	decodeLevHelper(_frontLayer, tmp, offset10, offset12, buf, tmp[1] != 0, drawTile, _res->_readUint16);
+	free(buf);
+#ifdef ATARIST
+	ST_copyLayer(_backLayer, _frontLayer);
+#else
+	memcpy(_backLayer, _frontLayer, _layerSize);
+	AMIGA_setLevelPalettes(level, tmp);
+#endif
+}
+
+void Video::AMIGA_setLevelPalettes(int level, const uint8_t *tmp) {
 	_mapPalSlot1 = READ_BE_UINT16(tmp + 2);
 	_mapPalSlot2 = READ_BE_UINT16(tmp + 4);
 	_mapPalSlot3 = READ_BE_UINT16(tmp + 6);
@@ -890,11 +1171,6 @@ void Video::AMIGA_decodeLev(int level, int room) {
 	setPaletteSlotBE(0x9, (level == 0) ? _mapPalSlot1 : _mapPalSlot3);
 	// inventory
 	setPaletteSlotBE(0xA, _mapPalSlot3);
-#ifdef ATARIST
-	// palettes are final: bake the room into the planar layers
-	ST_convertChunky(_frontLayer, _stagingLayer, GAMESCREEN_H);
-	memcpy(_backLayer, _frontLayer, _layerSize);
-#endif
 }
 
 void Video::AMIGA_decodeSpm(const uint8_t *src, uint8_t *dst) {

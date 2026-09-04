@@ -56,10 +56,7 @@ struct Video {
 	uint8_t *_tempLayer;
 	uint8_t *_tempLayer2;
 #ifdef ATARIST
-	// chunky staging buffer for room decode; layers are planar
-	uint8_t *_stagingLayer;
-	// re-bake the room layers from the staging buffer with the
-	// current palette (used when leaving cutscene palette mode)
+	// put the room back in the front layer after a cutscene
 	void ST_rebakeRoom();
 	// restore only recently drawn blocks from the back layer
 	void ST_restoreDirty();
@@ -95,6 +92,7 @@ struct Video {
 	void DOS_decodeSpc(const uint8_t *src, int w, int h, uint8_t *dst);
 	void DOS_decodeSpm(const uint8_t *dataPtr, uint8_t *dstPtr);
 	void PC98_decodeMap(int level, int room);
+	void AMIGA_setLevelPalettes(int level, const uint8_t *tmp);
 	void AMIGA_decodeLev(int level, int room);
 	void AMIGA_decodeSpm(const uint8_t *src, uint8_t *dst);
 	void AMIGA_decodeIcn(const uint8_t *src, int num, uint8_t *dst);
