@@ -22,14 +22,49 @@ extern "C" {
 static uint8_t *_dmaBuf;
 static uint32_t _dmaBufSize;
 
+// The one-shot fallback needs DMA sound, and a plain ST has none:
+// the conversion below costs an 8MHz machine about 75ms - more than
+// a whole frame - and the play call then fails, so nothing is heard
+// and the game stutters for it. Ask the hardware once, with two
+// bytes of silence, and stay quiet from then on.
+static bool ATARIST_dmaSample() {
+	static int available = -1;
+	if (available < 0) {
+		static const int8_t silence[2] = { 0, 0 };
+		available = (STDL_PlaySample(silence, sizeof(silence), 6258) == 0);
+		STDL_StopSample();
+	}
+	return available != 0;
+}
+
+// volume scaling as a table: the 68000 has no 32-bit multiply, so
+// scaling each of a sample's thousands of bytes cost a __mulsi3 call
+static const uint8_t *ATARIST_volumeTable(uint8_t volume) {
+	static uint8_t table[256];
+	static int builtFor = -1;
+	if (builtFor != (int)volume) {
+		for (int i = 0; i < 256; ++i) {
+			const int16_t s = (int16_t)(int8_t)i;
+			table[i] = (uint8_t)((s * (int16_t)volume) >> 6);
+		}
+		builtFor = volume;
+	}
+	return table;
+}
+
 static void ATARIST_playSample(const uint8_t *data, uint32_t len, uint16_t freq, uint8_t volume) {
 	if (STDL_VoicesOpen()) {
 		STDL_SetVoice(3, (const int8_t *)data, len, 0, 0, freq,
 		              (volume > 64) ? 64 : volume);
 		return;
 	}
+	if (!ATARIST_dmaSample()) {
+		return;
+	}
 	const int rate = (freq > 9000) ? 12517 : 6258;
-	const uint32_t outLen = ((uint32_t)((uint64_t)len * rate / freq) + 1) & ~1;
+	// 32-bit arithmetic: the effects are a few KB each, far short of
+	// the 340KB where len * rate would overflow
+	const uint32_t outLen = ((len * (uint32_t)rate) / freq + 1) & ~1;
 	if (outLen > _dmaBufSize) {
 		::free(_dmaBuf);
 		_dmaBuf = (uint8_t *)malloc(outLen);
@@ -40,9 +75,9 @@ static void ATARIST_playSample(const uint8_t *data, uint32_t len, uint16_t freq,
 	}
 	uint32_t pos = 0; // 16.16 through the source
 	const uint32_t inc = ((uint32_t)freq << 16) / rate;
+	const uint8_t *vol = ATARIST_volumeTable(volume);
 	for (uint32_t i = 0; i < outLen; ++i) {
-		const int8_t s = (int8_t)data[pos >> 16];
-		_dmaBuf[i] = (uint8_t)((s * volume) >> 6);
+		_dmaBuf[i] = vol[data[pos >> 16]];
 		pos += inc;
 		if ((pos >> 16) >= len) {
 			pos = ((uint32_t)len - 1) << 16;
