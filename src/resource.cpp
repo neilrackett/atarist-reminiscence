@@ -24,6 +24,7 @@ Resource::Resource(FileSystem *fs, ResourceType ver, Language lang) {
 	_aba = 0;
 	_mac = 0;
 	_paq = 0;
+	_bigEndianData = g_features->has_bigendian_data;
 	_readUint16 = g_features->has_bigendian_data ? READ_BE_UINT16 : READ_LE_UINT16;
 	_readUint32 = g_features->has_bigendian_data ? READ_BE_UINT32 : READ_LE_UINT32;
 	_scratchBuffer = (uint8_t *)malloc(kScratchBufferSize);

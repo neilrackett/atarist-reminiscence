@@ -135,6 +135,14 @@ struct Resource {
 	ResourcePaq *_paq;
 	uint16_t (*_readUint16)(const void *);
 	uint32_t (*_readUint32)(const void *);
+	bool _bigEndianData;
+	// The pointers above are an indirect call each, which the header
+	// accessors below pay per read - 90 times a frame from the piege
+	// code alone, where the read itself is four instructions. Cold
+	// loaders keep the pointers; the hot accessors branch instead.
+	uint16_t readUint16(const void *p) const {
+		return _bigEndianData ? READ_BE_UINT16(p) : READ_LE_UINT16(p);
+	}
 	bool _hasSeqData;
 	char _entryName[32];
 	uint8_t *_fnt;
@@ -252,7 +260,7 @@ struct Resource {
 			const int offset = READ_BE_UINT16(_ani + 2 + num * 2);
 			return _ani + offset;
 		}
-		const int offset = _readUint16(_ani + 2 + num * 2);
+		const int offset = readUint16(_ani + 2 + num * 2);
 		return _ani + 2 + offset;
 	}
 	const uint8_t *getTextString(int level, int num) const {
@@ -291,7 +299,7 @@ struct Resource {
 			}
 			return p + READ_LE_UINT16(p + num * 2);
 		}
-		return _tbn + _readUint16(_tbn + num * 2);
+		return _tbn + readUint16(_tbn + num * 2);
 	}
 	const uint8_t *getGameString(int num) const {
 		if (_type == kResourceTypeMac) {

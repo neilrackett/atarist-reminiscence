@@ -16,22 +16,32 @@
 #undef ARRAYSIZE
 #define ARRAYSIZE(a) (int)(sizeof(a)/sizeof(a[0]))
 
-inline uint16_t READ_BE_UINT16(const void *ptr) {
+// gcc 4.6 will not inline into a function it considers large, and
+// the engine's per-frame workers are exactly that: the profile found
+// 45840 calls a run into an out-of-line copy of READ_BE_UINT16, 90
+// times a frame at ~90 cycles each for a two-byte read.
+#ifdef __GNUC__
+#define INLINE_ALWAYS inline __attribute__((always_inline))
+#else
+#define INLINE_ALWAYS inline
+#endif
+
+INLINE_ALWAYS uint16_t READ_BE_UINT16(const void *ptr) {
 	const uint8_t *b = (const uint8_t *)ptr;
 	return (b[0] << 8) | b[1];
 }
 
-inline uint32_t READ_BE_UINT32(const void *ptr) {
+INLINE_ALWAYS uint32_t READ_BE_UINT32(const void *ptr) {
 	const uint8_t *b = (const uint8_t *)ptr;
 	return (b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3];
 }
 
-inline uint16_t READ_LE_UINT16(const void *ptr) {
+INLINE_ALWAYS uint16_t READ_LE_UINT16(const void *ptr) {
 	const uint8_t *b = (const uint8_t *)ptr;
 	return (b[1] << 8) | b[0];
 }
 
-inline uint32_t READ_LE_UINT32(const void *ptr) {
+INLINE_ALWAYS uint32_t READ_LE_UINT32(const void *ptr) {
 	const uint8_t *b = (const uint8_t *)ptr;
 	return (b[3] << 24) | (b[2] << 16) | (b[1] << 8) | b[0];
 }
