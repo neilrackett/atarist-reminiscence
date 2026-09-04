@@ -60,6 +60,7 @@ struct SystemStub_STDL : SystemStub {
 	uint8_t _yMap[kMaxSrcH];   // source line -> screen line
 	uint8_t _yDrop[kMaxSrcH];  // 1 = line not displayed
 	bool _ovscOpen;            // top border open: display starts line 34
+	bool _yLinear;             // no line dropped: rows step by a constant
 	// key releases are applied at the start of the *next* poll so a
 	// press+release inside one slow frame is still seen by the game
 	uint8_t _upDirMask;
@@ -212,6 +213,34 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 		}
 	}
 	const int n32 = bytes >> 3;
+	// With every line displayed the destination row is a constant
+	// step from the last, so the per-row address arithmetic - two
+	// table reads and two products - is hoisted out of the loop.
+	// These runs are small (a sprite's worth of blocks) and were
+	// spending more time finding their rows than copying them.
+	if (_yLinear) {
+		const uint8_t *s = layer + y * kSTRowBytes + (gx0 << 3);
+		uint8_t *d = _screen->pixels + _yMap[y] * kScreenStride + xOffBytes + (gx0 << 3);
+		if (bytes == kSTRowBytes) {
+			for (int j = h; --j >= 0; ) {
+				copyRow128((uint32_t *)d, (const uint32_t *)s);
+				s += kSTRowBytes;
+				d += kScreenStride;
+			}
+			return;
+		}
+		for (int j = h; --j >= 0; ) {
+			const uint32_t *src = (const uint32_t *)s;
+			uint32_t *dst = (uint32_t *)d;
+			for (int n = n32; --n >= 0; ) {
+				*dst++ = *src++;
+				*dst++ = *src++;
+			}
+			s += kSTRowBytes;
+			d += kScreenStride;
+		}
+		return;
+	}
 	for (int j = 0; j < h; ++j) {
 		const int sy = y + j;
 		if (_yDrop[sy]) {
@@ -301,6 +330,13 @@ void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int
 			_yDrop[y] = (d == prev) ? 1 : 0;
 			_yMap[y] = d;
 			prev = d;
+		}
+	}
+	_yLinear = true;
+	for (int y = 0; y < kMaxSrcH; ++y) {
+		if (_yDrop[y]) {
+			_yLinear = false;
+			break;
 		}
 	}
 	setScreenSize(w, h);

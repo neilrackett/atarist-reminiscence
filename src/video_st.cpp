@@ -25,6 +25,60 @@ extern "C" {
 // view composes - sprites consult the priority plane - while the bare
 // view presents: a whole-content copy through the masked view would
 // colour-key on that plane and drop foreground pixels.
+// What has written a priority plane since the last frame's restore,
+// as one bounding box. The plane changes only where something marks
+// or clears it - the fills, and the few sprites drawn with priority,
+// which in an ordinary frame is the inventory icon in the corner -
+// so the per-block restore of it (measured at 2.1ms a frame on an
+// 8MHz ST) is skipped everywhere the box does not reach. Writers
+// report their own rectangle; the ones that cover a layer say so
+// with ST_prioTouched.
+static int16_t g_prioX0, g_prioY0, g_prioX1 = -1, g_prioY1 = -1;
+
+void ST_prioTouchedRect(int x, int y, int w, int h) {
+	if (w <= 0 || h <= 0) {
+		return;
+	}
+	const int x1 = x + w - 1;
+	const int y1 = y + h - 1;
+	if (g_prioX1 < g_prioX0) {
+		g_prioX0 = (int16_t)x;
+		g_prioY0 = (int16_t)y;
+		g_prioX1 = (int16_t)x1;
+		g_prioY1 = (int16_t)y1;
+		return;
+	}
+	if (x < g_prioX0) {
+		g_prioX0 = (int16_t)x;
+	}
+	if (y < g_prioY0) {
+		g_prioY0 = (int16_t)y;
+	}
+	if (x1 > g_prioX1) {
+		g_prioX1 = (int16_t)x1;
+	}
+	if (y1 > g_prioY1) {
+		g_prioY1 = (int16_t)y1;
+	}
+}
+
+void ST_prioTouched() {
+	ST_prioTouchedRect(0, 0, kSTLayerW, kSTLayerH);
+}
+
+bool ST_takePrioRect(int *x0, int *y0, int *x1, int *y1) {
+	if (g_prioX1 < g_prioX0) {
+		return false;
+	}
+	*x0 = g_prioX0;
+	*y0 = g_prioY0;
+	*x1 = g_prioX1;
+	*y1 = g_prioY1;
+	g_prioX0 = g_prioY0 = 0;
+	g_prioX1 = g_prioY1 = -1;
+	return true;
+}
+
 static STDL_Surface *layerView(uint8_t *layer, bool masked) {
 	enum { N = 8 };
 	static uint8_t *keys[2][N];
@@ -568,6 +622,7 @@ void ST_amigaTile8(uint8_t *out, const uint8_t *tile, uint8_t pal, bool xflip, b
 }
 
 void ST_amigaPlaceTile8(uint8_t *layer, int x, int y, const uint8_t *prep, bool setPrio) {
+	ST_prioTouched();
 	const int bx = x >> 3;
 	placeTile8Asm(layer + y * kSTRowBytes + ((bx >> 1) << 3) + (bx & 1),
 		layer + kSTPlaneBytes + y * kSTPrioRowBytes + bx,
@@ -575,6 +630,7 @@ void ST_amigaPlaceTile8(uint8_t *layer, int x, int y, const uint8_t *prep, bool 
 }
 
 void ST_amigaPlace(uint8_t *layer, int x, int y, const uint8_t *prep, int units, int rows, bool setPrio) {
+	ST_prioTouched();
 	int r0 = 0, r1 = rows;
 	if (y < 0) {
 		r0 = -y;
@@ -803,6 +859,7 @@ extern "C" void placeCellsCovAsm(uint8_t *d, uint8_t *cov, const uint8_t *cells,
 #endif
 
 void ST_amigaPlaceCov(uint8_t *layer, int x, int y, const uint8_t *prep, int units, int rows) {
+	ST_prioTouched();
 	if (!g_spreadReady) {
 		initSpread();
 	}
@@ -934,6 +991,7 @@ extern "C" void fillUncoveredAsm(uint8_t *layer, const uint32_t *notRep, uint32_
 #endif
 
 void ST_amigaPlaceCovEnd(uint8_t *layer, uint8_t colour8) {
+	ST_prioTouched();
 	if (!g_spreadReady) {
 		initSpread();
 	}
@@ -967,6 +1025,7 @@ void ST_drawSprite(uint8_t *layer, const uint8_t *src, int pitch, int x, int y, 
 	}
 	if (setPrio) {
 		f |= STDL_I8_MARK;
+		ST_prioTouchedRect(x, y, w, h);
 	}
 	STDL_BlitIndexed8(s, src, pitch, x, y, w, h, map16, f);
 }
@@ -998,7 +1057,29 @@ struct SprEntry {
 	uint16_t *planes;       // groups*4 words per row
 	uint16_t *mask;         // groups words per row
 	int cap;                // usable words at planes
+	// the bake trimmed to what is actually drawn: cels carry
+	// transparent margins, and a masked-off word still costs the
+	// blit its shift and its read-modify-write
+	uint8_t offG, useG;     // groups skipped at the left, groups kept
+	uint8_t offY, useH;     // rows skipped at the top, rows kept
+	// A sprite that stays where it is gets a copy shifted into its
+	// destination phase, so the blit runs aligned: the shift chain
+	// costs an extra ~120 cycles a group-row over an aligned merge,
+	// and a sprite that has not moved pays it every frame.
+	uint16_t *shBlock;      // allocation base (guard words first)
+	uint16_t *shPlanes;     // (useG + 1) * 4 words per row
+	uint16_t *shMask;       // (useG + 1) words per row
+	int shCap;              // usable words at shPlanes
+	uint8_t shPhase;        // phase the copy holds, 0 = none
+	uint8_t shG;            // groups in the copy
+	uint8_t lastPhase;      // phase the bake was last drawn at
 };
+
+// Pre-shifted copies are only worth their memory for the handful of
+// sprites on screen at once, so the pool is small and a slot only
+// takes one when it has been drawn at the same phase twice.
+enum { kShMax = 12 };
+static int g_shCount;
 
 static SprEntry g_spr[kSprSlots];
 
@@ -1024,7 +1105,12 @@ static inline void bakeBoundsAdd(const uint8_t *p) {
 void ST_flushSpriteCache() {
 	for (int i = 0; i < kSprSlots; ++i) {
 		g_spr[i].src = 0;
+		free(g_spr[i].shBlock);
+		g_spr[i].shBlock = 0;
+		g_spr[i].shCap = 0;
+		g_spr[i].shPhase = 0;
 	}
+	g_shCount = 0;
 	for (int i = 0; i < kSeen; ++i) {
 		g_seenSrc[i] = 0;
 	}
@@ -1113,6 +1199,41 @@ static bool bakeSprite(SprEntry *e, const uint8_t *src, int pitch, int w, int h,
 	STDL_BlitIndexed8(scratch, src, pitch, 0, 0, w, h, map16, f);
 	memset(e->block, 0, kGuard * sizeof(uint16_t));
 	memset(e->planes + words, 0, kGuard * sizeof(uint16_t));
+	// Trim: a mask word of 0xFFFF is a group of sixteen pixels that
+	// draws nothing, and rows and columns of those sit around most
+	// cels. Finding them costs one pass over the mask, once per
+	// bake; the blit then skips them every time it runs.
+	{
+		int y0 = h, y1 = -1, g0 = groups, g1 = -1;
+		const uint16_t *m = e->mask;
+		for (int r = 0; r < h; ++r, m += groups) {
+			for (int g = 0; g < groups; ++g) {
+				if (m[g] == 0xFFFF) {
+					continue;
+				}
+				if (r < y0) {
+					y0 = r;
+				}
+				y1 = r;
+				if (g < g0) {
+					g0 = g;
+				}
+				if (g > g1) {
+					g1 = g;
+				}
+			}
+		}
+		if (y1 < 0) {          // nothing drawn at all
+			y0 = y1 = 0;
+			g0 = g1 = 0;
+		}
+		e->offG = (uint8_t)g0;
+		e->useG = (uint8_t)(g1 - g0 + 1);
+		e->offY = (uint8_t)y0;
+		e->useH = (uint8_t)(y1 - y0 + 1);
+	}
+	e->shPhase = 0;
+	e->lastPhase = 0;
 	return true;
 }
 
@@ -1120,7 +1241,66 @@ static bool bakeSprite(SprEntry *e, const uint8_t *src, int pitch, int w, int h,
 // game's priority plane, so UNDER passes the sprite behind marked
 // foreground and MARK claims it - the same semantics the chunky path
 // gets from STDL_BlitIndexed8.
-static void blitBaked(uint8_t *layer, const SprEntry *e, int x, int y, bool respectPrio, bool setPrio) {
+// Shift the trimmed bake right by `phase` into its own copy, one
+// group wider so the pixels pushed out of the last group have
+// somewhere to land. Output pixel i of group g is source pixel
+// 16g + i - phase, which is the top of a 32-bit window over the two
+// neighbouring source words; the mask shifts the same way with
+// transparent fill at both ends.
+static bool buildShifted(SprEntry *e, int phase) {
+	const int sg = e->useG + 1;
+	const int rows = e->useH;
+	const int words = sg * 4 * rows + sg * rows;
+	enum { kGuard = 4 };
+	if (e->shCap < words) {
+		if (!e->shBlock && g_shCount >= kShMax) {
+			return false;
+		}
+		if (!e->shBlock) {
+			++g_shCount;
+		}
+		free(e->shBlock);
+		e->shBlock = (uint16_t *)malloc((words + 2 * kGuard) * sizeof(uint16_t));
+		if (!e->shBlock) {
+			e->shCap = 0;
+			--g_shCount;
+			return false;
+		}
+		e->shCap = words;
+	}
+	e->shPlanes = e->shBlock + kGuard;
+	e->shMask = e->shPlanes + sg * 4 * rows;
+	e->shG = (uint8_t)sg;
+	const uint16_t *sp = e->planes + e->offY * e->groups * 4 + e->offG * 4;
+	const uint16_t *sm = e->mask + e->offY * e->groups + e->offG;
+	uint16_t *dp = e->shPlanes;
+	uint16_t *dm = e->shMask;
+	const int last = e->useG;
+	for (int row = rows; --row >= 0; ) {
+		for (int g = 0; g < sg; ++g) {
+			const uint16_t *l = (g == 0) ? 0 : sp + (g - 1) * 4;
+			const uint16_t *r = (g < last) ? sp + g * 4 : 0;
+			for (int pl = 0; pl < 4; ++pl) {
+				const uint32_t hi = l ? l[pl] : 0;
+				const uint32_t lo = r ? r[pl] : 0;
+				dp[g * 4 + pl] = (uint16_t)(((hi << 16) | lo) >> phase);
+			}
+			const uint32_t hm = (g == 0) ? 0xFFFF : sm[g - 1];
+			const uint32_t lm = (g < last) ? sm[g] : 0xFFFF;
+			dm[g] = (uint16_t)(((hm << 16) | lm) >> phase);
+		}
+		sp += e->groups * 4;
+		sm += e->groups;
+		dp += sg * 4;
+		dm += sg;
+	}
+	memset(e->shBlock, 0, kGuard * sizeof(uint16_t));
+	memset(e->shPlanes + words, 0, kGuard * sizeof(uint16_t));
+	e->shPhase = (uint8_t)phase;
+	return true;
+}
+
+static void blitBaked(uint8_t *layer, SprEntry *e, int x, int y, bool respectPrio, bool setPrio) {
 	STDL_Surface *dst = layerView(layer, true);
 	if (!dst) {
 		return;
@@ -1140,32 +1320,58 @@ static void blitBaked(uint8_t *layer, const SprEntry *e, int x, int y, bool resp
 		// garbage, and that sprite drew as confetti ever after.
 		STDL_SetColourKey(view, 1, STDL_TRANSPARENT);
 	}
-	view->pixels = (uint8_t *)e->planes;
-	view->w = (int16_t)(e->groups * 16);
-	view->h = (int16_t)e->h;
-	view->stride = (uint16_t)(e->groups * 8);
-	view->mask = (uint8_t *)e->mask;
-	view->maskstride = (uint16_t)(e->groups * 2);
+	// The view starts at the first group and row that draw anything;
+	// the stride still steps whole bake rows. Where a pre-shifted
+	// copy is held for this phase the blit runs from that instead,
+	// landing on a group boundary: the same pixels, no shift chain.
+	const int dx = x + e->offG * 16;
+	const int phase = dx & 15;
+	int useW, stride, maskStride, dstX;
+	const uint16_t *planes, *mask;
+	if (phase != 0 && (e->shPhase == phase
+	    || (e->lastPhase == phase && buildShifted(e, phase)))) {
+		useW = e->shG * 16;
+		stride = e->shG * 8;
+		maskStride = e->shG * 2;
+		planes = e->shPlanes;
+		mask = e->shMask;
+		dstX = dx & ~15;
+	} else {
+		e->lastPhase = (uint8_t)phase;
+		useW = e->useG * 16;
+		stride = e->groups * 8;
+		maskStride = e->groups * 2;
+		planes = e->planes + e->offY * e->groups * 4 + e->offG * 4;
+		mask = e->mask + e->offY * e->groups + e->offG;
+		dstX = dx;
+	}
+	view->pixels = (uint8_t *)planes;
+	view->w = (int16_t)useW;
+	view->h = (int16_t)e->useH;
+	view->stride = (uint16_t)stride;
+	view->mask = (uint8_t *)mask;
+	view->maskstride = (uint16_t)maskStride;
 	view->clip.x = 0;
 	view->clip.y = 0;
-	view->clip.w = (uint16_t)(e->groups * 16);
-	view->clip.h = (uint16_t)e->h;
+	view->clip.w = (uint16_t)useW;
+	view->clip.h = (uint16_t)e->useH;
 
 	STDL_Rect sr, dr;
 	sr.x = 0;
 	sr.y = 0;
-	sr.w = (uint16_t)e->w;
-	sr.h = (uint16_t)e->h;
-	dr.x = (int16_t)x;
-	dr.y = (int16_t)y;
-	dr.w = (uint16_t)e->w;
-	dr.h = (uint16_t)e->h;
+	sr.w = (uint16_t)useW;
+	sr.h = (uint16_t)e->useH;
+	dr.x = (int16_t)dstX;
+	dr.y = (int16_t)(y + e->offY);
+	dr.w = sr.w;
+	dr.h = sr.h;
 	unsigned f = 0;
 	if (respectPrio) {
 		f |= STDL_BLIT_UNDER;
 	}
 	if (setPrio) {
 		f |= STDL_BLIT_MARK;
+		ST_prioTouchedRect(dstX, y + e->offY, useW, e->useH);
 	}
 	STDL_BlitSurfaceEx(view, &sr, dst, &dr, f);
 }
@@ -2076,6 +2282,7 @@ void ST_fillRect(uint8_t *layer, int x, int y, int w, int h, uint8_t colour8) {
 	if (w <= 0 || h <= 0) {
 		return;
 	}
+	ST_prioTouchedRect(x, y, w, h);
 	const uint8_t v = ST_getRemap()[colour8];
 	const bool setPrio = (colour8 & 0x80) != 0;
 	for (int j = 0; j < h; ++j) {
@@ -2092,6 +2299,7 @@ void ST_hspan(uint8_t *layer, int x1, int x2, int y, uint8_t colour8) {
 	if (x1 > x2) {
 		return;
 	}
+	ST_prioTouchedRect(x1, y, x2 - x1 + 1, 1);
 	fillRow(layer, x1, x2 - x1 + 1, y, ST_getRemap()[colour8], (colour8 & 0x80) != 0);
 }
 
@@ -2101,6 +2309,7 @@ void ST_hspan(uint8_t *layer, int x1, int x2, int y, uint8_t colour8) {
 // were costing more than the fills for the average 15-pixel span.
 void ST_fillArea(uint8_t *layer, const int16_t *pts, int crx, int cry,
 		int crw, uint8_t v, bool setPrio) {
+	ST_prioTouched();
 	int y = cry + *pts++;
 	int x1 = *pts++;
 	if (x1 < 0) {
@@ -2299,6 +2508,7 @@ bool ST_drawPolygonFast(uint8_t *layer, const void *ptsv, int n,
 // polygon colour once instead of per span (a cutscene frame emits
 // hundreds of spans, and the remap fetch was pure overhead on each)
 void ST_hspanV(uint8_t *layer, int x1, int x2, int y, uint8_t v, bool setPrio) {
+	ST_prioTouched();
 	if (y < 0 || y >= kSTLayerH) {
 		return;
 	}
@@ -2317,6 +2527,7 @@ void ST_hspanV(uint8_t *layer, int x1, int x2, int y, uint8_t v, bool setPrio) {
 // each covered pixel, translate, write back. Outside cutscene mode
 // (no representative table) it falls back to an opaque fill.
 void ST_hspanOr(uint8_t *layer, int x1, int x2, int y, uint8_t colour8) {
+	ST_prioTouched();
 	if (y < 0 || y >= kSTLayerH) {
 		return;
 	}
@@ -2362,6 +2573,7 @@ void ST_hspanOr(uint8_t *layer, int x1, int x2, int y, uint8_t colour8) {
 }
 
 void ST_drawPoint(uint8_t *layer, int x, int y, uint8_t colour8) {
+	ST_prioTouched();
 	if (x < 0 || x >= kSTLayerW || y < 0 || y >= kSTLayerH) {
 		return;
 	}
@@ -2413,6 +2625,7 @@ static inline void copyBlock(uint8_t *dst, const uint8_t *src) {
 }
 
 void ST_copyLayer(uint8_t *dst, const uint8_t *src) {
+	ST_prioTouched();
 	copyBlock<kSTPlaneBytes + kSTPrioRowBytes * kSTLayerH>(dst, src);
 }
 
@@ -2424,6 +2637,7 @@ void ST_copyPage(uint8_t *dst, const uint8_t *src) {
 }
 
 void ST_clearLayer(uint8_t *layer, uint8_t colour8) {
+	ST_prioTouched();
 	const uint8_t v = ST_getRemap()[colour8];
 	uint16_t row[4];
 	row[0] = (v & 1) ? 0xFFFF : 0;

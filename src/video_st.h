@@ -115,6 +115,13 @@ bool ST_drawPolygonFast(uint8_t *layer, const void *pts, int n,
 // of scenery can never vote the jacket into another colour's slot.
 enum { kSTConradJacketEntry = 0x17 };
 
+// The priority plane changes only where something marks or clears
+// it; the rest of a frame need not have it restored. Writers report
+// what they touched, and the restore asks once a frame.
+void ST_prioTouchedRect(int x, int y, int w, int h);
+void ST_prioTouched();
+bool ST_takePrioRect(int *x0, int *y0, int *x1, int *y1);
+
 // whole-layer copy (planes via the BLiTTER where present)
 void ST_copyLayer(uint8_t *dst, const uint8_t *src);
 // planes only: cutscene pages, whose priority plane is not kept

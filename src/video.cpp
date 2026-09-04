@@ -78,55 +78,157 @@ void Video::ST_rebakeRoom() {
 // (the front layer is clean, the screen never hears about it).
 // Compared with upstream's 2->1->0, blocks restore once instead of
 // twice.
+// Which blocks of one grid row still owe the screen a blit, as a bit
+// per column (leftmost is the top bit), moving each one on: a fresh
+// mark blits and then awaits its restore, a restored block blits
+// once more and is done. The grid is read a long at a time - a block
+// is clean or already shown when its low seven bits are zero, so
+// four are dismissed with one and-test, and in most frames most of
+// them are.
+static uint16_t blockRowToBlit(uint8_t *p, int cols) {
+	uint16_t mask = 0;
+	for (int i = 0; i < cols; i += 4) {
+		const uint32_t v = *(const uint32_t *)(p + i);
+		if ((v & 0x7f7f7f7fu) == 0) {
+			continue;
+		}
+		for (int k = i; k < i + 4; ++k) {
+			const uint8_t b = p[k];
+			if ((b & 0x7f) == 0) {
+				continue;
+			}
+			p[k] = (b == Video::kBlockOwed) ? Video::kBlockClean : Video::kBlockShown;
+			mask |= (uint16_t)(0x8000 >> k);
+		}
+	}
+	return mask;
+}
+
+// The same for the blocks that need their background back: those are
+// the ones shown last frame, which is the one state with its top bit
+// set, so four blocks test as one long again.
+static uint16_t blockRowToRestore(uint8_t *p, int cols) {
+	uint16_t mask = 0;
+	for (int i = 0; i < cols; i += 4) {
+		const uint32_t v = *(const uint32_t *)(p + i);
+		if ((v & 0x80808080u) == 0) {
+			continue;
+		}
+		for (int k = i; k < i + 4; ++k) {
+			if ((p[k] & 0x80) == 0) {
+				continue;
+			}
+			p[k] = Video::kBlockOwed;
+			mask |= (uint16_t)(0x8000 >> k);
+		}
+	}
+	return mask;
+}
+
 void Video::ST_restoreDirty() {
 	if (_fullRefresh) {
 		memcpy(_frontLayer, _backLayer, _layerSize);
 		return;
 	}
 	const int cols = _w / SCREENBLOCK_W;
+	const int rows = _h / SCREENBLOCK_H;
+	// The priority plane is only worth putting back where something
+	// wrote it: sprites mostly read it, and an ordinary frame leaves
+	// all of it but the inventory icon as the room decoded it.
+	int px0, py0, px1, py1;
+	const bool prioAny = ST_takePrioRect(&px0, &py0, &px1, &py1);
+	const int pbx0 = prioAny ? (px0 / SCREENBLOCK_W) : 0;
+	const int pbx1 = prioAny ? (px1 / SCREENBLOCK_W) : -1;
+	const int pby0 = prioAny ? (py0 / SCREENBLOCK_H) : 0;
+	const int pby1 = prioAny ? (py1 / SCREENBLOCK_H) : -1;
+	uint16_t rowMask[GAMESCREEN_H / SCREENBLOCK_H];
 	uint8_t *p = _screenBlocks;
-	for (int j = 0; j < _h / SCREENBLOCK_H; ++j) {
+	for (int j = 0; j < rows; ++j) {
+		rowMask[j] = blockRowToRestore(p, cols);
+		p += cols;
+	}
+	// Rows that need the same blocks back are restored together, so a
+	// tall sprite costs one setup instead of one per eight-pixel band.
+	for (int j = 0; j < rows; ) {
+		const uint16_t m = rowMask[j];
+		if (m == 0) {
+			++j;
+			continue;
+		}
+		int j2 = j + 1;
+		while (j2 < rows && rowMask[j2] == m) {
+			++j2;
+		}
+		const int yy = j * SCREENBLOCK_H;
+		const int lines = (j2 - j) * SCREENBLOCK_H;
 		int i = 0;
+		uint16_t bit = 0x8000;
 		while (i < cols) {
-			if (p[i] != kBlockShown) {
+			if ((m & bit) == 0) {
 				++i;
+				bit >>= 1;
 				continue;
 			}
-			int i2 = i;
-			while (i2 < cols && p[i2] == kBlockShown) {
-				p[i2] = kBlockOwed;
+			int i2 = i + 1;
+			uint16_t b2 = (uint16_t)(bit >> 1);
+			while (i2 < cols && (m & b2) != 0) {
 				++i2;
+				b2 >>= 1;
 			}
+			bit = b2;
 			const int gx0 = (i * SCREENBLOCK_W) >> 4;
-			const int gx1 = (i2 * SCREENBLOCK_W - 1) >> 4;
-			const int groups = gx1 - gx0 + 1;
+			const int groups = ((i2 * SCREENBLOCK_W - 1) >> 4) - gx0 + 1;
 			{
-				const int yy = j * SCREENBLOCK_H;
 				const uint32_t *s = (const uint32_t *)(_backLayer + yy * kSTRowBytes + gx0 * 8);
 				uint32_t *d = (uint32_t *)(_frontLayer + yy * kSTRowBytes + gx0 * 8);
 				const int skip = (kSTRowBytes - groups * 8) >> 2;
-				for (int line = 0; line < SCREENBLOCK_H; ++line) {
-					for (int n = groups; --n >= 0; ) {
-						*d++ = *s++;
-						*d++ = *s++;
+				if (groups == 1) {
+					// one 16-pixel group is the common case: two long
+					// moves a line and nothing to step through
+					for (int line = lines; --line >= 0; ) {
+						d[0] = s[0];
+						d[1] = s[1];
+						s += kSTRowBytes / 4;
+						d += kSTRowBytes / 4;
 					}
-					s += skip;
-					d += skip;
+				} else {
+					for (int line = lines; --line >= 0; ) {
+						for (int n = groups; --n >= 0; ) {
+							*d++ = *s++;
+							*d++ = *s++;
+						}
+						s += skip;
+						d += skip;
+					}
 				}
-				const uint16_t *ps = (const uint16_t *)(_backLayer + kSTPlaneBytes + yy * kSTPrioRowBytes + gx0 * 2);
-				uint16_t *pd = (uint16_t *)(_frontLayer + kSTPlaneBytes + yy * kSTPrioRowBytes + gx0 * 2);
-				const int pskip = (kSTPrioRowBytes - groups * 2) >> 1;
-				for (int line = 0; line < SCREENBLOCK_H; ++line) {
-					for (int n = groups; --n >= 0; ) {
-						*pd++ = *ps++;
+				if (j > pby1 || j2 - 1 < pby0 || i > pbx1 || i2 - 1 < pbx0) {
+					i = i2;
+					continue;
+				}
+				// the priority plane, two bytes a group: long moves
+				// where a pair of groups is aligned, words elsewhere
+				const uint8_t *pb = _backLayer + kSTPlaneBytes + yy * kSTPrioRowBytes + gx0 * 2;
+				uint8_t *pf = _frontLayer + kSTPlaneBytes + yy * kSTPrioRowBytes + gx0 * 2;
+				const int longs = ((gx0 & 1) == 0) ? (groups >> 1) : 0;
+				const int words = groups - longs * 2;
+				for (int line = lines; --line >= 0; ) {
+					const uint32_t *ls = (const uint32_t *)pb;
+					uint32_t *ld = (uint32_t *)pf;
+					for (int n = longs; --n >= 0; ) {
+						*ld++ = *ls++;
 					}
-					ps += pskip;
-					pd += pskip;
+					const uint16_t *ws = (const uint16_t *)ls;
+					uint16_t *wd = (uint16_t *)ld;
+					for (int n = words; --n >= 0; ) {
+						*wd++ = *ws++;
+					}
+					pb += kSTPrioRowBytes;
+					pf += kSTPrioRowBytes;
 				}
 			}
 			i = i2;
 		}
-		p += cols;
+		j = j2;
 	}
 }
 #endif
@@ -156,8 +258,14 @@ void Video::markBlockAsDirty(int16_t x, int16_t y, uint16_t w, uint16_t h, int s
 		return;
 	}
 	uint8_t *row = _screenBlocks + (int16_t)by1 * (int16_t)cols;
+	// the runs are a few blocks wide, where a memset call costs more
+	// than the stores it makes
+	const int n = bx2 - bx1 + 1;
 	for (; by1 <= by2; ++by1) {
-		memset(row + bx1, kBlockDirty, bx2 - bx1 + 1);
+		uint8_t *p = row + bx1;
+		for (int i = n; --i >= 0; ) {
+			*p++ = kBlockDirty;
+		}
 		row += cols;
 	}
 }
@@ -174,6 +282,58 @@ void Video::updateScreen() {
 		VIDEO_BLIT(0, 0, _w, _h);
 		_stub->updateScreen(_shakeOffset);
 		_fullRefresh = false;
+#ifdef ATARIST
+	// A fresh mark blits and then awaits its restore; a restored
+	// block blits once more and is done. Rows needing the same
+	// blocks go up in one call: a sprite spans several eight-pixel
+	// bands and used to cost a call for each.
+	} else {
+		const int cols = _w / SCREENBLOCK_W;
+		const int rows = _h / SCREENBLOCK_H;
+		uint16_t rowMask[GAMESCREEN_H / SCREENBLOCK_H];
+		uint8_t *p = _screenBlocks;
+		int count = 0;
+		for (int j = 0; j < rows; ++j) {
+			rowMask[j] = blockRowToBlit(p, cols);
+			p += cols;
+		}
+		for (int j = 0; j < rows; ) {
+			const uint16_t m = rowMask[j];
+			if (m == 0) {
+				++j;
+				continue;
+			}
+			int j2 = j + 1;
+			while (j2 < rows && rowMask[j2] == m) {
+				++j2;
+			}
+			int i = 0;
+			uint16_t bit = 0x8000;
+			while (i < cols) {
+				if ((m & bit) == 0) {
+					++i;
+					bit >>= 1;
+					continue;
+				}
+				int i2 = i + 1;
+				uint16_t b2 = (uint16_t)(bit >> 1);
+				while (i2 < cols && (m & b2) != 0) {
+					++i2;
+					b2 >>= 1;
+				}
+				bit = b2;
+				VIDEO_BLIT(i * SCREENBLOCK_W, j * SCREENBLOCK_H,
+					(i2 - i) * SCREENBLOCK_W, (j2 - j) * SCREENBLOCK_H);
+				++count;
+				i = i2;
+			}
+			j = j2;
+		}
+		if (count != 0) {
+			_stub->updateScreen(_shakeOffset);
+		}
+	}
+#else
 	} else {
 		int i, j;
 		int count = 0;
@@ -181,19 +341,10 @@ void Video::updateScreen() {
 		for (j = 0; j < _h / SCREENBLOCK_H; ++j) {
 			int nh = 0;
 			for (i = 0; i < _w / SCREENBLOCK_W; ++i) {
-#ifdef ATARIST
-				// a fresh mark blits and then awaits its restore;
-				// a restored block blits once more and is done
-				if (p[i] != kBlockClean && p[i] != kBlockShown) {
-					p[i] = (p[i] == kBlockOwed) ? kBlockClean : kBlockShown;
-					++nh;
-				} else if (nh != 0) {
-#else
 				if (p[i] != 0) {
 					--p[i];
 					++nh;
 				} else if (nh != 0) {
-#endif
 					const int x = (i - nh) * SCREENBLOCK_W;
 					VIDEO_BLIT(x, j * SCREENBLOCK_H, nh * SCREENBLOCK_W, SCREENBLOCK_H);
 					nh = 0;
@@ -211,6 +362,7 @@ void Video::updateScreen() {
 			_stub->updateScreen(_shakeOffset);
 		}
 	}
+#endif
 #undef VIDEO_BLIT
 	if (_shakeOffset != 0) {
 		_shakeOffset = 0;
