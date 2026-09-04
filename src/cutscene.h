@@ -81,6 +81,19 @@ struct Cutscene {
 	int _stPrescanOps;
 	int _stPart;
 	void stPrescanPalette(uint16_t num);
+	// ST frame skipping (frame_skip option): when playback falls
+	// behind the scripted clock, whole frames are interpreted but not
+	// drawn, so scenes keep their scripted duration on a machine that
+	// cannot draw every frame in time. Frames drawn with the page
+	// cleared (_clearScreen != 0) always draw: they capture the
+	// background the following frames restore from.
+	bool _stSkipDraw;
+	bool _stUsesCopyScreen;   // scene builds frames on the previous one
+	int _stSkipRun;
+	uint32_t _stSched;        // scripted clock, in stub time
+	uint16_t _statSkipped;
+	bool stSkipDraw() const { return _stSkipDraw && _clearScreen == 0; }
+	void stDecideSkip();
 	bool _stop;
 	const uint8_t *_polPtr;
 	const uint8_t *_cmdPtr;

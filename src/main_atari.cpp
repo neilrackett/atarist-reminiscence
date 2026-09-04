@@ -102,6 +102,7 @@ static void initOptions() {
 	g_options.log_fps = false;
 	g_options.bench = false;
 	g_options.logging = false;
+	g_options.frame_skip = true;
 	struct {
 		const char *name;
 		bool *value;
@@ -131,6 +132,7 @@ static void initOptions() {
 		{ "log_fps", &g_options.log_fps },
 		{ "bench", &g_options.bench },
 		{ "logging", &g_options.logging },
+		{ "frame_skip", &g_options.frame_skip },
 		{ 0, 0 }
 	};
 	FILE *fp = fopen("RS.CFG", "rb");

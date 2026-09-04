@@ -148,6 +148,7 @@ struct Options {
 	bool log_fps;
 	bool bench;
 	bool logging;
+	bool frame_skip;
 };
 
 struct Features {

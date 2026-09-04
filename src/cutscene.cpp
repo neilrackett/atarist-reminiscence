@@ -13,7 +13,7 @@
 #include "util.h"
 #include "video.h"
 
-static void scalePoints(Point *pt, int count, int scale, int16_t *rx = 0, int16_t *ry = 0) {
+static inline void scalePoints(Point *pt, int count, int scale, int16_t *rx = 0, int16_t *ry = 0) {
 	if (scale != 1) {
 		while (count-- > 0) {
 			pt->x *= scale;
@@ -37,6 +37,11 @@ Cutscene::Cutscene(Resource *res, SystemStub *stub, Video *vid)
 	_isConcavePolygonShape = false;
 	_stPrescan = false;
 	_stPrescanOps = 0;
+	_stSkipDraw = false;
+	_stUsesCopyScreen = false;
+	_stSkipRun = 0;
+	_stSched = 0;
+	_statSkipped = 0;
 	_stPart = 0;
 }
 
@@ -59,11 +64,28 @@ void Cutscene::sync(int frameDelay) {
 		return;
 	}
 	static const int frameHz = 60;
-	const int32_t delay = _stub->getTimeStamp() - _tstamp;
-	const int32_t pause = frameDelay * (1000 / frameHz) - delay;
+	const uint32_t now = _stub->getTimeStamp();
+	const int32_t delay = now - _tstamp;
+	const int32_t budget = frameDelay * (1000 / frameHz);
+	int32_t pause = budget - delay;
 	++_statFrames;
 	_statWork += (uint32_t)delay;
-	_statBudget += (uint32_t)(frameDelay * (1000 / frameHz));
+	_statBudget += (uint32_t)budget;
+#ifdef ATARIST
+	if (g_options.frame_skip) {
+		// pace against the scripted clock, not frame by frame: a late
+		// frame leaves the clock behind and the skipped frames that
+		// follow catch it up. The debt is capped so a stall (a key
+		// wait, a load) does not turn into a burst of skips.
+		static const int32_t kMaxDebt = 200;
+		_stSched += budget;
+		pause = _stSched - now;
+		if (pause < -kMaxDebt) {
+			_stSched = now - kMaxDebt;
+			pause = -kMaxDebt;
+		}
+	}
+#endif
 	if (pause > 0) {
 		_stub->sleep(pause);
 	} else {
@@ -99,26 +121,121 @@ void Cutscene::updateScreen() {
 	}
 	sync(_frameDelay - 1);
 	updatePalette();
-	SWAP(_frontPage, _backPage);
 #ifdef ATARIST
-	{
+	if (stSkipDraw()) {
+		// nothing was drawn: the front page still shows the last
+		// drawn frame
+		++_statSkipped;
+	} else {
+		SWAP(_frontPage, _backPage);
 		const uint32_t t0 = _stub->getTimeStamp();
 		_stub->copyRectPlanar(0, 0, _vid->_w, _vid->_h, _frontPage);
 		_stub->updateScreen(0);
 		_statCopy += _stub->getTimeStamp() - t0;
 	}
+	stDecideSkip();
 #else
+	SWAP(_frontPage, _backPage);
 	_stub->copyRect(0, 0, _vid->_w, _vid->_h, _frontPage, _vid->_w);
 	_stub->updateScreen(0);
 #endif
 }
 
-#if 1
+#ifdef ATARIST
+// Called after a frame is shown: does the next one get drawn? Frames
+// are skipped one at a time while the scripted clock is more than a
+// frame ahead, a few in a row at most so the scene never freezes.
+void Cutscene::stDecideSkip() {
+	_stSkipDraw = false;
+	if (!g_options.frame_skip || _creditsSequence || _stUsesCopyScreen) {
+		return;
+	}
+	static const int kSkipMax = 3;
+	const int32_t debt = _stub->getTimeStamp() - _stSched;
+	if (debt > 1000 / 60 && _stSkipRun < kSkipMax) {
+		_stSkipDraw = true;
+		++_stSkipRun;
+	} else {
+		_stSkipRun = 0;
+	}
+}
+#endif
+
+#ifdef ATARIST
+// (int16_t)(sin(a * M_PI / 180) * 256) for a in 0..359, tabulated:
+// the ST has no FPU, and six soft-float sin/cos calls came to ~50ms
+// per rotated shape - most of a whole frame's budget.
+static const int16_t _sinTable[360] = {
+	   0,    4,    8,   13,   17,   22,   26,   31,   35,   40,   44,   48,
+	  53,   57,   61,   66,   70,   74,   79,   83,   87,   91,   95,  100,
+	 104,  108,  112,  116,  120,  124,  127,  131,  135,  139,  143,  146,
+	 150,  154,  157,  161,  164,  167,  171,  174,  177,  181,  184,  187,
+	 190,  193,  196,  198,  201,  204,  207,  209,  212,  214,  217,  219,
+	 221,  223,  226,  228,  230,  232,  233,  235,  237,  238,  240,  242,
+	 243,  244,  246,  247,  248,  249,  250,  251,  252,  252,  253,  254,
+	 254,  255,  255,  255,  255,  255,  256,  255,  255,  255,  255,  255,
+	 254,  254,  253,  252,  252,  251,  250,  249,  248,  247,  246,  244,
+	 243,  242,  240,  238,  237,  235,  233,  232,  230,  228,  226,  223,
+	 221,  219,  217,  214,  212,  209,  207,  204,  201,  198,  196,  193,
+	 190,  187,  184,  181,  177,  174,  171,  167,  164,  161,  157,  154,
+	 150,  146,  143,  139,  135,  131,  127,  124,  120,  116,  112,  108,
+	 104,  100,   95,   91,   87,   83,   79,   74,   70,   66,   61,   57,
+	  53,   48,   44,   40,   35,   31,   26,   22,   17,   13,    8,    4,
+	   0,   -4,   -8,  -13,  -17,  -22,  -26,  -31,  -35,  -40,  -44,  -48,
+	 -53,  -57,  -61,  -66,  -70,  -74,  -79,  -83,  -87,  -91,  -95, -100,
+	-104, -108, -112, -116, -120, -124, -128, -131, -135, -139, -143, -146,
+	-150, -154, -157, -161, -164, -167, -171, -174, -177, -181, -184, -187,
+	-190, -193, -196, -198, -201, -204, -207, -209, -212, -214, -217, -219,
+	-221, -223, -226, -228, -230, -232, -233, -235, -237, -238, -240, -242,
+	-243, -244, -246, -247, -248, -249, -250, -251, -252, -252, -253, -254,
+	-254, -255, -255, -255, -255, -255, -256, -255, -255, -255, -255, -255,
+	-254, -254, -253, -252, -252, -251, -250, -249, -248, -247, -246, -244,
+	-243, -242, -240, -238, -237, -235, -233, -232, -230, -228, -226, -223,
+	-221, -219, -217, -214, -212, -209, -207, -204, -201, -198, -196, -193,
+	-190, -187, -184, -181, -177, -174, -171, -167, -164, -161, -157, -154,
+	-150, -146, -143, -139, -135, -131, -128, -124, -120, -116, -112, -108,
+	-104, -100,  -95,  -91,  -87,  -83,  -79,  -74,  -70,  -66,  -61,  -57,
+	 -53,  -48,  -44,  -40,  -35,  -31,  -26,  -22,  -17,  -13,   -8,   -4,
+};
+
+static const int16_t _cosTable[360] = {
+	 256,  255,  255,  255,  255,  255,  254,  254,  253,  252,  252,  251,
+	 250,  249,  248,  247,  246,  244,  243,  242,  240,  238,  237,  235,
+	 233,  232,  230,  228,  226,  223,  221,  219,  217,  214,  212,  209,
+	 207,  204,  201,  198,  196,  193,  190,  187,  184,  181,  177,  174,
+	 171,  167,  164,  161,  157,  154,  150,  146,  143,  139,  135,  131,
+	 128,  124,  120,  116,  112,  108,  104,  100,   95,   91,   87,   83,
+	  79,   74,   70,   66,   61,   57,   53,   48,   44,   40,   35,   31,
+	  26,   22,   17,   13,    8,    4,    0,   -4,   -8,  -13,  -17,  -22,
+	 -26,  -31,  -35,  -40,  -44,  -48,  -53,  -57,  -61,  -66,  -70,  -74,
+	 -79,  -83,  -87,  -91,  -95, -100, -104, -108, -112, -116, -120, -124,
+	-127, -131, -135, -139, -143, -146, -150, -154, -157, -161, -164, -167,
+	-171, -174, -177, -181, -184, -187, -190, -193, -196, -198, -201, -204,
+	-207, -209, -212, -214, -217, -219, -221, -223, -226, -228, -230, -232,
+	-233, -235, -237, -238, -240, -242, -243, -244, -246, -247, -248, -249,
+	-250, -251, -252, -252, -253, -254, -254, -255, -255, -255, -255, -255,
+	-256, -255, -255, -255, -255, -255, -254, -254, -253, -252, -252, -251,
+	-250, -249, -248, -247, -246, -244, -243, -242, -240, -238, -237, -235,
+	-233, -232, -230, -228, -226, -223, -221, -219, -217, -214, -212, -209,
+	-207, -204, -201, -198, -196, -193, -190, -187, -184, -181, -177, -174,
+	-171, -167, -164, -161, -157, -154, -150, -146, -143, -139, -135, -131,
+	-128, -124, -120, -116, -112, -108, -104, -100,  -95,  -91,  -87,  -83,
+	 -79,  -74,  -70,  -66,  -61,  -57,  -53,  -48,  -44,  -40,  -35,  -31,
+	 -26,  -22,  -17,  -13,   -8,   -4,    0,    4,    8,   13,   17,   22,
+	  26,   31,   35,   40,   44,   48,   53,   57,   61,   66,   70,   74,
+	  79,   83,   87,   91,   95,  100,  104,  108,  112,  116,  120,  124,
+	 128,  131,  135,  139,  143,  146,  150,  154,  157,  161,  164,  167,
+	 171,  174,  177,  181,  184,  187,  190,  193,  196,  198,  201,  204,
+	 207,  209,  212,  214,  217,  219,  221,  223,  226,  228,  230,  232,
+	 233,  235,  237,  238,  240,  242,  243,  244,  246,  247,  248,  249,
+	 250,  251,  252,  252,  253,  254,  254,  255,  255,  255,  255,  255,
+};
+
+static inline int16_t SIN(uint16_t a) { return _sinTable[a % 360]; }
+static inline int16_t COS(uint16_t a) { return _cosTable[a % 360]; }
+#else
 #define SIN(a) (int16_t)(sin(a * M_PI / 180) * 256)
 #define COS(a) (int16_t)(cos(a * M_PI / 180) * 256)
-#else
-#define SIN(a) _sinTable[a]
-#define COS(a) _cosTable[a]
 #endif
 
 /*
@@ -231,9 +348,14 @@ void Cutscene::clearBackPage() {
 	if (_stPrescan) {
 		return;
 	}
+#ifdef ATARIST
+	if (stSkipDraw()) {
+		return;
+	}
+#endif
 	if (_clearScreen == 0) {
 #ifdef ATARIST
-		ST_copyLayer(_backPage, _auxPage);
+		ST_copyPage(_backPage, _auxPage);
 #else
 		memcpy(_backPage, _auxPage, _vid->_layerSize);
 #endif
@@ -402,7 +524,7 @@ void Cutscene::op_waitForSync() {
 			}
 			if (!_stPrescan) {
 #ifdef ATARIST
-				ST_copyLayer(_backPage, _frontPage);
+				ST_copyPage(_backPage, _frontPage);
 #else
 				memcpy(_backPage, _frontPage, _vid->_layerSize);
 #endif
@@ -425,9 +547,15 @@ void Cutscene::checkShape(uint16_t shapeOffset) {
 void Cutscene::drawShape(const uint8_t *data, int16_t x, int16_t y) {
 	debug(DBG_CUT, "Cutscene::drawShape()");
 	
+#ifdef ATARIST
+	if (_stPrescan || stSkipDraw()) {
+		return;
+	}
+#else
 	if (_stPrescan) {
 		return;
 	}
+#endif
 	_gfx.setLayer(_backPage, _vid->_w);
 	uint8_t numVertices = *data++;
 	if (numVertices & 0x80) {
@@ -487,6 +615,13 @@ void Cutscene::op_drawShape() {
 		y = fetchNextCmdWord();
 	}
 	checkShape(shapeOffset);
+#ifdef ATARIST
+	if (_stPrescan || stSkipDraw()) {
+		// the palette prescan only needs the command stream advanced;
+		// a skipped frame likewise
+		return;
+	}
+#endif
 
 	const uint8_t *shapeOffsetTable    = _polPtr + READ_BE_UINT16(_polPtr + 0x02);
 	const uint8_t *shapeDataTable      = _polPtr + READ_BE_UINT16(_polPtr + 0x0E);
@@ -514,7 +649,7 @@ void Cutscene::op_drawShape() {
 	}
 	if (_clearScreen != 0 && !_stPrescan) {
 #ifdef ATARIST
-		ST_copyLayer(_auxPage, _backPage);
+		ST_copyPage(_auxPage, _backPage);
 #else
 		memcpy(_auxPage, _backPage, _vid->_layerSize);
 #endif
@@ -608,9 +743,15 @@ void Cutscene::op_refreshAll() {
 void Cutscene::drawShapeScale(const uint8_t *data, int16_t zoom, int16_t b, int16_t c, int16_t d, int16_t e, int16_t f, int16_t g) {
 	
 	debug(DBG_CUT, "Cutscene::drawShapeScale(%d, %d, %d, %d, %d, %d, %d)", zoom, b, c, d, e, f, g);
+#ifdef ATARIST
+	if (_stPrescan || stSkipDraw()) {
+		return;
+	}
+#else
 	if (_stPrescan) {
 		return;
 	}
+#endif
 	_gfx.setLayer(_backPage, _vid->_w);
 	uint8_t numVertices = *data++;
 	if (numVertices & 0x80) {
@@ -799,9 +940,15 @@ void Cutscene::op_drawShapeScale() {
 void Cutscene::drawShapeScaleRotate(const uint8_t *data, int16_t zoom, int16_t b, int16_t c, int16_t d, int16_t e, int16_t f, int16_t g) {
 	
 	debug(DBG_CUT, "Cutscene::drawShapeScaleRotate(%d, %d, %d, %d, %d, %d, %d)", zoom, b, c, d, e, f, g);
+#ifdef ATARIST
+	if (_stPrescan || stSkipDraw()) {
+		return;
+	}
+#else
 	if (_stPrescan) {
 		return;
 	}
+#endif
 	_gfx.setLayer(_backPage, _vid->_w);
 	uint8_t numVertices = *data++;
 	if (numVertices & 0x80) {
@@ -1076,11 +1223,18 @@ void Cutscene::op_copyScreen() {
 	}
 	if (!_stPrescan) {
 #ifdef ATARIST
-		ST_copyLayer(_backPage, _frontPage);
+		ST_copyPage(_backPage, _frontPage);
 #else
 		memcpy(_backPage, _frontPage, _vid->_layerSize);
 #endif
 	}
+#ifdef ATARIST
+	else {
+		// frames build on the one before: skipping any would lose
+		// its additions for good, so this scene draws them all
+		_stUsesCopyScreen = true;
+	}
+#endif
 	_frameDelay = 10;
 
 	const bool drawMemoShapes = _drawMemoSetShapes && (_paletteNum == 19 || _paletteNum == 23) && (_memoSetOffset + 3) <= sizeof(memoSetPos);
@@ -1225,6 +1379,7 @@ void Cutscene::stPrescanPalette(uint16_t num) {
 	const int savedTextLen = _creditsTextLen;
 
 	ST_cutscenePalReset();
+	_stUsesCopyScreen = false;
 	_stPrescan = true;
 	_stPrescanOps = 0;
 	_stPart = 0;
@@ -1252,6 +1407,11 @@ void Cutscene::stPrescanPalette(uint16_t num) {
 void Cutscene::mainLoop(uint16_t num) {
 	_frameDelay = 5;
 	_tstamp = _stub->getTimeStamp();
+#ifdef ATARIST
+	_stSched = _tstamp;
+	_stSkipDraw = false;
+	_stSkipRun = 0;
+#endif
 
 	Color c;
 	c.r = c.g = c.b = 0;
@@ -1511,7 +1671,7 @@ void Cutscene::play() {
 		_textCurBuf = NULL;
 		debug(DBG_CUT, "Cutscene::play() _id=0x%X", _id);
 		_creditsSequence = false;
-		_statFrames = _statLate = 0;
+		_statFrames = _statLate = _statSkipped = 0;
 		_statWork = _statBudget = _statCopy = 0;
 		prepare();
 #ifdef ATARIST

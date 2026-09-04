@@ -120,6 +120,28 @@ const uint8_t *ST_getRemap() {
 	return g_stub->_remap;
 }
 
+// One full 128-byte layer row to the screen through movem: the word
+// loop below spent as long per frame on a cutscene page flip as the
+// scene's own drawing, at 5+ cycles a byte against movem's 4.5.
+static inline void copyRow128(uint32_t *dst, const uint32_t *src) {
+#ifdef __m68k__
+	register uint32_t *d __asm__("a0") = dst;
+	register const uint32_t *s __asm__("a1") = src;
+	__asm__ volatile(
+		"movem.l (%1)+,%%d0-%%d7/%%a2-%%a4\n\t"
+		"movem.l %%d0-%%d7/%%a2-%%a4,(%0)\n\t"
+		"movem.l (%1)+,%%d0-%%d7/%%a2-%%a4\n\t"
+		"movem.l %%d0-%%d7/%%a2-%%a4,44(%0)\n\t"
+		"movem.l (%1)+,%%d0-%%d7/%%a2-%%a3\n\t"
+		"movem.l %%d0-%%d7/%%a2-%%a3,88(%0)"
+		: "+a"(d), "+a"(s)
+		:
+		: "d0","d1","d2","d3","d4","d5","d6","d7","a2","a3","a4","memory");
+#else
+	memcpy(dst, src, kSTRowBytes);
+#endif
+}
+
 // Copy a planar layer region to the screen: pure word moves with the
 // 224->200 line squash and horizontal centring. x/w widen to 16px.
 void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *layer) {
@@ -204,6 +226,10 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 		}
 		const uint32_t *src = (const uint32_t *)(layer + sy * kSTRowBytes + (gx0 << 3));
 		uint32_t *dst = (uint32_t *)(_screen->pixels + _yMap[sy] * kScreenStride + xOffBytes + (gx0 << 3));
+		if (bytes == kSTRowBytes) {
+			copyRow128(dst, src);       // whole row: the cutscene page flip
+			continue;
+		}
 		for (int n = n32; --n >= 0; ) {
 			*dst++ = *src++;
 			*dst++ = *src++;
@@ -369,15 +395,62 @@ static bool g_cutscenePal;
 // planar pixels (the sprite cache) key their entries on this.
 static uint16_t g_remapGen = 1;
 
+// Bumped only when the game's own mapping changes: a cutscene puts
+// that mapping aside and brings it back unchanged, so the room
+// scenery prepared against it (Video's SGD cache) stays good across
+// one, where the sprite cache keyed on g_remapGen does not.
+static uint16_t g_roomGen = 1;
+
 uint16_t ST_remapGen() {
 	return g_remapGen;
 }
 
+uint16_t ST_roomGen() {
+	return g_roomGen;
+}
+
+// The game's mapping is put aside while a cutscene has the slots and
+// restored afterwards: cutscenes only write logical entries 0xC0 and
+// up, so the room's mapping is still right when they finish, and
+// restoring it means the room in the back layer is still correct
+// as decoded (no requantise, no re-bake - the quantiser alone is
+// two and a half seconds on an 8MHz ST).
+struct RemapSnapshot {
+	bool valid;
+	uint8_t remap[256];
+	Color hwPal[16];
+	Color basePal[256];
+};
+static RemapSnapshot g_gameRemap;
+
 void ST_setCutscenePalMode(bool enable) {
-	if (g_cutscenePal != enable) {
-		g_cutscenePal = enable;
-		g_stub->_palDirty = true;
-		g_stub->_remapStale = true;
+	if (g_cutscenePal == enable) {
+		return;
+	}
+	g_cutscenePal = enable;
+	SystemStub_STDL *stub = g_stub;
+	if (enable) {
+		if (stub->_palDirty) {
+			stub->buildRemap();
+		}
+		memcpy(g_gameRemap.remap, stub->_remap, sizeof(stub->_remap));
+		memcpy(g_gameRemap.hwPal, stub->_hwPal, sizeof(stub->_hwPal));
+		memcpy(g_gameRemap.basePal, stub->_basePal, sizeof(stub->_basePal));
+		g_gameRemap.valid = true;
+		stub->_palDirty = true;
+		stub->_remapStale = true;
+	} else if (g_gameRemap.valid) {
+		memcpy(stub->_remap, g_gameRemap.remap, sizeof(stub->_remap));
+		memcpy(stub->_hwPal, g_gameRemap.hwPal, sizeof(stub->_hwPal));
+		memcpy(stub->_basePal, g_gameRemap.basePal, sizeof(stub->_basePal));
+		++g_remapGen;
+		// the registers still hold the cutscene's colours; a palette
+		// that moved meanwhile goes through the usual patch or rebuild
+		stub->_palDirty = true;
+		stub->_remapStale = false;
+	} else {
+		stub->_palDirty = true;
+		stub->_remapStale = true;
 	}
 }
 
@@ -424,6 +497,65 @@ static inline int colDist(const Color &a, const Color &b) {
 	return dr + 2 * dg + db;
 }
 
+// distance of two packed 4-bit colours: Manhattan, green-weighted
+static inline int dist4(uint16_t a, uint16_t b) {
+	int dr = ((a >> 8) & 15) - ((b >> 8) & 15); if (dr < 0) dr = -dr;
+	int dg = ((a >> 4) & 15) - ((b >> 4) & 15); if (dg < 0) dg = -dg;
+	int db = (a & 15) - (b & 15); if (db < 0) db = -db;
+	return dr + 2 * dg + db;
+}
+
+// The merge distance of colours i and j: dist4 weighted by the
+// smaller usage count, so rare colours give way to common ones.
+// The components are kept in byte arrays (r, g and b, and each
+// again shifted up four bits for the row side) so the distance is
+// three lookups in a 16x16 table of absolute differences; the
+// weight is a 16-bit multiply (a mulu.w, not a __mulsi3 library
+// call).
+struct MergeCols {
+	uint8_t r[256], g[256], b[256];      // components of col[]
+	uint8_t rh[256], gh[256], bh[256];   // the same, times 16
+	uint8_t w[256];                      // 1 + MIN(cnt, 63)
+	uint8_t absd[256];                   // |a - b| at a * 16 + b
+	void set(int i, uint16_t c, uint16_t cnt) {
+		r[i] = (c >> 8) & 15;
+		g[i] = (c >> 4) & 15;
+		b[i] = c & 15;
+		rh[i] = r[i] << 4;
+		gh[i] = g[i] << 4;
+		bh[i] = b[i] << 4;
+		w[i] = (uint8_t)(1 + MIN(cnt, (uint16_t)63));
+	}
+	uint16_t dist(int i, int j) const {
+		const int d = absd[rh[i] | r[j]] + 2 * absd[gh[i] | g[j]] + absd[bh[i] | b[j]];
+		const uint16_t wt = MIN(w[i], w[j]);
+		return (uint16_t)((uint16_t)d * wt);
+	}
+};
+
+// nearest partner of k among the m candidates, the lowest index on
+// ties; dm is the tabled merge distances (n a row), or null to
+// compute them
+static void nearestPartner(const MergeCols &mc, const uint16_t *dm, int n,
+		const uint8_t *cand, int m, int k, uint16_t *nnd, uint8_t *nnj) {
+	uint16_t best = 0xFFFF;
+	int bj = 0xFF;
+	const uint16_t *row = dm ? dm + (uint16_t)k * (uint16_t)n : 0;
+	for (int a = 0; a < m; ++a) {
+		const int j = cand[a];
+		if (j == k) {
+			continue;
+		}
+		const uint16_t d = row ? row[j] : mc.dist(k, j);
+		if (d < best) {
+			best = d;
+			bj = j;
+		}
+	}
+	nnd[k] = best;
+	nnj[k] = (uint8_t)bj;
+}
+
 // Merge n distinct 4-bit colours down to 16 clusters and give each
 // surviving cluster a hardware slot, preferring the slot whose current
 // colour is nearest: planar pages bake slots into pixels, so content
@@ -431,39 +563,69 @@ static inline int colDist(const Color &a, const Color &b) {
 // colours keep their slots. Fills alias[] (cluster union-find) and
 // slotOf[] (cluster -> slot), and updates _hwPal.
 void SystemStub_STDL::quantiseClusters(uint16_t *col, uint16_t *cnt, int n, uint8_t *alias, uint8_t *slotOf, int pinned) {
-	// greedy merge to 16 clusters; a pinned cluster never merges, so
-	// its colour stays exact and it holds a slot of its own
+	// Greedy merge to 16 clusters, closest pair first (lowest
+	// indices on ties); a pinned cluster never merges, so its
+	// colour stays exact and it holds a slot of its own. Scanning
+	// every pair for each merge is n cubed, seconds on an 8MHz
+	// 68000 for a level's fifty-odd colours, so the merge distances
+	// are tabled and each colour remembers its nearest partner: a
+	// merge redoes the survivor's row and the partners of whoever
+	// pointed at either half, nothing else. Without the table (no
+	// memory) the same walk computes the distances as it goes.
 	for (int i = 0; i < n; ++i) {
 		alias[i] = i;
 	}
 	int live = n;
-	while (live > 16) {
-		int bi = -1, bj = -1;
-		long best = 0x7FFFFFFF;
-		for (int i = 0; i < n; ++i) {
-			if (alias[i] != i || i == pinned) {
-				continue;
-			}
-			const int r1 = (col[i] >> 8) & 15, g1 = (col[i] >> 4) & 15, b1 = col[i] & 15;
-			for (int j = i + 1; j < n; ++j) {
-				if (alias[j] != j || j == pinned) {
-					continue;
-				}
-				int dr = r1 - ((col[j] >> 8) & 15); if (dr < 0) dr = -dr;
-				int dg = g1 - ((col[j] >> 4) & 15); if (dg < 0) dg = -dg;
-				int db = b1 - (col[j] & 15); if (db < 0) db = -db;
-				// weight by the smaller usage count so rare
-				// colours give way to common ones (16-bit multiply:
-				// a mulu.w, not a __mulsi3 library call)
-				const uint16_t w = (uint16_t)(1 + MIN(MIN(cnt[i], cnt[j]), (uint16_t)63));
-				const long d = (long)((uint16_t)(dr + 2 * dg + db) * w);
-				if (d < best) {
-					best = d;
-					bi = i;
-					bj = j;
-				}
+	if (live <= 16) {
+		goto assign;
+	}
+	{
+	static MergeCols mc;
+	for (int a = 0; a < 16; ++a) {
+		for (int b = 0; b < 16; ++b) {
+			mc.absd[a * 16 + b] = (uint8_t)(a > b ? a - b : b - a);
+		}
+	}
+	// the candidates, every colour but the pinned one, in index order
+	uint8_t cand[256];
+	int m = 0;
+	for (int i = 0; i < n; ++i) {
+		mc.set(i, col[i], cnt[i]);
+		if (i != pinned) {
+			cand[m++] = i;
+		}
+	}
+	uint16_t *dm = (uint16_t *)malloc((long)n * n * 2);
+	if (dm) {
+		for (int a = 0; a < m; ++a) {
+			const int i = cand[a];
+			uint16_t *row = dm + (uint16_t)i * (uint16_t)n;
+			uint16_t *mirror = dm + i;
+			for (int b = a + 1; b < m; ++b) {
+				const int j = cand[b];
+				row[j] = mirror[(uint16_t)j * (uint16_t)n] = mc.dist(i, j);
 			}
 		}
+	}
+	uint16_t nnd[256];
+	uint8_t nnj[256];
+	for (int a = 0; a < m; ++a) {
+		nearestPartner(mc, dm, n, cand, m, cand[a], nnd, nnj);
+	}
+	while (live > 16 && m >= 2) {
+		int bi = -1;
+		uint16_t best = 0xFFFF;
+		for (int a = 0; a < m; ++a) {
+			const int i = cand[a];
+			if (nnd[i] < best) {
+				best = nnd[i];
+				bi = i;
+			}
+		}
+		if (bi < 0) {
+			break;
+		}
+		const int bj = nnj[bi];
 		// merge bj into bi, weighted average
 		const long w1 = cnt[bi], w2 = cnt[bj];
 		const int r = (((col[bi] >> 8) & 15) * w1 + ((col[bj] >> 8) & 15) * w2) / (w1 + w2);
@@ -473,7 +635,45 @@ void SystemStub_STDL::quantiseClusters(uint16_t *col, uint16_t *cnt, int n, uint
 		cnt[bi] += cnt[bj];
 		alias[bj] = bi;
 		--live;
+		mc.set(bi, col[bi], cnt[bi]);
+		int a = 0;
+		while (cand[a] != bj) {
+			++a;
+		}
+		--m;
+		memmove(cand + a, cand + a + 1, m - a);
+		// the survivor moved: its distances, its partner, and the
+		// partner of anyone who was pointing at either half
+		if (dm) {
+			uint16_t *row = dm + (uint16_t)bi * (uint16_t)n;
+			uint16_t *mirror = dm + bi;
+			for (int a = 0; a < m; ++a) {
+				const int j = cand[a];
+				if (j != bi) {
+					row[j] = mirror[(uint16_t)j * (uint16_t)n] = mc.dist(bi, j);
+				}
+			}
+		}
+		nearestPartner(mc, dm, n, cand, m, bi, nnd, nnj);
+		for (int a = 0; a < m; ++a) {
+			const int k = cand[a];
+			if (k == bi) {
+				continue;
+			}
+			if (nnj[k] == bi || nnj[k] == bj) {
+				nearestPartner(mc, dm, n, cand, m, k, nnd, nnj);
+				continue;
+			}
+			const uint16_t d = dm ? dm[(uint16_t)k * (uint16_t)n + bi] : mc.dist(k, bi);
+			if (d < nnd[k] || (d == nnd[k] && bi < nnj[k])) {
+				nnd[k] = d;
+				nnj[k] = (uint8_t)bi;
+			}
+		}
 	}
+	free(dm);
+	}
+assign:
 
 	// Assign hardware slots stickily: match each cluster to the slot
 	// whose previous colour is nearest. Planar layers bake the remap
@@ -567,16 +767,10 @@ static uint8_t g_partDist[kCutParts][kCutEntries][kCutEntries];
 static uint16_t g_partRep[kCutParts][kCutEntries];
 static bool g_partUsed[kCutParts];
 static int g_collectPart;
+static uint16_t g_partLast[kCutParts][kCutEntries]; // last palette collected
 
 static inline uint16_t pack4(const Color &c) {
 	return (uint16_t)(((c.r >> 4) << 8) | ((c.g >> 4) << 4) | (c.b >> 4));
-}
-
-static inline int dist4(uint16_t a, uint16_t b) {
-	int dr = ((a >> 8) & 15) - ((b >> 8) & 15); if (dr < 0) dr = -dr;
-	int dg = ((a >> 4) & 15) - ((b >> 4) & 15); if (dg < 0) dg = -dg;
-	int db = (a & 15) - (b & 15); if (db < 0) db = -db;
-	return dr + 2 * dg + db;
 }
 
 void ST_cutscenePalReset() {
@@ -598,24 +792,65 @@ void ST_cutscenePalCollect(const Color *entries, int n) {
 	for (int i = 0; i < n; ++i) {
 		packed[i] = pack4(entries[i]);
 	}
+	// Only pairs with an entry that differs from the part's previous
+	// palette can raise a distance; a cutscene palette step usually
+	// touches a few entries (and often none), so this cuts the pair
+	// scan - the bulk of the prescan - to a fraction.
+	bool changed[kCutEntries];
+	int nChanged = 0;
+	uint16_t *last = g_partLast[part];
 	if (!g_partUsed[part]) {
 		g_partUsed[part] = true;
 		memset(g_partDist[part], 0, sizeof(g_partDist[part]));
 		memset(g_partRep[part], 0, sizeof(g_partRep[part]));
+		for (int i = 0; i < kCutEntries; ++i) {
+			changed[i] = true;
+		}
+		nChanged = kCutEntries;
+	} else {
+		for (int i = 0; i < kCutEntries; ++i) {
+			changed[i] = packed[i] != last[i];
+			nChanged += changed[i];
+		}
 	}
+	if (nChanged == 0) {
+		return;
+	}
+	memcpy(last, packed, sizeof(packed));
 	uint8_t (*dm)[kCutEntries] = g_partDist[part];
 	uint16_t *rep = g_partRep[part];
+	// component nibbles, the row side pre-shifted for the |a-b| table
+	uint8_t r[kCutEntries], g[kCutEntries], b[kCutEntries];
+	uint8_t rh[kCutEntries], gh[kCutEntries], bh[kCutEntries];
+	uint8_t absd[256];
+	for (int i = 0; i < 16; ++i) {
+		for (int j = 0; j < 16; ++j) {
+			absd[i * 16 + j] = (uint8_t)(i > j ? i - j : j - i);
+		}
+	}
 	for (int i = 0; i < kCutEntries; ++i) {
-		if (dist4(packed[i], 0) > dist4(rep[i], 0)) {
+		r[i] = (packed[i] >> 8) & 15;
+		g[i] = (packed[i] >> 4) & 15;
+		b[i] = packed[i] & 15;
+		rh[i] = r[i] << 4;
+		gh[i] = g[i] << 4;
+		bh[i] = b[i] << 4;
+		if (changed[i] && dist4(packed[i], 0) > dist4(rep[i], 0)) {
 			rep[i] = packed[i];
 		}
-		for (int j = i + 1; j < kCutEntries; ++j) {
-			int d = dist4(packed[i], packed[j]);
-			if (d > 255) {
-				d = 255;
+	}
+	for (int i = 0; i < kCutEntries; ++i) {
+		const int ri = rh[i], gi = gh[i], bi = bh[i];
+		const bool ci = changed[i];
+		uint8_t *row = dm[i] + i + 1;
+		for (int j = i + 1; j < kCutEntries; ++j, ++row) {
+			if (!ci && !changed[j]) {
+				continue;
 			}
-			if (d > dm[i][j]) {
-				dm[i][j] = dm[j][i] = (uint8_t)d;
+			// max component sum is 15 + 30 + 15, so no clamp needed
+			const int d = absd[ri | r[j]] + 2 * absd[gi | g[j]] + absd[bi | b[j]];
+			if (d > *row) {
+				*row = dm[j][i] = (uint8_t)d;
 			}
 		}
 	}
@@ -861,6 +1096,9 @@ void SystemStub_STDL::buildRemap() {
 				_remap[i] = (uint8_t)bs;
 			}
 			++g_remapGen;
+			if (!g_cutscenePal) {
+				++g_roomGen;
+			}
 			_fade = (fade > 1023) ? 1023 : fade;
 			_hwDirty = true;
 			return;
@@ -952,6 +1190,9 @@ void SystemStub_STDL::buildRemap() {
 	if (memcmp(newRemap, _remap, sizeof(_remap)) != 0) {
 		memcpy(_remap, newRemap, sizeof(_remap));
 		++g_remapGen;
+		if (!g_cutscenePal) {
+			++g_roomGen;
+		}
 		// stale planar data on screen uses the old mapping:
 		// re-run the conversion from the shadow frame
 		reconvertFromShadow();
