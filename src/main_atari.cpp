@@ -97,7 +97,10 @@ static void initOptions() {
 	g_options.fix_fmopl_e0_reg = false;
 	g_options.skip_intro = false;
 	g_options.crop_screen = false;
-	g_options.overscan = false;
+	// on by default: it shows the whole picture, and since the line
+	// mapping is then one-to-one it is also the fastest of the three
+	// ways of fitting 224 lines on the screen
+	g_options.overscan = true;
 	g_options.music = false;
 	g_options.log_fps = false;
 	g_options.bench = false;

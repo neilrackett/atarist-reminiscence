@@ -112,13 +112,14 @@ music sets [4]) are supported by the SDL build — see the upstream
 Options go in `RS.CFG`, a plain text file next to `FLASHBAK.TOS`,
 one `name=value` per line (`true`/`1` to enable). Lines starting
 with `#` are ignored, and the file is optional — every option
-defaults to off.
+defaults to off except `overscan` and `frame_skip`, which are noted
+below.
 
 | Option                     | Effect                                                                 |
 | -------------------------- | ---------------------------------------------------------------------- |
 | `skip_intro`               | Go straight to the title screen, skipping the intro sequence           |
-| `crop_screen`              | Crop 12 lines off the top and bottom instead of squashing 224 into 200 |
-| `overscan`                 | Open the top border: all 224 lines shown natively, nothing dropped     |
+| `crop_screen`              | With `overscan=false`: crop 12 lines off the top and bottom instead of squashing 224 into 200 |
+| `overscan`                 | Open both borders: all 224 lines shown natively, centred, nothing dropped (**on** by default) |
 | `music`                    | YM chip music, if the tracks have been built (see below)               |
 | `frame_skip`               | Drop cutscene frames to hold the scripted pace (**on** by default; `frame_skip=false` draws every frame, slower) |
 | `logging`                  | Write progress and warnings to `RS.LOG` (errors are always written)    |
@@ -150,33 +151,43 @@ on, so it announces itself in `RS.LOG` at startup. Turn it off
 before playing.
 
 `overscan` and `crop_screen` choose how the game's 224 lines reach
-the ST's 200: by default every ninth line is dropped, which keeps
-the whole playfield visible but slices through sprites and text.
-Cropping instead hides the top and bottom 12 lines — every
-displayed line stays intact, at the cost of hiding the edges of
-each room. Overscan removes the top border so all 224 lines display
-natively with nothing dropped or hidden — the picture reaches the
-top edge of the tube and sits ~27 lines higher than a stock screen
-on a CRT. A 60Hz/NTSC machine is switched to 50Hz while the game
-runs (the border trick needs a PAL frame), and it costs about 2ms
-a frame in extra blitting. The Amiga and DOS releases never had
-to choose: DOS programmed a ~256x224 VGA mode, and NTSC Amigas
-opened a display taller than 200 lines.
+the ST's 200. Overscan, the default, opens the top and bottom
+borders for a 273-line screen and puts the picture in the middle of
+it: every line displays natively, nothing is dropped or hidden, and
+there is a black band above and below. It needs a 50Hz PAL frame,
+so a 60Hz/NTSC machine is switched to 50Hz while the game runs, and
+it costs about 2.5% of an 8MHz frame in border interrupts — which
+it more than earns back, because a one-to-one line mapping lets
+screen copies step by a constant instead of looking up every row:
+measured 40.7ms a frame against 42.0 squashed on a plain ST.
+
+Set `overscan=false` and the 224 lines have to lose 24 somewhere.
+By default every ninth line is dropped, which keeps the whole
+playfield visible but slices through sprites and text; with
+`crop_screen` the top and bottom 12 lines are hidden instead, so
+every displayed line stays intact at the cost of the edges of each
+room. Overscan also falls back to one of these on its own if the
+borders will not open. The Amiga and DOS releases never had to
+choose: DOS programmed a ~256x224 VGA mode, and NTSC Amigas opened
+a display taller than 200 lines.
 
 ## To-do
 
 - Non-STE sound effects (the YM can carry them; the samples cannot)
 - Make the main menu look more like the original game
-- Make it faster. Measured on level 1 with `bench`: ~16.5 fps on a
-  stock 8MHz ST, ~29.5 fps on a 16MHz Mega STE. The shifted sprite
-  blit is hand-written 68000 now, so the remaining wins are
-  structural: drawing sprites straight to the screen instead of
-  through the front layer, or baking sprites pre-shifted.
-- Cutscenes still run behind their scripted frame delays: the intro
-  wants ~57s of work against a 27s budget on an 8MHz machine, so
-  they play slow rather than at the pace the scripts ask for.
-  Closing that needs fewer full-page copies and less fill volume,
-  not faster instructions.
+- Make it faster. Measured on level 1 with `bench`: ~24.5 fps on a
+  stock 8MHz ST, ~23 on an STE (its DMA sound mixer runs every
+  frame), ~38.5 fps on a 16MHz Mega STE, which is comfortably clear
+  of the 30Hz the engine asks for. Sprite blitting is the largest
+  remaining item at ~18% of a frame, and its inner merge is already
+  hand-written 68000 at about what the processor can do, so the
+  wins left there are structural: drawing fewer pixels rather than
+  drawing them faster.
+- Cutscenes hold their scripted pace by dropping frames (see
+  `frame_skip`), but the busiest ones still drop a lot of them: the
+  second intro scene wants ~41s of work against a 27s budget on an
+  8MHz machine and shows about a third of its frames. Closing that
+  needs less fill volume, not faster instructions.
 - SDL 1.2 version for TT and Falcon
 
 ## Credits
