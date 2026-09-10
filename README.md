@@ -122,6 +122,7 @@ below.
 | `overscan`                 | Open both borders: all 224 lines shown natively, centred, nothing dropped (**on** by default) |
 | `music`                    | YM chip music, if the tracks have been built (see below)               |
 | `frame_skip`               | Drop cutscene frames to hold the scripted pace (**on** by default; `frame_skip=false` draws every frame, slower) |
+| `blitter`                  | Use the BLiTTER where the machine has one (**on** by default; `blitter=false` forces the CPU paths, for diagnosis) |
 | `logging`                  | Write progress and warnings to `RS.LOG` (errors are always written)    |
 | `log_fps`                  | Log the frame rate to `RS.LOG`, averaged over 64 frames                |
 | `bench`                    | Benchmark: time 512 gameplay frames, log the result, then **quit**     |
@@ -139,7 +140,7 @@ below.
 | `order_inventory_original` | Order inventory items as the original did                              |
 
 The ST-specific ones are `overscan`, `crop_screen`, `skip_intro`,
-`frame_skip`, `logging`, `log_fps` and `bench`. `logging` is off by default (every
+`frame_skip`, `blitter`, `logging`, `log_fps` and `bench`. `logging` is off by default (every
 line is a file append); turn it on to see what the game is doing
 (rooms, cutscenes, missing files),
 and `log_fps` and `bench` switch it on for themselves. `bench` exists because frame rates measured against live play

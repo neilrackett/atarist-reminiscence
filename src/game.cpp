@@ -689,7 +689,11 @@ void Game::updateTiming() {
 			const uint32_t now = _stub->getTimeStamp();
 			const uint32_t d = now - t0;
 			if (t0 != 0 && d != 0) {
-				info("fps %d.%d (%d ms/frame)", (int)(64000 / d), (int)((640000 / d) % 10), (int)(d / 64));
+				// the miss count rides along: a border that drops
+				// under load shows here rather than only in the
+				// per-cutscene line
+				info("fps %d.%d (%d ms/frame) misses %u", (int)(64000 / d), (int)((640000 / d) % 10), (int)(d / 64),
+					(unsigned)ST_overscanMisses());
 			}
 			t0 = now;
 			frames = 0;

@@ -159,6 +159,8 @@ struct Options {
 	bool bench;
 	bool logging;
 	bool frame_skip;
+	bool blitter;
+	bool overscan_bottom;
 };
 
 struct Features {

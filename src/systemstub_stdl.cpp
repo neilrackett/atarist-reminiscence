@@ -268,6 +268,14 @@ void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int
 	if (STDL_Init(0x20 | 0x200) != 0) { // VIDEO | JOYSTICK
 		error("STDL_Init failed");
 	}
+	if (!g_options.blitter) {
+		// diagnostic: a BLiTTER operation runs in hog mode while a
+		// border is open and cannot be interrupted once started, so
+		// turning it off says whether it is what makes a border
+		// interrupt miss its window on a busy frame
+		STDL_UseBlitter(0);
+		info("BLiTTER disabled (blitter=false)");
+	}
 	_screen = STDL_SetVideoMode(320, 200, 4, 0);
 	if (!_screen) {
 		error("STDL_SetVideoMode failed");
@@ -291,20 +299,34 @@ void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int
 	_ovscOpen = false;
 	int ovscY = 0;   // screen row the first source line goes to
 	if (g_options.overscan) {
-		if (STDL_OpenTopBorder() != 0) {
+		const int topH = STDL_OpenTopBorder();
+		if (topH != 0) {
 			_ovscOpen = true;
 			// Both borders (273 rows) centre the picture: the
 			// 224 lines sit in the middle with black bands above
 			// and below, instead of hanging off the top of the
 			// tube. Costs about 2.5% of an 8MHz frame against
 			// 1.4% for the top border alone.
-			const int both = STDL_OpenBottomBorder();
+			const int both = g_options.overscan_bottom ? STDL_OpenBottomBorder() : 0;
 			if (both != 0) {
 				ovscY = (both - kMaxSrcH) / 2;
 				info("Both borders open: %d lines, picture centred at row %d", both, ovscY);
 			} else {
-				warning("Bottom border unavailable (%s), picture at the top of the screen",
-					STDL_GetError());
+				// Top border alone: sit the picture on the bottom
+				// of the screen rather than the top. The first two
+				// or three displayed lines come up shifted a few
+				// pixels left while the Shifter settles after the
+				// sync-rate switch, and the spare rows are the only
+				// place to put that where nobody sees it.
+				ovscY = topH - kMaxSrcH;
+				if (ovscY < 0) {
+					ovscY = 0;
+				}
+				if (g_options.overscan_bottom) {
+					warning("Bottom border unavailable (%s), top border only",
+						STDL_GetError());
+				}
+				info("Top border only: %d lines, picture at row %d", topH, ovscY);
 			}
 		} else {
 			warning("Overscan unavailable (%s), using %s",

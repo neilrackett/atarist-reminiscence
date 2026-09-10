@@ -106,6 +106,8 @@ static void initOptions() {
 	g_options.bench = false;
 	g_options.logging = false;
 	g_options.frame_skip = true;
+	g_options.blitter = true;
+	g_options.overscan_bottom = true;
 	struct {
 		const char *name;
 		bool *value;
@@ -136,6 +138,8 @@ static void initOptions() {
 		{ "bench", &g_options.bench },
 		{ "logging", &g_options.logging },
 		{ "frame_skip", &g_options.frame_skip },
+		{ "blitter", &g_options.blitter },
+		{ "overscan_bottom", &g_options.overscan_bottom },
 		{ 0, 0 }
 	};
 	FILE *fp = fopen("RS.CFG", "rb");
@@ -145,16 +149,29 @@ static void initOptions() {
 			if (buf[0] == '#') {
 				continue;
 			}
-			const char *p = strchr(buf, '=');
-			if (p) {
-				++p;
+			const char *eq = strchr(buf, '=');
+			if (eq) {
+				// the name is what precedes '=', matched whole:
+				// a prefix match would let "overscan" claim
+				// "overscan_bottom" and set the wrong option
+				const char *name = buf;
+				while (*name && isspace(*name)) {
+					++name;
+				}
+				const char *nameEnd = eq;
+				while (nameEnd > name && isspace(nameEnd[-1])) {
+					--nameEnd;
+				}
+				const size_t nameLen = nameEnd - name;
+				const char *p = eq + 1;
 				while (*p && isspace(*p)) {
 					++p;
 				}
-				if (*p) {
+				if (*p && nameLen != 0) {
 					const bool value = (*p == 't' || *p == 'T' || *p == '1');
 					for (int i = 0; opts[i].name; ++i) {
-						if (strncmp(buf, opts[i].name, strlen(opts[i].name)) == 0) {
+						if (strlen(opts[i].name) == nameLen
+						    && strncmp(name, opts[i].name, nameLen) == 0) {
 							*opts[i].value = value;
 							break;
 						}
