@@ -452,6 +452,13 @@ void Game::displayTitleScreenAmiga() {
 	_vid.AMIGA_decodeCmp(_res._scratchBuffer + 6, buf);
 	int h = 0;
 	int shownLevel = -1;   // which selection the screen is showing
+	// The list gained a Quit entry below the levels, so it starts a
+	// line higher and the last item still clears the FLASHBACK logo.
+	// kQuitItem is the selection index for it; _currentLevel only
+	// ever holds a real level.
+	enum { kQuitItem = Menu::LEVELS_COUNT };
+	int selected = _currentLevel;
+	bool quitSelected = false;
 	MenuConfirm confirm;
 	while (1) {
 		if (h <= kH / 2) {
@@ -469,18 +476,23 @@ void Game::displayTitleScreenAmiga() {
 			// one happened to straddle a poll. Draw when the
 			// selection moves and spend the rest of the time
 			// listening.
-			if (shownLevel != _currentLevel) {
-				static const int kTextY = 24;   // first name, 16-pixel pitch
+			if (shownLevel != selected) {
+				static const int kTextY = 8;    // first name, 16-pixel pitch
 				static const uint8_t selectedColor = 0xE4;
 				static const uint8_t defaultColor = 0xE8;
-				for (int i = 0; i < Menu::LEVELS_COUNT; ++i) {
+				for (int i = 0; i <= kQuitItem; ++i) {
 					// after the first pass only two lines change colour
-					if (shownLevel >= 0 && i != shownLevel && i != _currentLevel) {
+					if (shownLevel >= 0 && i != shownLevel && i != selected) {
 						continue;
 					}
-					const char *str = Menu::_levelNames[i];
-					const uint8_t color = (_currentLevel == i) ? selectedColor : defaultColor;
-					const int x = 24;
+					const char *str = (i == kQuitItem)
+						? (const char *)_res.getMenuString(LocaleData::LI_11_QUIT)
+						: Menu::_levelNames[i];
+					const uint8_t color = (selected == i) ? selectedColor : defaultColor;
+					// left-aligned with the F of the FLASHBACK logo
+					// below: its ink starts at x=13, and the font
+					// carries two blank columns before a glyph
+					const int x = 11;
 					const int y = kTextY + i * 16;
 					for (int j = 0; str[j]; ++j) {
 						_vid.AMIGA_drawStringChar(buf, kW, x + j * Video::CHAR_W, y, _res._fnt, color, str[j]);
@@ -489,26 +501,29 @@ void Game::displayTitleScreenAmiga() {
 				// the picture behind the names is untouched, so blit
 				// the lines that swapped colour rather than the screen
 				if (shownLevel < 0) {
-					const int textH = (Menu::LEVELS_COUNT - 1) * 16 + Video::CHAR_H;
+					const int textH = kQuitItem * 16 + Video::CHAR_H;
 					_stub->copyRect(0, kTextY, kW, textH, buf, kW);
 				} else {
 					_stub->copyRect(0, kTextY + shownLevel * 16, kW, Video::CHAR_H, buf, kW);
-					_stub->copyRect(0, kTextY + _currentLevel * 16, kW, Video::CHAR_H, buf, kW);
+					_stub->copyRect(0, kTextY + selected * 16, kW, Video::CHAR_H, buf, kW);
 				}
 				_stub->updateScreen(0);
-				shownLevel = _currentLevel;
+				shownLevel = selected;
 			}
 			if (_stub->_pi.dirMask & PlayerInput::DIR_UP) {
 				_stub->_pi.dirMask &= ~PlayerInput::DIR_UP;
-				if (_currentLevel > 0) {
-					--_currentLevel;
+				if (selected > 0) {
+					--selected;
 				}
 			}
 			if (_stub->_pi.dirMask & PlayerInput::DIR_DOWN) {
 				_stub->_pi.dirMask &= ~PlayerInput::DIR_DOWN;
-				if (_currentLevel < Menu::LEVELS_COUNT - 1) {
-					++_currentLevel;
+				if (selected < kQuitItem) {
+					++selected;
 				}
+			}
+			if (selected != kQuitItem) {
+				_currentLevel = selected;
 			}
 		}
 		_stub->processEvents();
@@ -516,9 +531,13 @@ void Game::displayTitleScreenAmiga() {
 			break;
 		}
 		if (confirm(_stub->_pi)) {
+			quitSelected = (selected == kQuitItem);
 			break;
 		}
 		_stub->sleep(30);
+	}
+	if (quitSelected) {
+		_stub->_pi.quit = true;
 	}
 	free(buf);
 }
