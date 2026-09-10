@@ -87,6 +87,7 @@ static void ATARIST_playSample(const uint8_t *data, uint32_t len, uint16_t freq,
 }
 #endif
 
+#ifdef ATARIST
 /*
  * YM chip music. The Amiga score is sampled and this port has no
  * software mixer, so the modules are converted offline into YM2149
@@ -172,6 +173,8 @@ static void ATARIST_stopMusic() {
 		_ymTrack = -1;
 	}
 }
+
+#endif
 
 Mixer::Mixer(FileSystem *fs, SystemStub *stub, const PrfMidiDriver *midiDriver, const char *midiSoundFont)
 	: _stub(stub), _musicType(MT_NONE), _cpc(this, fs), _mod(this, fs), _ogg(this, fs), _prf(this, fs, midiDriver, midiSoundFont), _sfx(this) {

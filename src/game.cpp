@@ -2149,11 +2149,13 @@ void Game::loadLevelData() {
 void Game::drawIcon(uint8_t iconNum, int16_t x, int16_t y, uint8_t colMask) {
 	uint8_t scratch[16 * 16];
 	uint8_t *buf = scratch;
+#ifdef ATARIST
 	const uint8_t *cached = _icnCache.lookup(iconNum);
 	if (cached) {
 		buf = (uint8_t *)cached;
 		goto drawCached;
 	}
+#endif
 	switch (_res._type) {
 	case kResourceTypeAmiga:
 		if (iconNum > 30) {
@@ -2204,6 +2206,7 @@ void Game::drawIcon(uint8_t iconNum, int16_t x, int16_t y, uint8_t colMask) {
 		_vid.SEGA_decodeIcn(_res._icn, iconNum, buf);
 		break;
 	}
+#ifdef ATARIST
 	if (_res._type != kResourceTypeMac) {
 		// draw from the cached copy, never the stack scratch: the
 		// planar cache keys on the source address, and a stack
@@ -2214,6 +2217,7 @@ void Game::drawIcon(uint8_t iconNum, int16_t x, int16_t y, uint8_t colMask) {
 		buf = kept;
 	}
 drawCached:
+#endif
 #ifdef ATARIST
 	ST_drawSpriteCached(_vid._frontLayer, buf, 16, x, y, 16, 16, colMask << 4, 0, (colMask & 8) != 0);
 #else
