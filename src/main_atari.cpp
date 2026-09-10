@@ -146,7 +146,13 @@ static void initOptions() {
 	if (fp) {
 		char buf[256];
 		while (fgets(buf, sizeof(buf), fp)) {
-			if (buf[0] == '#') {
+			// a comment may be indented: the shipped RS.CFG groups
+			// its options and comments the optional ones out
+			const char *c = buf;
+			while (*c && isspace(*c)) {
+				++c;
+			}
+			if (*c == '#' || *c == ';' || *c == 0) {
 				continue;
 			}
 			const char *eq = strchr(buf, '=');

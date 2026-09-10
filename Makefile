@@ -62,6 +62,8 @@ $(TARGET): $(OBJS) $(STDL_LIB) | dist
 	$(CXX) $(CXXFLAGS) -o build/flashbak.elf $(OBJS) $(LIBS)
 	cp build/flashbak.elf $@
 	$(STRIP) $@
+	@# the documented template, but never over a config in use
+	@test -f dist/RS.CFG || cp RS.CFG.template dist/RS.CFG
 
 build/%.o: src/%.cpp | build
 	$(CXX) $(CXXFLAGS) -c -o $@ $<

@@ -111,9 +111,16 @@ music sets [4]) are supported by the SDL build — see the upstream
 
 Options go in `RS.CFG`, a plain text file next to `FLASHBAK.TOS`,
 one `name=value` per line (`true`/`1` to enable). Lines starting
-with `#` are ignored, and the file is optional — every option
+with `#` or `;` are ignored, and the file is optional — every option
 defaults to off except `overscan` and `frame_skip`, which are noted
 below.
+
+A ready-made `RS.CFG` ships with the build: every option is listed
+with its default named, commented out and set to the opposite value,
+so switching one is a matter of deleting a `#`. `RS.CFG.template` in
+the source tree is the master copy; a build installs it only when
+`dist/RS.CFG` does not already exist, so your own settings are never
+overwritten.
 
 | Option                     | Effect                                                                 |
 | -------------------------- | ---------------------------------------------------------------------- |

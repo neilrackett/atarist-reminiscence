@@ -1,0 +1,86 @@
+# RS.CFG - options for the Atari ST port of REminiscence.
+#
+# One name=value per line, true/1 to enable. Lines starting with #
+# or ; are ignored. Every line below is shown set to the OPPOSITE of
+# its default, so uncommenting a line changes that setting. The
+# default is named at the end of each description.
+
+# --- picture ------------------------------------------------------
+
+# Turn off overscan and go back to a 200-line screen: 224 lines are
+# squashed to fit unless crop_screen is on. Try this if the picture
+# is unstable on your machine. (default: overscan=true)
+#overscan=false
+
+# Open the top border only: 228 lines with the picture on the bottom
+# edge, rather than 273 lines with it centred. Cheaper, and steadier
+# on machines the bottom border misbehaves on. (default: true, both
+# borders open)
+#overscan_bottom=false
+
+# With overscan=false, crop 12 lines off the top and bottom instead
+# of squashing 224 lines into 200. Ignored while overscan is on.
+# (default: false, squash)
+#crop_screen=true
+
+# --- sound --------------------------------------------------------
+
+# Play YM chip music. Needs the .STM tracks built - see the README.
+# Sampled effects need an STE and play regardless of this.
+# (default: false)
+#music=true
+
+# Use the .PRF music files rather than the .STM ones. (default: false)
+#use_prf_music=true
+
+# --- speed --------------------------------------------------------
+
+# Draw every cutscene frame and let the scene run long, rather than
+# dropping frames to hold its scripted pace. (default: true, hold the
+# pace)
+#frame_skip=false
+
+# --- diagnostics --------------------------------------------------
+
+# Force the CPU drawing paths and leave the BLiTTER alone. Slower - it
+# exists for diagnosing timing problems. (default: true, use the
+# BLiTTER where the machine has one)
+#blitter=false
+
+# Write progress and warnings to RS.LOG. Errors are always written.
+# (default: false)
+#logging=true
+
+# Log the frame rate to RS.LOG, averaged over 64 frames. (default:
+# false)
+#log_fps=true
+
+# Time 512 gameplay frames, log the result and QUIT. Not for playing.
+# (default: false)
+#bench=true
+
+# --- convenience --------------------------------------------------
+
+# Skip the intro sequence and go straight to the title screen.
+# (default: false)
+#skip_intro=true
+
+# --- engine options (from upstream REminiscence) -------------------
+
+# These default to false - uncomment one to turn it on.
+#enable_password_menu=true
+#enable_language_selection=true
+#fade_out_palette=true
+#use_text_cutscenes=true
+#use_white_tshirt=true
+#play_asc_cutscene=true
+#play_caillou_cutscene=true
+#play_metro_cutscene=true
+#play_serrure_cutscene=true
+#play_carte_cutscene=true
+#play_gamesaved_sound=true
+#order_inventory_original=true
+
+# These default to true - uncomment one to turn it off.
+#bypass_protection=false
+#restore_memo_cutscene=false
