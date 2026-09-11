@@ -395,6 +395,19 @@ void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int
 void SystemStub_STDL::destroy() {
 	free(_shadow);
 	_shadow = 0;
+	if (_ovscOpen) {
+		// Close the borders before quitting rather than leaving it to
+		// STDL_Quit's teardown. Both end by reseeding the Shifter's
+		// plane phase - a sync pulse that ran into the next line
+		// leaves it rotated, and on hardware the rotation survives
+		// the program - but the close waits for the blanking first,
+		// where the teardown reseeds wherever the beam happens to be.
+		// The desktop came back with red/blue fringed icons after
+		// quitting from the title screen on a real Mega STE.
+		_ovscOpen = false;
+		STDL_CloseBottomBorder();
+		STDL_CloseTopBorder();
+	}
 	STDL_Quit();
 }
 
