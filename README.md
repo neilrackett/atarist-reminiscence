@@ -6,8 +6,8 @@ Flashback on the Atari ST, by [Neil Rackett](https://neilrackett.com/atarist).
 
 ## Introduction
 
-Of all the games that never had an official released on the Atari ST, one
-that I was most disappointed about was Flashback (Delphine Software, 1992).
+Of all the games that never had an official released on the Atari ST, one of
+the ones I was most disappointed about was Flashback (Delphine Software, 1992).
 
 So, using [STDL](https://github.com/neilrackett/atarist-stdl)
 (the `stdl/` submodule) and the Amiga data files, I've ported
@@ -20,11 +20,11 @@ ST and just three decades later...
 ## Requirements
 
 - Sound effects and in-game music are STE-only.
-- Requires 2MB RAM.
+- Requires at least 2MB RAM, 4MB recommended.
 
 ## Installing
 
-1. Extract the data files from the Amiga disk images (see below).
+1. Extract the data files from your legally owned original Amiga version (see below).
 2. Copy `FLASHBAK.TOS` and the `DATA\` folder to your ST's hard disk.
 3. Run `FLASHBAK.TOS` from the desktop.
 
@@ -49,20 +49,46 @@ set in `RS.CFG` (same `key=value` format as the SDL build's `rs.cfg`).
 A joystick in port 1 maps to the arrow keys with fire as Shift.
 
 A controller works too, when an Xpad provider is present (a SidecarTridge
-running MD/Sidepad, for example). It drives the game as keypresses, so
-nothing in the game knows the difference:
+running [MD/Sidepad](https://downloads.neilrackett.com/md-sidepad),
+for example). It drives the game as keypresses, so nothing in the game
+knows the difference:
 
-| Pad                     | Key           | Action                   |
-| ----------------------- | ------------- | ------------------------ |
-| D-pad / left stick      | Arrow keys    | move Conrad              |
-| A                       | Shift         | talk / use / run / shoot |
-| B, right shoulder       | Enter         | use the inventory object |
-| Y, Select, left shoulder| Backspace     | display inventory        |
-| X                       | Space         |                          |
-| Start                   | Escape        | display options          |
+| Pad                      | Key        | Action                   |
+| ------------------------ | ---------- | ------------------------ |
+| D-pad / left stick       | Arrow keys | move Conrad              |
+| A                        | Shift      | talk / use / run / shoot |
+| B, right shoulder        | Enter      | use the inventory object |
+| Y, Select, left shoulder | Backspace  | display inventory        |
+| X                        | Space      |                          |
+| Start                    | Escape     | display options          |
 
 Save, load, quit and the state-slot keys stay on the keyboard: they are
 Ctrl combinations, and a pad button emulates a single key.
+
+## Work in progress
+
+While the game should now be feature complete, it is still a work in progress,
+so please [submit an issue](https://github.com/neilrackett/atarist-reminiscence/issues)
+or [open a pull request](https://github.com/neilrackett/atarist-reminiscence/pulls)
+if you find anything that doesn't work or you think you can improve.
+
+Please ensure that you include as much information as possible in your submission,
+including:
+
+- The Atari ST model and TOS version (ST, STE, Mega ST, Mega STE)
+- Whether you are using an emulator (e.g. [Hatari](https://www.hatari-emu.org/)) or real hardware
+- The amount of RAM you have installed
+- Any devices you have connected
+- The exact steps to reproduce the issue
+- Any error messages or logs you see
+
+### Overscan
+
+Overscan is on by default, extending the ST's screen upwards to display the full 224 lines of
+the game, but is still experimental, especially on 16MHz machines (Mega STE).
+
+- If you would like to try full overscan (down too), add `overscan_bottom=true` to RS.CFG
+- If you experience any flickering, try disconnecting things like network devices first, then add `overscan_bottom=false` to RS.CFG to disable it if that doesn't work.
 
 ## Building
 
@@ -122,29 +148,30 @@ the source tree is the master copy; a build installs it only when
 `dist/RS.CFG` does not already exist, so your own settings are never
 overwritten.
 
-| Option                     | Effect                                                                 |
-| -------------------------- | ---------------------------------------------------------------------- |
-| `skip_intro`               | Go straight to the title screen, skipping the intro sequence           |
-| `crop_screen`              | With `overscan=false`: crop 12 lines off the top and bottom instead of squashing 224 into 200 |
-| `overscan`                 | Open both borders: all 224 lines shown natively, centred, nothing dropped (**on** by default) |
-| `music`                    | YM chip music, if the tracks have been built (see below)               |
-| `frame_skip`               | Drop cutscene frames to hold the scripted pace (**on** by default; `frame_skip=false` draws every frame, slower) |
-| `blitter`                  | Use the BLiTTER where the machine has one (**on** by default; `blitter=false` forces the CPU paths, for diagnosis) |
-| `logging`                  | Write progress and warnings to `RS.LOG` (errors are always written)    |
-| `log_fps`                  | Log the frame rate to `RS.LOG`, averaged over 64 frames                |
-| `bench`                    | Benchmark: time 512 gameplay frames, log the result, then **quit**     |
-| `bypass_protection`        | Skip the copy-protection screen                                        |
-| `enable_password_menu`     | Show the level password menu                                           |
-| `fade_out_palette`         | Fade the palette out between screens                                   |
-| `use_text_cutscenes`       | Replace missing cutscenes with their text                              |
-| `use_white_tshirt`         | Conrad's t-shirt is white in the intro                                 |
-| `play_asc_cutscene`        | Play the ASC cutscene (level 2 fuse)                                   |
-| `play_caillou_cutscene`    | Play the CAILLOU cutscene (save checkpoints)                           |
-| `play_metro_cutscene`      | Play the METRO cutscene                                                |
-| `play_serrure_cutscene`    | Play the SERRURE cutscene                                              |
-| `play_carte_cutscene`      | Play the CARTE cutscene (keys)                                         |
-| `restore_memo_cutscene`    | Draw the extra shapes in the MEMO cutscene                             |
-| `order_inventory_original` | Order inventory items as the original did                              |
+| Option                     | Effect                                                                                                                |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `skip_intro`               | Go straight to the title screen, skipping the intro sequence                                                          |
+| `crop_screen`              | With `overscan=false`: crop 12 lines off the top and bottom instead of squashing 224 into 200                         |
+| `overscan`                 | Open the top border: all 224 lines shown natively, nothing dropped (**on** by default)                                |
+| `overscan_bottom`          | Open the bottom border too, centring the picture in 273 lines (off by default: it jumps and stripes on some machines) |
+| `music`                    | YM chip music, if the tracks have been built (see below)                                                              |
+| `frame_skip`               | Drop cutscene frames to hold the scripted pace (**on** by default; `frame_skip=false` draws every frame, slower)      |
+| `blitter`                  | Use the BLiTTER where the machine has one (**on** by default; `blitter=false` forces the CPU paths, for diagnosis)    |
+| `logging`                  | Write progress and warnings to `RS.LOG` (errors are always written)                                                   |
+| `log_fps`                  | Log the frame rate to `RS.LOG`, averaged over 64 frames                                                               |
+| `bench`                    | Benchmark: time 512 gameplay frames, log the result, then **quit**                                                    |
+| `bypass_protection`        | Skip the copy-protection screen                                                                                       |
+| `enable_password_menu`     | Show the level password menu                                                                                          |
+| `fade_out_palette`         | Fade the palette out between screens                                                                                  |
+| `use_text_cutscenes`       | Replace missing cutscenes with their text                                                                             |
+| `use_white_tshirt`         | Conrad's t-shirt is white in the intro                                                                                |
+| `play_asc_cutscene`        | Play the ASC cutscene (level 2 fuse)                                                                                  |
+| `play_caillou_cutscene`    | Play the CAILLOU cutscene (save checkpoints)                                                                          |
+| `play_metro_cutscene`      | Play the METRO cutscene                                                                                               |
+| `play_serrure_cutscene`    | Play the SERRURE cutscene                                                                                             |
+| `play_carte_cutscene`      | Play the CARTE cutscene (keys)                                                                                        |
+| `restore_memo_cutscene`    | Draw the extra shapes in the MEMO cutscene                                                                            |
+| `order_inventory_original` | Order inventory items as the original did                                                                             |
 
 The ST-specific ones are `overscan`, `crop_screen`, `skip_intro`,
 `frame_skip`, `blitter`, `logging`, `log_fps` and `bench`. `logging` is off by default (every
@@ -159,10 +186,17 @@ on, so it announces itself in `RS.LOG` at startup. Turn it off
 before playing.
 
 `overscan` and `crop_screen` choose how the game's 224 lines reach
-the ST's 200. Overscan, the default, opens the top and bottom
-borders for a 273-line screen and puts the picture in the middle of
-it: every line displays natively, nothing is dropped or hidden, and
-there is a black band above and below. It needs a 50Hz PAL frame,
+the ST's 200. Overscan, the default, opens the top border for a
+228-line screen and sits the picture on the bottom edge of it:
+every line displays natively, nothing is dropped or hidden, and
+there is a black band above. `overscan_bottom=true` opens the
+bottom border as well, for a 273-line screen with the picture
+centred — the same 224 lines, framed rather than bottom-aligned.
+That is not the default because the combined screen still jumps
+every few seconds and stripes its bottom border on real hardware,
+a fault nothing has yet caught in the act: the emulator removes
+both borders on all but three of 80,000 traced gameplay frames,
+across all four wakeup states. It needs a 50Hz PAL frame,
 so a 60Hz/NTSC machine is switched to 50Hz while the game runs, and
 it costs about 2.5% of an 8MHz frame in border interrupts — which
 it more than earns back, because a one-to-one line mapping lets

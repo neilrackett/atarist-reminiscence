@@ -12,11 +12,11 @@
 # is unstable on your machine. (default: overscan=true)
 #overscan=false
 
-# Open the top border only: 228 lines with the picture on the bottom
-# edge, rather than 273 lines with it centred. Cheaper, and steadier
-# on machines the bottom border misbehaves on. (default: true, both
-# borders open)
-#overscan_bottom=false
+# Open the bottom border as well as the top: 273 lines with the
+# picture centred, rather than 228 with it on the bottom edge. The
+# whole picture shows either way. Known to jump and stripe on some
+# machines, which is why the top border alone is the default.
+#overscan_bottom=true
 
 # With overscan=false, crop 12 lines off the top and bottom instead
 # of squashing 224 lines into 200. Ignored while overscan is on.

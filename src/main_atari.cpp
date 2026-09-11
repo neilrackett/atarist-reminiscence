@@ -107,7 +107,14 @@ static void initOptions() {
 	g_options.logging = false;
 	g_options.frame_skip = true;
 	g_options.blitter = true;
-	g_options.overscan_bottom = true;
+	// Off: the top border alone is the steady one. Both borders open
+	// cleanly in the emulator - 80,000 traced frames across all four
+	// wakeup states lost the bottom on three - but on hardware the
+	// picture still jumps every few seconds and the bottom stripes,
+	// and nothing measured so far has caught it in the act. The top
+	// border shows every line either way; it just sits the picture on
+	// the bottom edge instead of centring it.
+	g_options.overscan_bottom = false;
 	struct {
 		const char *name;
 		bool *value;
