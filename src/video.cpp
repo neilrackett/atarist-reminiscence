@@ -27,7 +27,10 @@ Video::Video(Resource *res, SystemStub *stub, WidescreenMode widescreenMode)
 	_backLayer = (uint8_t *)calloc(1,_layerSize);
 	_tempLayer = (uint8_t *)calloc(1, _layerSize);
 	_tempLayer2 = (uint8_t *)calloc(1, _layerSize);
+#ifndef ATARIST
+	// the ST tracks block state in _blkDirty/_blkShown/_blkOwed instead
 	_screenBlocks = (uint8_t *)calloc(1, (_w / SCREENBLOCK_W) * (_h / SCREENBLOCK_H));
+#endif
 #ifdef ATARIST
 	memset(_blkDirty, 0, sizeof(_blkDirty));
 	memset(_blkShown, 0, sizeof(_blkShown));
@@ -59,7 +62,9 @@ Video::~Video() {
 	free(_backLayer);
 	free(_tempLayer);
 	free(_tempLayer2);
+#ifndef ATARIST
 	free(_screenBlocks);
+#endif
 }
 
 #ifdef ATARIST
@@ -142,7 +147,7 @@ static void restorePrio(uint8_t *dst, const uint8_t *src, int groups, int lines,
 
 void Video::ST_restoreDirty() {
 	if (_fullRefresh) {
-		memcpy(_frontLayer, _backLayer, _layerSize);
+		ST_copyLayer(_frontLayer, _backLayer);
 		return;
 	}
 	const int cols = _w / SCREENBLOCK_W;
@@ -185,8 +190,9 @@ void Video::ST_restoreDirty() {
 				b2 >>= 1;
 			}
 			bit = b2;
-			const int gx0 = (i * SCREENBLOCK_W) >> 4;
-			const int groups = ((i2 * SCREENBLOCK_W - 1) >> 4) - gx0 + 1;
+			// SCREENBLOCK_W is 16 here, so a block is exactly a group
+			const int gx0 = i;
+			const int groups = i2 - i;
 			{
 				const int off = yy * kSTRowBytes + gx0 * 8;
 				restorePlanes(_frontLayer + off, _backLayer + off, groups, lines);
@@ -376,7 +382,9 @@ void Video::updateWidescreen() {
 void Video::fullRefresh() {
 	debug(DBG_VIDEO, "Video::fullRefresh()");
 	_fullRefresh = true;
+#ifndef ATARIST
 	memset(_screenBlocks, 0, (_w / SCREENBLOCK_W) * (_h / SCREENBLOCK_H));
+#endif
 #ifdef ATARIST
 	memset(_blkDirty, 0, sizeof(_blkDirty));
 	memset(_blkShown, 0, sizeof(_blkShown));

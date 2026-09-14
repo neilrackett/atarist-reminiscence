@@ -1373,20 +1373,12 @@ static void blitBaked(uint8_t *layer, SprEntry *e, int x, int y, bool respectPri
 	view->stride = (uint16_t)stride;
 	view->mask = (uint8_t *)mask;
 	view->maskstride = (uint16_t)maskStride;
-	view->clip.x = 0;
-	view->clip.y = 0;
-	view->clip.w = (uint16_t)useW;
-	view->clip.h = (uint16_t)e->useH;
-
-	STDL_Rect sr, dr;
-	sr.x = 0;
-	sr.y = 0;
-	sr.w = (uint16_t)useW;
-	sr.h = (uint16_t)e->useH;
+	// clip is never read for a source, and a NULL source rect already
+	// means the whole surface; the destination rect's w/h are written
+	// by the blit, not read from it. Ten stores a sprite, all dead.
+	STDL_Rect dr;
 	dr.x = (int16_t)dstX;
 	dr.y = (int16_t)(y + e->offY);
-	dr.w = sr.w;
-	dr.h = sr.h;
 	unsigned f = 0;
 	if (respectPrio) {
 		f |= STDL_BLIT_UNDER;
@@ -1395,7 +1387,7 @@ static void blitBaked(uint8_t *layer, SprEntry *e, int x, int y, bool respectPri
 		f |= STDL_BLIT_MARK;
 		ST_prioTouchedRect(dstX, y + e->offY, useW, e->useH);
 	}
-	STDL_BlitSurfaceEx(view, &sr, dst, &dr, f);
+	STDL_BlitSurfaceEx(view, NULL, dst, &dr, f);
 }
 
 void ST_drawSpriteCached(uint8_t *layer, const uint8_t *src, int pitch, int x, int y, int w, int h, uint8_t colMask, unsigned flags, bool setPrio) {
@@ -2258,32 +2250,6 @@ static void fillRowPtr(uint16_t *row, uint16_t *prow, int x, int x1,
 		--nfull;
 	}
 	if (nfull > 0) {
-#ifdef __m68k__
-		{
-			uint32_t l01 = ((uint32_t)f0 << 16) | f1;
-			uint32_t l23 = ((uint32_t)f2 << 16) | f3;
-			uint16_t *d = dst;
-			int n = nfull - 1;
-			__asm__ volatile(
-				"1:\n\t"
-				"move.l %2,(%0)+\n\t"
-				"move.l %3,(%0)+\n\t"
-				"dbra %1,1b"
-				: "+a"(d), "+d"(n)
-				: "d"(l01), "d"(l23)
-				: "memory", "cc");
-			const uint16_t pv = setPrio ? 0xFFFF : 0;
-			uint16_t *pp = prio;
-			n = nfull - 1;
-			__asm__ volatile(
-				"2:\n\t"
-				"move.w %2,(%0)+\n\t"
-				"dbra %1,2b"
-				: "+a"(pp), "+d"(n)
-				: "d"(pv)
-				: "memory", "cc");
-		}
-#else
 		for (int n = 0; n < nfull; ++n) {
 			dst[n * 4 + 0] = f0;
 			dst[n * 4 + 1] = f1;
@@ -2291,7 +2257,6 @@ static void fillRowPtr(uint16_t *row, uint16_t *prow, int x, int x1,
 			dst[n * 4 + 3] = f3;
 			prio[n] = setPrio ? 0xFFFF : 0;
 		}
-#endif
 		dst += nfull * 4;
 		prio += nfull;
 	}
