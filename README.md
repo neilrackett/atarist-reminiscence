@@ -1,4 +1,4 @@
-# REminiscence — Atari ST
+# REminiscence: Flashback for the Atari ST
 
 <img src="./flashback.png" alt="Flashback" width="640" height="400" />
 
@@ -11,9 +11,9 @@ the ones I was most disappointed about was Flashback (Delphine Software, 1992).
 
 So, using [STDL](https://github.com/neilrackett/atarist-stdl)
 (the `stdl/` submodule) and the Amiga data files, I've ported
-[REminiscence](https://github.com/cyxx/REminiscence) 0.5.6, Gregory
+[REminiscence](https://github.com/cyxx/REminiscence), Gregory
 Montoir's re-implementation of the original game engine, to the Atari
-ST and just three decades later...
+ST and just three decades after the original was released...
 
 **_Say hello to Flashback for Atari ST._**
 
@@ -25,10 +25,10 @@ ST and just three decades later...
 ## Installing
 
 1. Extract the data files from your legally owned original Amiga version (see below).
-2. Copy `FLASHBAK.TOS` and the `DATA\` folder to your ST's hard disk.
-3. Run `FLASHBAK.TOS` from the desktop.
+2. Copy `FLASHBAK.TOS` and the `DATA\` folder from the extracted data to your ST's hard disk.
+3. Run `FLASHBAK.TOS`.
 
-The game loads its files from `DATA\` and writes savestates
+The game loads its files from `DATA\` and saves game state
 (`RS<level>_<slot>.SAV`) and `RS.LOG` in the program folder. Options can be
 set in `RS.CFG` (same `key=value` format as the SDL build's `rs.cfg`).
 
@@ -48,10 +48,8 @@ set in `RS.CFG` (same `key=value` format as the SDL build's `rs.cfg`).
 
 A joystick in port 1 maps to the arrow keys with fire as Shift.
 
-A controller works too, when an Xpad provider is present (a SidecarTridge
-running [MD/Sidepad](https://downloads.neilrackett.com/md-sidepad),
-for example). It drives the game as keypresses, so nothing in the game
-knows the difference:
+If you'd like to use a gamepad, [Xpad](https://downloads.neilrackett.com/atarist-xpad)
+providers are supported, including [MD/Sidepad](https://downloads.neilrackett.com/md-sidepad).
 
 | Pad                      | Key        | Action                   |
 | ------------------------ | ---------- | ------------------------ |
@@ -113,17 +111,15 @@ names (`replicant.spm` renamed to `REPLICAN.SPM` for GEMDOS 8.3).
 CAPS/SPS `.ipf` disk images — see [tools/README.md](tools/README.md).
 
 There is no music in the Amiga data set: the Amiga score ships as
-separate `.mod` files, and they are sampled music no ST can play
-(there is no DMA sound on a plain ST, and no software mixer here).
-`tools/make-music.sh --download` converts those modules into YM2149
-register streams instead, which every ST can play — a chip version
-of the soundtrack rather than the sampled original. Copy the
-resulting `.STM` files into `DATA\` and set `music=true` in
-`RS.CFG`. Without them the game plays as before: each missing track
-is noted once in `RS.LOG` (with `logging=true`) and the scene runs silent. Unlike the
-sampled sound effects this needs no STE — the YM2149 is in every
-ST, and the replay costs nothing measurable (35.20 vs 35.11
-ms/frame).
+separate `.mod` files. `tools/make-music.sh --download` converts
+those modules into YM2149 register streams instead, which every
+ST can play — a chip version of the soundtrack rather than the
+sampled original. Copy the resulting `.STM` files into `DATA\` and
+set `music=true` in `RS.CFG`. Without them the game plays as before:
+each missing track is noted once in `RS.LOG` (with `logging=true`)
+and the scene runs silent. Unlike the sampled sound effects this needs
+no STE — the YM2149 is in every ST, and the replay costs nothing
+measurable (35.20 vs 35.11 ms/frame).
 
 If you can't find your original Amiga disks, try the
 [TOSEC Commodore Amiga collection](https://ia600803.us.archive.org/view_archive.php?archive=/21/items/Commodore_Amiga_TOSEC_2012_04_10/Commodore_Amiga_TOSEC_2012_04_10.zip).
