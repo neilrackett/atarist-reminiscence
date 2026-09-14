@@ -69,9 +69,8 @@
 
 # These default to false - uncomment one to turn it on.
 #enable_password_menu=true
-# Not supported on the ST: the language menu draws its flags through
-# a 24-bit path this port has no planar equivalent for, so the screen
-# comes out wrong. Left here because the engine still accepts it.
+# Does nothing here: the language switch only runs for DOS data, and
+# this port takes the Amiga set. Left in because the engine accepts it.
 #enable_language_selection=true
 #fade_out_palette=true
 #use_text_cutscenes=true

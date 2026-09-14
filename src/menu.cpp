@@ -571,6 +571,9 @@ void Menu::handleTitleScreen() {
 
 		// draw the language flag in the top right corner
 		if (previousLanguage != currentLanguage) {
+			// On the ST this hands the planar front layer to the chunky
+			// converter. Unreachable while the language menu stays gated
+			// on DOS data; relaxing that gate needs a planar path first.
 			_stub->copyRect(0, 0, _vid->_w, _vid->_h, _vid->_frontLayer, _vid->_w);
 			static const int flagW = 16;
 			static const int flagH = 12;
