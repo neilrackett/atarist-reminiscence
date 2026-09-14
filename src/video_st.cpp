@@ -1171,7 +1171,10 @@ static bool bakeSprite(SprEntry *e, const uint8_t *src, int pitch, int w, int h,
 		// enough for the next one that lands in it, so after warm-up
 		// a miss costs no allocation at all
 		free(e->block);
-		e->block = (uint16_t *)malloc((words + 2 * kGuard) * sizeof(uint16_t));
+		// +1 word of slack so planes can be put on a long boundary:
+		// mintlib's malloc is only word aligned, and STDL's fast copy
+		// silently declines a row that is not long aligned.
+		e->block = (uint16_t *)malloc((words + 2 * kGuard + 1) * sizeof(uint16_t));
 		e->cap = e->block ? words : 0;
 	}
 	if (!e->block) {
@@ -1179,6 +1182,9 @@ static bool bakeSprite(SprEntry *e, const uint8_t *src, int pitch, int w, int h,
 		return false;
 	}
 	e->planes = e->block + kGuard;
+	if (((unsigned long)e->planes & 3UL) != 0UL) {
+		++e->planes;
+	}
 	e->mask = e->planes + planeWords;
 	e->groups = groups;
 	// STDL's source-mask convention is bit set = destination
@@ -1271,7 +1277,9 @@ static bool buildShifted(SprEntry *e, int phase) {
 			++g_shCount;
 		}
 		free(e->shBlock);
-		e->shBlock = (uint16_t *)malloc((words + 2 * kGuard) * sizeof(uint16_t));
+		// +1 word of slack for the same long-boundary reason as the
+		// bake block above
+		e->shBlock = (uint16_t *)malloc((words + 2 * kGuard + 1) * sizeof(uint16_t));
 		if (!e->shBlock) {
 			e->shCap = 0;
 			--g_shCount;
@@ -1280,6 +1288,9 @@ static bool buildShifted(SprEntry *e, int phase) {
 		e->shCap = words;
 	}
 	e->shPlanes = e->shBlock + kGuard;
+	if (((unsigned long)e->shPlanes & 3UL) != 0UL) {
+		++e->shPlanes;
+	}
 	e->shMask = e->shPlanes + sg * 4 * rows;
 	e->shG = (uint8_t)sg;
 	const uint16_t *sp = e->planes + e->offY * e->groups * 4 + e->offG * 4;
