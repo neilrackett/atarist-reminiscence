@@ -1,0 +1,52 @@
+name: PR
+
+# Does it build? That is the whole job. This runs the same `stcmd make`
+# as release.yml, so a pull request that would break the release fails
+# here instead, and it tags nothing, publishes nothing and keeps no
+# artifacts. There is no host test suite in this port: verification is a
+# build plus a run under Hatari, and a runner cannot do the second half.
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Read-only: this workflow runs code from a contributor's branch, so it
+# gets nothing it does not need. release.yml holds the write token.
+permissions:
+  contents: read
+
+# A force-push mid-review should not leave two builds racing to report.
+concurrency:
+  group: pr-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # stcmd runs docker with -it unless this is set, and a runner has no
+  # terminal.
+  STCMD_NO_TTY: 1
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v5
+        with:
+          # STDL is a submodule and carries Xpad as a submodule of its
+          # own, which the Makefile names in STDL_SRCS. Recursing is
+          # required for the link to succeed, not a convenience.
+          submodules: recursive
+
+      - name: Install the Atari ST toolkit
+        # Generates /usr/local/bin/stcmd, which runs the m68k build in a
+        # container. The installer picks the image for the runner's
+        # architecture, so this is the x86_64 image here and an arm64 one
+        # on a developer's Mac; both carry m68k-atari-mint-g++.
+        run: curl -sL https://github.com/sidecartridge/atarist-toolkit-docker/releases/latest/download/install_atarist_toolkit_docker.sh | bash
+
+      - name: Build
+        # The command the README documents, unchanged: libstdl.a and the
+        # dist/FLASHBAK.TOS that links against it.
+        run: stcmd make
