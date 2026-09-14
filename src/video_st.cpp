@@ -1055,7 +1055,16 @@ void ST_drawSprite(uint8_t *layer, const uint8_t *src, int pitch, int x, int y, 
 // scratch mask a set bit under every drawn pixel, which is exactly
 // the "opaque" mask the blit below wants.
 
-enum { kSprSlots = 64, kSprMaxW = 128, kSprMaxH = 160 };   // power of two: direct-mapped
+// Two ways per set, 64 entries as before. Direct-mapped, the hash is
+// the source pointer, and two sprites drawn every frame whose pointers
+// land in one slot then evict each other every frame - a re-bake each,
+// where a bake costs about what a chunky draw costs. Whether that
+// happens is decided by the heap layout, so it appeared and vanished
+// on unrelated changes: a submodule bump cost 6 fps on an STE and a
+// spare word of malloc gave it back. A second way makes a pair of
+// colliding sprites a hit instead of a thrash.
+enum { kSprSets = 32, kSprWays = 2, kSprSlots = kSprSets * kSprWays };
+enum { kSprMaxW = 128, kSprMaxH = 160 };
 
 struct SprEntry {
 	const uint8_t *src;
@@ -1093,6 +1102,8 @@ enum { kShMax = 12 };
 static int g_shCount;
 
 static SprEntry g_spr[kSprSlots];
+// which way of each set to overwrite next; a hit points it at the other
+static uint8_t g_sprNext[kSprSets];
 
 // Bake on the second sighting (see below): remembers sources seen
 // once, so a bake is only spent on frames that repeat.
@@ -1171,10 +1182,7 @@ static bool bakeSprite(SprEntry *e, const uint8_t *src, int pitch, int w, int h,
 		// enough for the next one that lands in it, so after warm-up
 		// a miss costs no allocation at all
 		free(e->block);
-		// +1 word of slack so planes can be put on a long boundary:
-		// mintlib's malloc is only word aligned, and STDL's fast copy
-		// silently declines a row that is not long aligned.
-		e->block = (uint16_t *)malloc((words + 2 * kGuard + 1) * sizeof(uint16_t));
+		e->block = (uint16_t *)malloc((words + 2 * kGuard) * sizeof(uint16_t));
 		e->cap = e->block ? words : 0;
 	}
 	if (!e->block) {
@@ -1182,9 +1190,6 @@ static bool bakeSprite(SprEntry *e, const uint8_t *src, int pitch, int w, int h,
 		return false;
 	}
 	e->planes = e->block + kGuard;
-	if (((unsigned long)e->planes & 3UL) != 0UL) {
-		++e->planes;
-	}
 	e->mask = e->planes + planeWords;
 	e->groups = groups;
 	// STDL's source-mask convention is bit set = destination
@@ -1277,9 +1282,7 @@ static bool buildShifted(SprEntry *e, int phase) {
 			++g_shCount;
 		}
 		free(e->shBlock);
-		// +1 word of slack for the same long-boundary reason as the
-		// bake block above
-		e->shBlock = (uint16_t *)malloc((words + 2 * kGuard + 1) * sizeof(uint16_t));
+		e->shBlock = (uint16_t *)malloc((words + 2 * kGuard) * sizeof(uint16_t));
 		if (!e->shBlock) {
 			e->shCap = 0;
 			--g_shCount;
@@ -1288,9 +1291,6 @@ static bool buildShifted(SprEntry *e, int phase) {
 		e->shCap = words;
 	}
 	e->shPlanes = e->shBlock + kGuard;
-	if (((unsigned long)e->shPlanes & 3UL) != 0UL) {
-		++e->shPlanes;
-	}
 	e->shMask = e->shPlanes + sg * 4 * rows;
 	e->shG = (uint8_t)sg;
 	const uint16_t *sp = e->planes + e->offY * e->groups * 4 + e->offG * 4;
@@ -1413,13 +1413,17 @@ void ST_drawSpriteCached(uint8_t *layer, const uint8_t *src, int pitch, int x, i
 	const uint16_t gen = ST_remapGen();
 	// direct-mapped: scanning every slot cost more than the blit it
 	// was there to save
-	const int slot = (int)((((unsigned long)src >> 4) ^ colMask) & (kSprSlots - 1));
-	SprEntry *e = &g_spr[slot];
-	if (e->src == src && e->gen == gen && e->colMask == colMask
-	    && e->flags == (uint8_t)bakeFlags && e->w == (uint8_t)w
-	    && e->h == (uint8_t)h) {
-	} else {
-		e = 0;
+	const int set = (int)((((unsigned long)src >> 4) ^ colMask) & (kSprSets - 1));
+	SprEntry *e = 0;
+	for (int way = 0; way < kSprWays; ++way) {
+		SprEntry *c = &g_spr[set * kSprWays + way];
+		if (c->src == src && c->gen == gen && c->colMask == colMask
+		    && c->flags == (uint8_t)bakeFlags && c->w == (uint8_t)w
+		    && c->h == (uint8_t)h) {
+			e = c;
+			g_sprNext[set] = (uint8_t)(kSprWays - 1 - way);
+			break;
+		}
 	}
 	if (!e) {
 		// Baking costs about what one chunky draw costs, so a frame
@@ -1447,7 +1451,8 @@ void ST_drawSpriteCached(uint8_t *layer, const uint8_t *src, int pitch, int x, i
 				return;
 			}
 		}
-		e = &g_spr[slot];
+		e = &g_spr[set * kSprWays + g_sprNext[set]];
+		g_sprNext[set] = (uint8_t)(kSprWays - 1 - g_sprNext[set]);
 		uint8_t map16[16];
 		ST_buildMap16(colMask, map16);
 		unsigned f = 0;
