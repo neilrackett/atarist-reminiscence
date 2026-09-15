@@ -107,9 +107,9 @@ can play.
 
 `extract-data.sh` puts the modules in `tmp/music`, and
 `tools/make-music.sh` with no arguments converts whatever it finds
-there. Copy the resulting `.STM` files into a `MUSIC\` folder next to
-`FLASHBAK.TOS` — not into `DATA\`, which holds the game's own files —
-and set `music=true` in `RS.CFG`.
+there into `dist/MUSIC`. Copy that `MUSIC\` folder to your ST, next to
+`FLASHBAK.TOS` and alongside `DATA\`, and set `music=true` in
+`RS.CFG`.
 
 Without the `.STM` files the game plays as it always did: each
 missing track is noted once in `RS.LOG` (with `logging=true`) and the

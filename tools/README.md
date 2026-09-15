@@ -97,7 +97,10 @@ RS_MUSIC_DIR=/some/where tools/make-music.sh
 
 `extract-data.sh` takes the modules off the game's own disks into
 `tmp/music/`, which is where this reads from by default, so there is
-nothing to fetch and the music is the player's own data.
+nothing to fetch and the music is the player's own data. The streams
+go to **`dist/MUSIC/`**, beside `dist/DATA/` - the layout the ST
+wants, so there is nothing to move by hand afterwards. `RS_MUSIC_DIR`
+and `RS_MUSIC_OUT` override the two ends.
 
 There is deliberately no download path. The game cannot run without
 its data files, so anyone able to play already has the disks the

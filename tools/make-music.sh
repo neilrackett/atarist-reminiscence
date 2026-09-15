@@ -8,24 +8,28 @@
 # streams offline: MOD -> SMF (tools/mod2smf.py) -> STM (stdlconv).
 #
 # Usage: tools/make-music.sh [module-dir]
-#        RS_MUSIC_DIR=/some/where tools/make-music.sh ...
+#        RS_MUSIC_DIR=/some/where  (modules to read, default tmp/music)
+#        RS_MUSIC_OUT=/some/where  (streams to write, default dist/MUSIC)
 #
-# With no arguments it reads modules from tmp/music/ and writes the
-# .STM files back there, which is where tools/extract-data.sh puts
-# the modules it finds on the game's own disks. There is no download
-# path: the game cannot run without its data files, so anyone able to
-# play already has the disks the score is on - and the disks carry a
-# complete set, where the copy on The Mod Archive is missing memoire.
+# With no arguments it reads the modules tools/extract-data.sh took
+# off the game's own disks, from tmp/music/, and writes the streams
+# into dist/MUSIC/ - the layout the ST wants, beside dist/DATA, so
+# there is nothing left to copy by hand afterwards.
 #
-# tmp/music is gitignored: the modules are other people's work and
-# the streams are derived from them, so neither belongs here.
+# There is no download path: the game cannot run without its data
+# files, so anyone able to play already has the disks the score is on
+# - and the disks carry a complete set, where the copy on The Mod
+# Archive is missing memoire.
+#
+# Both directories are gitignored: the modules are other people's
+# work and the streams are derived from them, so neither belongs
+# here.
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$HERE/.."
-OUT="${RS_MUSIC_DIR:-$ROOT/tmp/music}"
+SRC="${1:-${RS_MUSIC_DIR:-$ROOT/tmp/music}}"
+OUT="${RS_MUSIC_OUT:-$ROOT/dist/MUSIC}"
 STDLCONV="$ROOT/stdl/tools/stdlconv/stdlconv.py"
-
-SRC="${1:-$OUT}"
 if ! ls "$SRC"/*.mod >/dev/null 2>&1; then     # also covers "no such dir"
     echo "no modules in $SRC" >&2
     echo "Extract them from your own disks with:" >&2
@@ -84,9 +88,7 @@ print("\n%d tracks, %d bytes total%s"
 PY
 
 echo
-echo "Streams are in $OUT"
-echo "Copy them into a MUSIC\\ folder beside FLASHBAK.TOS (not DATA\\, which"
-echo "stays as it came off the disks) and set music=true in RS.CFG."
+echo "Streams are in $OUT - set music=true in RS.CFG to hear them."
 echo
 echo "Play one on target with STDL's example:"
 echo "  cp $OUT/JUNGLE.STM somewhere/DEMO.STM"
