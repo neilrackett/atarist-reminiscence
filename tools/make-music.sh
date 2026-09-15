@@ -128,6 +128,9 @@ PY
 
 echo
 echo "Streams are in $OUT"
+echo "Copy them into a MUSIC\\ folder beside FLASHBAK.TOS (not DATA\\, which"
+echo "stays as it came off the disks) and set music=true in RS.CFG."
+echo
 echo "Play one on target with STDL's example:"
 echo "  cp $OUT/JUNGLE.STM somewhere/DEMO.STM"
 echo "  stdl/tests/hatari/run.sh ym stdl/dist/PLAYMUS.TOS 8 'sleep 20'"

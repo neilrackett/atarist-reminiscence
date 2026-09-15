@@ -30,7 +30,9 @@ mapping table here to drift out of step. Set `RS_MUSIC_DIR` to write
 them somewhere else.
 
 `dist/` is the Hatari GEMDOS C: drive during development; the game
-expects its files in `DATA\` next to `FLASHBAK.TOS`.
+expects its files in `DATA\` next to `FLASHBAK.TOS`, and the chip
+music separately in `MUSIC\` - `DATA\` holds only what came off the
+disks, so it can be compared against a fresh extraction.
 
 ## check-names.sh
 

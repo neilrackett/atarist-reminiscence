@@ -25,7 +25,8 @@
 
 # --- sound --------------------------------------------------------
 
-# Play YM chip music. Needs the .STM tracks built - see the README.
+# Play YM chip music. Needs the .STM tracks in a MUSIC\ folder beside
+# this file - see the README for building them from your own disks.
 # Sampled effects need an STE and play regardless of this.
 # (default: false)
 #music=true

@@ -104,8 +104,9 @@ a chip version of the soundtrack rather than the sampled original.
 
 `extract-data.sh` puts the modules in `tmp/music`, and
 `tools/make-music.sh` with no arguments converts whatever it finds
-there. Copy the resulting `.STM` files into `DATA\` and set
-`music=true` in `RS.CFG`.
+there. Copy the resulting `.STM` files into a `MUSIC\` folder next to
+`FLASHBAK.TOS` — not into `DATA\`, which stays exactly what came off
+the disks — and set `music=true` in `RS.CFG`.
 
 If you no longer have the disks, `tools/make-music.sh --download`
 fetches the same score from The Mod Archive. That set is one track

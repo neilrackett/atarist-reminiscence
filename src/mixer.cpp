@@ -144,14 +144,18 @@ static bool ATARIST_playMusic(int num) {
 	}
 	char stem[16];
 	ATARIST_musicName(want, stem);
+	// MUSIC\, not DATA\: DATA is exactly what comes off the Amiga
+	// disks, and these streams are built from them rather than found
+	// on them. Keeping the two apart means a data folder can be
+	// compared against a fresh extraction without the music in the way.
 	char path[32];
-	snprintf(path, sizeof(path), "DATA\\%s.STM", stem);
+	snprintf(path, sizeof(path), "MUSIC\\%s.STM", stem);
 
 	STDL_Music *m = STDL_LoadMusic(path);
 	if (m == 0) {
 		if (num < 32 && !(_ymMissing & (1u << num))) {
 			_ymMissing |= 1u << num;
-			warning("No music for track %d (%s) - run tools/make-music.sh", num, path);
+			warning("No music for track %d (%s) - see tools/make-music.sh", num, path);
 		}
 		return false;
 	}
