@@ -72,26 +72,27 @@ Everything the game needs is in four places on 1 or more of the 4 disks:
 | `font8.spr` | the font, in the root of disk 1                   | Copy the file into `DATA\`  |
 | `music/`    | the score, as ProTracker modules (optional)       | (see below)                 |
 
-All four disks carry some of it, and some files appear on more than
-one — copying them all together into one folder is what you want.
+The extracted files all go into a `DATA\` folder next to `FLASHBAK.TOS`,
+with uppercase 8.3 ST-friendly names, e.g. `replicant.spm` becomes
+`REPLICAN.SPM`. `extract-data.sh` handles that;
 
-The extracted files go in a `DATA\` folder next to `FLASHBAK.TOS`,
-with uppercase 8.3 names — `replicant.spm` becomes `REPLICAN.SPM`,
-because GEMDOS only keeps the first eight characters. `extract-data.sh`
-handles that; if you extract with something else, run
-`tools/check-names.sh` afterwards and it will tell you about any name
-too long, not uppercase, or quietly colliding with another.
+You can run `tools/check-names.sh` after extracting the files and it will tell
+you about any name too long, not uppercase, or quietly colliding with another.
+Add `--fix` and it renames the ones it can do safely, listing anything that
+needs you to decide.
+
+If you're unable to find your disks, try sites like
+[Archive.org](https://ia600803.us.archive.org/view_archive.php?archive=/21/items/Commodore_Amiga_TOSEC_2012_04_10/Commodore_Amiga_TOSEC_2012_04_10.zip),
+or [Planet Emulation](https://www.planetemu.net/roms/commodore-amiga-games-adf?page=F).
 
 For CAPS/SPS `.ipf` disk images, `tools/extract-data.sh` extracts the
-files for you (runs on macOS, Linux, or Windows via WSL); see
+files for you; see
 [tools/README.md](tools/README.md) for the dependencies you'll need to install first.
 Alternatively, you could try [HxC Floppy Emulator software](https://hxc2001.com/download/floppy_drive_emulator/#sdhxc)
 or one of the other tools available via a [quick Google search](https://www.google.com/search?q=tools+for+extracting+data+from+amiga+disk+images)
 to extract files from ADF format disk images.
 
-If you're unable to find your disks, try sites like
-[Archive.org](https://ia600803.us.archive.org/view_archive.php?archive=/21/items/Commodore_Amiga_TOSEC_2012_04_10/Commodore_Amiga_TOSEC_2012_04_10.zip),
-or [Planet Emulation](https://www.planetemu.net/roms/commodore-amiga-games-adf?page=F).
+_All of the `.sh` tools run on macOS, Linux, or Windows via WSL._
 
 For the SDL build, see the upstream [README](https://github.com/cyxx/REminiscence)
 for more information.

@@ -37,7 +37,8 @@ disks, so it can be compared against a fresh extraction.
 ## check-names.sh
 
 ```
-tools/check-names.sh [dir]        # default: dist/
+tools/check-names.sh [dir]          # report problems, default dir: dist/
+tools/check-names.sh --fix [dir]    # and rename what is safe to rename
 ```
 
 Reports anything that cannot live on a GEMDOS volume: a name over
@@ -46,6 +47,19 @@ outside `A-Z 0-9 _ -`, more than one dot, or — the one that actually
 breaks a game — two files that collide once GEMDOS has truncated
 them, the way `REPLICANT.SPM` and `REPLICAN.SPM` do. Exits non-zero
 if it finds anything, so it can gate a release.
+
+`--fix` renames what it can: case, an over-long name, an over-long
+extension. It refuses three things on purpose, and reports them
+instead. A name whose fixed form is already taken, because two files
+wanting one name is the case that loses data and choosing a winner is
+not a script's decision. Odd characters, because there is no right
+substitute and inventing one risks colliding with a name that was
+already correct. And more than one dot, because `FILE.NAME.TXT` could
+be `FILENAME.TXT` or `FILE.NAM` and only its author knows which.
+
+It is safe to run twice — the second pass renames nothing — and safe
+to run on data that is already correct, which `extract-data.sh` output
+always is.
 
 `extract-data.sh` already names its output correctly. This is for
 data extracted with something else, which the main README suggests
