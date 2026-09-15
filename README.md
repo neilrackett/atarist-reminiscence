@@ -1,74 +1,138 @@
-# REminiscence: Flashback for the Atari ST
+# Flashback for Atari ST
 
 <img src="./flashback.png" alt="Flashback" width="640" height="400" />
 
-Flashback on the Atari ST, by [Neil Rackett](https://neilrackett.com/atarist).
+Flashback ported to the Atari ST via [REminiscence](https://github.com/cyxx/REminiscence),
+by [Neil Rackett](https://neilrackett.com/atarist).
 
 ## Introduction
 
-Of all the games that never had an official released on the Atari ST, one of
+Of all the games that never had an official release on the Atari ST, one of
 the ones I was most disappointed about was Flashback (Delphine Software, 1992).
 
-So, using [STDL](https://github.com/neilrackett/atarist-stdl)
-(the `stdl/` submodule) and the Amiga data files, I've ported
-[REminiscence](https://github.com/cyxx/REminiscence), Gregory
-Montoir's re-implementation of the original game engine, to the Atari
-ST and just three decades after the original was released...
+So, using [STDL](https://github.com/neilrackett/atarist-stdl) and the Amiga
+data files, I've ported [REminiscence](https://github.com/cyxx/REminiscence),
+Gregory Montoir's re-implementation of the original game engine, to the Atari ST.
 
-**_Say hello to Flashback for Atari ST._**
+So, just three decades after the original was released...
+
+**_Say hello to Flashback for the Atari ST._**
 
 ## Requirements
 
-- Sound effects and in-game music are STE-only.
-- Requires at least 2MB RAM, 4MB recommended.
+- Works on any ST with at least 2MB RAM (4MB recommended) and 3MB of hard disk space.
+- Sound effects are STE-only.
+- Optional music works on any ST (see below).
 
 ## Installing
 
-1. Extract the data files from your legally owned original Amiga version (see below).
-2. Copy `FLASHBAK.TOS` and the `DATA\` folder from the extracted data to your ST's hard disk.
-3. Run `FLASHBAK.TOS`.
+1. Extract the data files from your legally owned original Amiga installation disks (see below).
+2. Copy `FLASHBAK.TOS` (and optionally `RS.CFG`) to your ST's hard disk.
+3. Copy the extracted files into a `DATA\` folder next to `FLASHBAK.TOS`.
+4. Run `FLASHBAK.TOS`.
 
-The game loads its files from `DATA\` and saves game state
-(`RS<level>_<slot>.SAV`) and `RS.LOG` in the program folder. Options can be
-set in `RS.CFG` (same `key=value` format as the SDL build's `rs.cfg`).
+Saved games (`RS<level>_<slot>.SAV`) and `RS.LOG` live in the program folder.
+The default `RS.CFG` includes all of the available options (see below).
 
 ## Controls
 
-| Key             | Action                           |
-| --------------- | -------------------------------- |
-| Arrow keys      | move Conrad                      |
-| Shift           | talk / use / run / shoot         |
-| Enter           | use the current inventory object |
-| Backspace / Tab | display inventory                |
-| Any key         | skip the current cutscene        |
-| Escape          | display options                  |
-| Ctrl S / Ctrl L | save / load game state           |
-| Ctrl + / Ctrl - | change game state slot           |
-| Ctrl Q          | quit                             |
+You can control Conrad with the keyboard, a joystick in port 1, or a gamepad:
 
-A joystick in port 1 maps to the arrow keys with fire as Shift.
+| Key             | Joystick   | Gamepad                  | Action                           |
+| --------------- | ---------- | ------------------------ | -------------------------------- |
+| Arrow keys      | Directions | D-pad / left stick       | move Conrad                      |
+| Shift           | Fire       | A                        | talk / use / run / shoot         |
+| Enter           |            | B, right shoulder        | use the current inventory object |
+| Backspace / Tab |            | Y, Select, left shoulder | display inventory                |
+| Space           |            | X                        | toggle the gun on / off          |
+| Escape          |            | Start                    | display options                  |
+| Any key         | Fire       | Any button               | skip the current cutscene        |
+| Ctrl S / Ctrl L |            |                          | save / load game state           |
+| Ctrl + / Ctrl - |            |                          | change game state slot           |
+| Ctrl Q          |            |                          | quit                             |
 
-If you'd like to use a gamepad, [Xpad](https://downloads.neilrackett.com/atarist-xpad)
-providers are supported, including [MD/Sidepad](https://downloads.neilrackett.com/md-sidepad).
-
-| Pad                      | Key        | Action                   |
-| ------------------------ | ---------- | ------------------------ |
-| D-pad / left stick       | Arrow keys | move Conrad              |
-| A                        | Shift      | talk / use / run / shoot |
-| B, right shoulder        | Enter      | use the inventory object |
-| Y, Select, left shoulder | Backspace  | display inventory        |
-| X                        | Space      |                          |
-| Start                    | Escape     | display options          |
+Gamepads are supported via [Xpad](https://downloads.neilrackett.com/atarist-xpad)
+providers, including [MD/Sidepad](https://downloads.neilrackett.com/md-sidepad).
 
 Save, load, quit and the state-slot keys stay on the keyboard: they are
 Ctrl combinations, and a pad button emulates a single key.
 
+## Data files
+
+The Atari ST version uses the Amiga data files. If you can't find
+your original Amiga disks, try the
+[TOSEC Commodore Amiga collection](https://ia600803.us.archive.org/view_archive.php?archive=/21/items/Commodore_Amiga_TOSEC_2012_04_10/Commodore_Amiga_TOSEC_2012_04_10.zip).
+
+You can use `tools/extract-data.sh`, which runs on macOS, Linux or via WSL on Windows,
+to extract the files directly from CAPS/SPS `.ipf` disk images; see [tools/README.md](tools/README.md).
+
+Extracted files should be placed in a `DATA\` folder next to `FLASHBAK.TOS` with uppercase 8.3
+names, e.g. `replicant.spm` becomes `REPLICAN.SPM`.
+
+Alternative tools for extracting files from Amiga disk images are available via a
+[quick Google search](https://www.google.com/search?q=tools+for+extracting+data+from+amiga+disk+images).
+
+Other platforms' data files (DOS floppy/CD, Macintosh `FLASHBACK.BIN`
+/ `FLASHBACK.RSRC`, PC98, SegaCD `VOICE.VCE` for speech, `.mod`
+music sets) are supported by the SDL build. See the upstream
+[README](https://github.com/cyxx/REminiscence) for details.
+
+### Music
+
+There is no music in the Amiga data set: the Amiga score ships as
+separate `.mod` files. `tools/make-music.sh --download` converts
+those modules into YM2149 register streams instead, which every
+ST can play — a chip version of the soundtrack rather than the
+sampled original. Copy the resulting `.STM` files into `DATA\` and
+set `music=true` in `RS.CFG`. Without them the game plays as before:
+each missing track is noted once in `RS.LOG` (with `logging=true`)
+and the scene runs silent.
+
+## Configuration
+
+Options go in `RS.CFG`, a plain text file next to `FLASHBAK.TOS`,
+one `name=value` per line (`true`/`1` to enable). Lines starting
+with `#` or `;` are ignored, and the file is optional.
+
+The `RS.CFG` that ships with the build includes every option,
+with defaults named, so switching one is a matter of deleting a `#`.
+
+| Option                     | ST-specific | Effect                                                                                                             |
+| -------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------ |
+| `skip_intro`               | ✓           | Go straight to the title screen, skipping the intro sequence                                                       |
+| `crop_screen`              | ✓           | With `overscan=false`: crop 12 lines off the top and bottom instead of squashing 224 into 200                      |
+| `overscan`                 | ✓           | Open the top border: all 224 lines shown natively, nothing dropped (**on** by default)                             |
+| `overscan_bottom`          | ✓           | Open the bottom border too, centring the picture in 273 lines (off by default: can be unstable on Mega STE)        |
+| `music`                    | ✓           | YM chip music, if the tracks have been built (see above)                                                           |
+| `frame_skip`               | ✓           | Drop cutscene frames to hold the scripted pace (**on** by default; `frame_skip=false` draws every frame, slower)   |
+| `bypass_protection`        |             | Skip the copy-protection screen                                                                                    |
+| `enable_password_menu`     |             | Show the level password menu                                                                                       |
+| `fade_out_palette`         |             | Fade the palette out between screens                                                                               |
+| `use_text_cutscenes`       |             | Replace missing cutscenes with their text                                                                          |
+| `use_white_tshirt`         |             | Conrad's t-shirt is white in the intro                                                                             |
+| `play_asc_cutscene`        |             | Play the ASC cutscene (level 2 fuse)                                                                               |
+| `play_caillou_cutscene`    |             | Play the CAILLOU cutscene (save checkpoints)                                                                       |
+| `play_metro_cutscene`      |             | Play the METRO cutscene                                                                                            |
+| `play_serrure_cutscene`    |             | Play the SERRURE cutscene                                                                                          |
+| `play_carte_cutscene`      |             | Play the CARTE cutscene (keys)                                                                                     |
+| `restore_memo_cutscene`    |             | Draw the extra shapes in the MEMO cutscene                                                                         |
+| `order_inventory_original` |             | Order inventory items as the original did                                                                          |
+| &nbsp;                     |             |                                                                                                                    |
+| **Diagnostics**            |             |                                                                                                                    |
+| `blitter`                  | ✓           | Use the BLiTTER where the machine has one (**on** by default; `blitter=false` forces the CPU paths, for diagnosis) |
+| `logging`                  | ✓           | Write progress and warnings to `RS.LOG` (errors are always written)                                                |
+| `log_fps`                  | ✓           | Log the frame rate to `RS.LOG`, averaged over 64 frames                                                            |
+| `bench`                    | ✓           | Benchmark: time 512 gameplay frames, log the result, then **quit**                                                 |
+
 ## Work in progress
 
-While the game should now be feature complete, it is still a work in progress,
-so please [submit an issue](https://github.com/neilrackett/atarist-reminiscence/issues)
+While the game is now pretty much feature complete, it is still a work in progress.
+
+### Feedback
+
+Please [submit an issue](https://github.com/neilrackett/atarist-reminiscence/issues)
 or [open a pull request](https://github.com/neilrackett/atarist-reminiscence/pulls)
-if you find anything that doesn't work or you think you can improve.
+if you find anything that doesn't work or if you'd like to contribute to make it better.
 
 Please ensure that you include as much information as possible in your submission,
 including:
@@ -80,13 +144,12 @@ including:
 - The exact steps to reproduce the issue
 - Any error messages or logs you see
 
-### Overscan
+### To-do
 
-Overscan is on by default, extending the ST's screen upwards to display the full 224 lines of
-the game, but is still experimental, especially on 16MHz machines (Mega STE).
-
-- If you would like to try full overscan (down too), add `overscan_bottom=true` to RS.CFG
-- If you experience any flickering, try disconnecting things like network devices first, then add `overscan_bottom=false` to RS.CFG to disable it if that doesn't work.
+- Simplified, non-STE sound effects using YM
+- We're using the Amiga menu (level selector), let's see if we can implement features from the DOS menu, including difficulty selection and save/load functionality
+- We've got ~25fps on an 8MHz machine, can we hit 30 (the maximum the game supports)?
+- Can we achieve smooth cutscenes playback without dropping frames?
 
 ## Building
 
@@ -101,132 +164,6 @@ stcmd make
 This produces `dist/FLASHBAK.TOS`.
 
 The desktop SDL2 build is still available via `make -f Makefile.sdl`.
-
-## Data files
-
-The Atari ST build uses the data files from the Amiga release,
-placed in a `DATA\` folder next to `FLASHBAK.TOS` with uppercase
-names (`replicant.spm` renamed to `REPLICAN.SPM` for GEMDOS 8.3).
-`tools/extract-data.sh` extracts and lays them out directly from
-CAPS/SPS `.ipf` disk images — see [tools/README.md](tools/README.md).
-
-There is no music in the Amiga data set: the Amiga score ships as
-separate `.mod` files. `tools/make-music.sh --download` converts
-those modules into YM2149 register streams instead, which every
-ST can play — a chip version of the soundtrack rather than the
-sampled original. Copy the resulting `.STM` files into `DATA\` and
-set `music=true` in `RS.CFG`. Without them the game plays as before:
-each missing track is noted once in `RS.LOG` (with `logging=true`)
-and the scene runs silent. Unlike the sampled sound effects this needs
-no STE — the YM2149 is in every ST, and the replay costs nothing
-measurable (35.20 vs 35.11 ms/frame).
-
-If you can't find your original Amiga disks, try the
-[TOSEC Commodore Amiga collection](https://ia600803.us.archive.org/view_archive.php?archive=/21/items/Commodore_Amiga_TOSEC_2012_04_10/Commodore_Amiga_TOSEC_2012_04_10.zip).
-
-Other platforms' data files (DOS floppy/CD, Macintosh `FLASHBACK.BIN`
-/ `FLASHBACK.RSRC`, PC98, SegaCD `VOICE.VCE` for speech, `.mod`
-music sets [4]) are supported by the SDL build — see the upstream
-[README](https://github.com/cyxx/REminiscence) for details.
-
-## Configuration
-
-Options go in `RS.CFG`, a plain text file next to `FLASHBAK.TOS`,
-one `name=value` per line (`true`/`1` to enable). Lines starting
-with `#` or `;` are ignored, and the file is optional — every option
-defaults to off except `overscan` and `frame_skip`, which are noted
-below.
-
-A ready-made `RS.CFG` ships with the build: every option is listed
-with its default named, commented out and set to the opposite value,
-so switching one is a matter of deleting a `#`. `RS.CFG.template` in
-the source tree is the master copy; a build installs it only when
-`dist/RS.CFG` does not already exist, so your own settings are never
-overwritten.
-
-| Option                     | Effect                                                                                                                |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `skip_intro`               | Go straight to the title screen, skipping the intro sequence                                                          |
-| `crop_screen`              | With `overscan=false`: crop 12 lines off the top and bottom instead of squashing 224 into 200                         |
-| `overscan`                 | Open the top border: all 224 lines shown natively, nothing dropped (**on** by default)                                |
-| `overscan_bottom`          | Open the bottom border too, centring the picture in 273 lines (off by default: it jumps and stripes on some machines) |
-| `music`                    | YM chip music, if the tracks have been built (see below)                                                              |
-| `frame_skip`               | Drop cutscene frames to hold the scripted pace (**on** by default; `frame_skip=false` draws every frame, slower)      |
-| `blitter`                  | Use the BLiTTER where the machine has one (**on** by default; `blitter=false` forces the CPU paths, for diagnosis)    |
-| `logging`                  | Write progress and warnings to `RS.LOG` (errors are always written)                                                   |
-| `log_fps`                  | Log the frame rate to `RS.LOG`, averaged over 64 frames                                                               |
-| `bench`                    | Benchmark: time 512 gameplay frames, log the result, then **quit**                                                    |
-| `bypass_protection`        | Skip the copy-protection screen                                                                                       |
-| `enable_password_menu`     | Show the level password menu                                                                                          |
-| `fade_out_palette`         | Fade the palette out between screens                                                                                  |
-| `use_text_cutscenes`       | Replace missing cutscenes with their text                                                                             |
-| `use_white_tshirt`         | Conrad's t-shirt is white in the intro                                                                                |
-| `play_asc_cutscene`        | Play the ASC cutscene (level 2 fuse)                                                                                  |
-| `play_caillou_cutscene`    | Play the CAILLOU cutscene (save checkpoints)                                                                          |
-| `play_metro_cutscene`      | Play the METRO cutscene                                                                                               |
-| `play_serrure_cutscene`    | Play the SERRURE cutscene                                                                                             |
-| `play_carte_cutscene`      | Play the CARTE cutscene (keys)                                                                                        |
-| `restore_memo_cutscene`    | Draw the extra shapes in the MEMO cutscene                                                                            |
-| `order_inventory_original` | Order inventory items as the original did                                                                             |
-
-The ST-specific ones are `overscan`, `crop_screen`, `skip_intro`,
-`frame_skip`, `blitter`, `logging`, `log_fps` and `bench`. `logging` is off by default (every
-line is a file append); turn it on to see what the game is doing
-(rooms, cutscenes, missing files),
-and `log_fps` and `bench` switch it on for themselves. `bench` exists because frame rates measured against live play
-are not comparable between runs — the random seed and input timing
-change what is on screen — so it fixes the seed, takes no input and
-runs a set number of frames. It ends by quitting to the desktop,
-which is indistinguishable from a crash if you have forgotten it is
-on, so it announces itself in `RS.LOG` at startup. Turn it off
-before playing.
-
-`overscan` and `crop_screen` choose how the game's 224 lines reach
-the ST's 200. Overscan, the default, opens the top border for a
-228-line screen and sits the picture on the bottom edge of it:
-every line displays natively, nothing is dropped or hidden, and
-there is a black band above. `overscan_bottom=true` opens the
-bottom border as well, for a 273-line screen with the picture
-centred — the same 224 lines, framed rather than bottom-aligned.
-That is not the default because the combined screen still jumps
-every few seconds and stripes its bottom border on real hardware,
-a fault nothing has yet caught in the act: the emulator removes
-both borders on all but three of 80,000 traced gameplay frames,
-across all four wakeup states. It needs a 50Hz PAL frame,
-so a 60Hz/NTSC machine is switched to 50Hz while the game runs, and
-it costs about 2.5% of an 8MHz frame in border interrupts — which
-it more than earns back, because a one-to-one line mapping lets
-screen copies step by a constant instead of looking up every row:
-measured 40.7ms a frame against 42.0 squashed on a plain ST.
-
-Set `overscan=false` and the 224 lines have to lose 24 somewhere.
-By default every ninth line is dropped, which keeps the whole
-playfield visible but slices through sprites and text; with
-`crop_screen` the top and bottom 12 lines are hidden instead, so
-every displayed line stays intact at the cost of the edges of each
-room. Overscan also falls back to one of these on its own if the
-borders will not open. The Amiga and DOS releases never had to
-choose: DOS programmed a ~256x224 VGA mode, and NTSC Amigas opened
-a display taller than 200 lines.
-
-## To-do
-
-- Non-STE sound effects (the YM can carry them; the samples cannot)
-- Make the main menu look more like the original game
-- Make it faster. Measured on level 1 with `bench`: ~24.5 fps on a
-  stock 8MHz ST, ~23 on an STE (its DMA sound mixer runs every
-  frame), ~38.5 fps on a 16MHz Mega STE, which is comfortably clear
-  of the 30Hz the engine asks for. Sprite blitting is the largest
-  remaining item at ~18% of a frame, and its inner merge is already
-  hand-written 68000 at about what the processor can do, so the
-  wins left there are structural: drawing fewer pixels rather than
-  drawing them faster.
-- Cutscenes hold their scripted pace by dropping frames (see
-  `frame_skip`), but the busiest ones still drop a lot of them: the
-  second intro scene wants ~41s of work against a 27s budget on an
-  8MHz machine and shows about a third of its frames. Closing that
-  needs less fill volume, not faster instructions.
-- SDL 1.2 version for TT and Falcon
 
 ## Credits
 
@@ -257,8 +194,7 @@ changes made here are listed in [CHANGES.txt](CHANGES.txt), as requested.
 Atari ST port related code is copyright (C) 2026 Neil Rackett
 
 [STDL](https://github.com/neilrackett/atarist-stdl), the display and audio
-library underneath, is a separate project of mine under the
-LGPL-2.1-or-later.
+library underneath, is a separate project under LGPL-2.1-or-later.
 
 Flashback and its data files are copyright Delphine Software; no game data
 is distributed here.
