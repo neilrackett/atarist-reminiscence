@@ -26,10 +26,11 @@ So, just three decades after the original was released...
 
 ## Installing
 
-1. Extract the data files from your legally owned original Amiga installation disks (see below).
-2. Copy `FLASHBAK.TOS` (and optionally `RS.CFG`) to your ST's hard disk.
-3. Copy the extracted files into a `DATA\` folder next to `FLASHBAK.TOS`.
-4. Run `FLASHBAK.TOS`.
+1. Copy `FLASHBAK.TOS` (and optionally `RS.CFG`) to your ST's hard disk.
+2. Extract all of the files from inside the `cine` and `data` folders, plus `font8.spr`
+   from the root of disk 1, on your original Amiga installation disks into a `DATA`
+   folder next to `FLASHBAK.TOS` (see below).
+3. Run `FLASHBAK.TOS`.
 
 Saved games (`RS<level>_<slot>.SAV`) and `RS.LOG` live in the program folder.
 The default `RS.CFG` includes all of the available options (see below).
@@ -59,22 +60,20 @@ Ctrl combinations, and a pad button emulates a single key.
 
 ## Data files
 
-Everything the game needs is on your legally owned original Amiga
-install disks, in four places:
+Flashback is still copyright Delphine Software, so you'll need to extract the
+files needed from your legally owned original Amiga installation disks.
 
-| On the disk  | What it is                                        |
-| ------------ | ------------------------------------------------- |
-| `data/`      | the game itself — levels, sprites, palettes, text  |
-| `cine/`      | the cutscenes                                      |
-| `font8.spr`  | the font, in the root of disk 1                    |
-| `music/`     | the score, as ProTracker modules (see below)       |
+Everything the game needs is in four places on 1 or more of the 4 disks:
+
+| On the disk | What it is                                        | Where it goes               |
+| ----------- | ------------------------------------------------- | --------------------------- |
+| `data/`     | the game itself — levels, sprites, palettes, text | Copy all files into `DATA\` |
+| `cine/`     | the cutscenes                                     | Copy all files into `DATA\` |
+| `font8.spr` | the font, in the root of disk 1                   | Copy the file into `DATA\`  |
+| `music/`    | the score, as ProTracker modules (optional)       | (see below)                 |
 
 All four disks carry some of it, and some files appear on more than
 one — copying them all together into one folder is what you want.
-
-`tools/extract-data.sh` does that for you from CAPS/SPS `.ipf` disk
-images, and runs on macOS, Linux, or Windows via WSL; see
-[tools/README.md](tools/README.md) for what to install first.
 
 The extracted files go in a `DATA\` folder next to `FLASHBAK.TOS`,
 with uppercase 8.3 names — `replicant.spm` becomes `REPLICAN.SPM`,
@@ -83,34 +82,34 @@ handles that; if you extract with something else, run
 `tools/check-names.sh` afterwards and it will tell you about any name
 too long, not uppercase, or quietly colliding with another.
 
-If you no longer have your disks, try the
-[TOSEC Commodore Amiga collection](https://ia600803.us.archive.org/view_archive.php?archive=/21/items/Commodore_Amiga_TOSEC_2012_04_10/Commodore_Amiga_TOSEC_2012_04_10.zip),
-and there are alternative extraction tools a
-[quick Google search](https://www.google.com/search?q=tools+for+extracting+data+from+amiga+disk+images)
-away.
+For CAPS/SPS `.ipf` disk images, `tools/extract-data.sh` extracts the
+files for you (runs on macOS, Linux, or Windows via WSL); see
+[tools/README.md](tools/README.md) for the dependencies you'll need to install first.
+Alternatively, you could try [HxC Floppy Emulator software](https://hxc2001.com/download/floppy_drive_emulator/#sdhxc)
+or one of the other tools available via a [quick Google search](https://www.google.com/search?q=tools+for+extracting+data+from+amiga+disk+images)
+to extract files from ADF format disk images.
 
-Other platforms' data files (DOS floppy/CD, Macintosh `FLASHBACK.BIN`
-/ `FLASHBACK.RSRC`, PC98, SegaCD `VOICE.VCE` for speech, `.mod`
-music sets) are supported by the SDL build. See the upstream
-[README](https://github.com/cyxx/REminiscence) for details.
+If you're unable to find your disks, try sites like
+[Archive.org](https://ia600803.us.archive.org/view_archive.php?archive=/21/items/Commodore_Amiga_TOSEC_2012_04_10/Commodore_Amiga_TOSEC_2012_04_10.zip),
+or [Planet Emulation](https://www.planetemu.net/roms/commodore-amiga-games-adf?page=F).
+
+For the SDL build, see the upstream [README](https://github.com/cyxx/REminiscence)
+for more information.
 
 ### Music
 
+Music support is still experimental.
+
 The score is on the disks, in `music/` — one ProTracker module per
-track. The ST cannot play them as they are: they are sampled music,
-and a plain ST has no DMA sound. So `tools/make-music.sh` converts
-them offline into YM2149 register streams, which every ST can play —
-a chip version of the soundtrack rather than the sampled original.
+track. The ST cannot play them as they are, so `tools/make-music.sh`
+converts them offline into YM2149 register streams, which every ST
+can play.
 
 `extract-data.sh` puts the modules in `tmp/music`, and
 `tools/make-music.sh` with no arguments converts whatever it finds
 there. Copy the resulting `.STM` files into a `MUSIC\` folder next to
 `FLASHBAK.TOS` — not into `DATA\`, which stays exactly what came off
 the disks — and set `music=true` in `RS.CFG`.
-
-If you no longer have the disks, `tools/make-music.sh --download`
-fetches the same score from The Mod Archive. That set is one track
-short — it has no `memoire` — so that one cue stays silent.
 
 Without the `.STM` files the game plays as it always did: each
 missing track is noted once in `RS.LOG` (with `logging=true`) and the

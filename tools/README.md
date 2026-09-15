@@ -78,19 +78,18 @@ register streams:
 
 ```
 tools/make-music.sh                 # convert what extract-data.sh found
-tools/make-music.sh --download      # fetch the score instead, then convert
 RS_MUSIC_DIR=/some/where tools/make-music.sh
 ```
 
-Prefer the first. `extract-data.sh` takes the modules off the game's
-own disks into `tmp/music/`, which is where this reads from by
-default, so with the disks to hand there is nothing to download and
-the music is the player's own data.
+`extract-data.sh` takes the modules off the game's own disks into
+`tmp/music/`, which is where this reads from by default, so there is
+nothing to fetch and the music is the player's own data.
 
-`--download` is for anyone who no longer has the disks. It is one
-track short: the archive set has no `memoire`, so `MEMOIRE.STM`
-cannot be built from it and that cue plays silent. The disks have
-it, which is how the gap was found.
+There is deliberately no download path. The game cannot run without
+its data files, so anyone able to play already has the disks the
+score is on - and the disks carry all 21 tracks, where the copy on
+The Mod Archive is missing `memoire` and leaves that cue silent.
+That gap is how the whole thing was found.
 
 The chain is `MOD -> SMF -> STM`: `mod2smf.py` reads the module's
 pattern data and writes a Standard MIDI File, then STDL's
@@ -103,9 +102,7 @@ All 21 Flashback modules (by Raphael Gesqua) convert to about 107KB
 of STM in total, from a 6-second lift cue to the 198-second options
 theme. They carry the same track names the engine uses internally -
 `jungle`, `holocube`, `introb`, `options1` - so they map onto its
-music numbers directly. The same score is on
-[The Mod Archive](https://modarchive.org), which is where
-`--download` gets it. Output names are uppercase 8.3 for GEMDOS and
+music numbers directly. Output names are uppercase 8.3 for GEMDOS and
 uniquified where they would collide (`teleport2` and `teleporta` both
 truncate to `TELEPORT`, so the second becomes `TELEPOR1`).
 

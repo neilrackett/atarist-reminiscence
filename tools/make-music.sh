@@ -8,19 +8,14 @@
 # streams offline: MOD -> SMF (tools/mod2smf.py) -> STM (stdlconv).
 #
 # Usage: tools/make-music.sh [module-dir]
-#        tools/make-music.sh --download        (fetch the modules instead)
 #        RS_MUSIC_DIR=/some/where tools/make-music.sh ...
 #
 # With no arguments it reads modules from tmp/music/ and writes the
 # .STM files back there, which is where tools/extract-data.sh puts
-# the modules it finds on the game's own disks. That is the route to
-# prefer: the disks carry the complete score, and they are the
-# player's own data.
-#
-# --download fetches the same score from The Mod Archive for anyone
-# who no longer has the disks. It is one track short: the archive
-# set has no `memoire`, so MEMOIRE.STM cannot be built from it and
-# that cue plays silent. The disks have it.
+# the modules it finds on the game's own disks. There is no download
+# path: the game cannot run without its data files, so anyone able to
+# play already has the disks the score is on - and the disks carry a
+# complete set, where the copy on The Mod Archive is missing memoire.
 #
 # tmp/music is gitignored: the modules are other people's work and
 # the streams are derived from them, so neither belongs here.
@@ -30,46 +25,11 @@ ROOT="$HERE/.."
 OUT="${RS_MUSIC_DIR:-$ROOT/tmp/music}"
 STDLCONV="$ROOT/stdl/tools/stdlconv/stdlconv.py"
 
-# The Mod Archive ids for the 21 Flashback modules by Raphael
-# Gesqua. They carry the same track names the engine uses, which is
-# what makes the mapping in the port possible at all.
-MODULES="
-82409:options2 82410:reunion 82411:taxi 82412:teleport2
-82413:teleporta 82414:voyage 84980:game_over 84981:holocube
-84982:introb 84983:jungle 84984:logo 84985:missionca
-84986:missions2 86732:ascenseur 87379:options1 87915:ceinturea
-87916:chute 87917:desintegr 87918:donneobjt 87919:fin 87956:fin2
-"
-
-download() {
-    mkdir -p "$OUT"
-    for entry in $MODULES; do
-        id="${entry%%:*}"
-        name="flashback-${entry##*:}.mod"
-        if [ -f "$OUT/$name" ]; then
-            continue
-        fi
-        echo "  fetching $name"
-        curl -sfL --max-time 60 -A "Mozilla/5.0" \
-             -o "$OUT/$name" \
-             "https://api.modarchive.org/downloads.php?moduleid=$id"
-        sleep 1                      # be polite to the archive
-    done
-}
-
-if [ "${1:-}" = "--download" ]; then
-    echo "Downloading modules from The Mod Archive:"
-    download
-    shift || true
-fi
-
 SRC="${1:-$OUT}"
 no_modules() {
     echo "no modules in $1" >&2
     echo "Extract them from your own disks with:" >&2
     echo "    tools/extract-data.sh disk1.ipf disk2.ipf disk3.ipf disk4.ipf" >&2
-    echo "or, if you no longer have them, fetch the score with:" >&2
-    echo "    tools/make-music.sh --download   (no memoire - see the header)" >&2
     exit 2
 }
 if [ ! -d "$SRC" ]; then
