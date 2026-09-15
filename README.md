@@ -59,18 +59,35 @@ Ctrl combinations, and a pad button emulates a single key.
 
 ## Data files
 
-The Atari ST version uses the Amiga data files. If you can't find
-your original Amiga disks, try the
-[TOSEC Commodore Amiga collection](https://ia600803.us.archive.org/view_archive.php?archive=/21/items/Commodore_Amiga_TOSEC_2012_04_10/Commodore_Amiga_TOSEC_2012_04_10.zip).
+Everything the game needs is on your legally owned original Amiga
+install disks, in four places:
 
-You can use `tools/extract-data.sh`, which runs on macOS, Linux or via WSL on Windows,
-to extract the files directly from CAPS/SPS `.ipf` disk images; see [tools/README.md](tools/README.md).
+| On the disk  | What it is                                        |
+| ------------ | ------------------------------------------------- |
+| `data/`      | the game itself — levels, sprites, palettes, text  |
+| `cine/`      | the cutscenes                                      |
+| `font8.spr`  | the font, in the root of disk 1                    |
+| `music/`     | the score, as ProTracker modules (see below)       |
 
-Extracted files should be placed in a `DATA\` folder next to `FLASHBAK.TOS` with uppercase 8.3
-names, e.g. `replicant.spm` becomes `REPLICAN.SPM`.
+All four disks carry some of it, and some files appear on more than
+one — copying them all together into one folder is what you want.
 
-Alternative tools for extracting files from Amiga disk images are available via a
-[quick Google search](https://www.google.com/search?q=tools+for+extracting+data+from+amiga+disk+images).
+`tools/extract-data.sh` does that for you from CAPS/SPS `.ipf` disk
+images, and runs on macOS, Linux, or Windows via WSL; see
+[tools/README.md](tools/README.md) for what to install first.
+
+The extracted files go in a `DATA\` folder next to `FLASHBAK.TOS`,
+with uppercase 8.3 names — `replicant.spm` becomes `REPLICAN.SPM`,
+because GEMDOS only keeps the first eight characters. `extract-data.sh`
+handles that; if you extract with something else, run
+`tools/check-names.sh` afterwards and it will tell you about any name
+too long, not uppercase, or quietly colliding with another.
+
+If you no longer have your disks, try the
+[TOSEC Commodore Amiga collection](https://ia600803.us.archive.org/view_archive.php?archive=/21/items/Commodore_Amiga_TOSEC_2012_04_10/Commodore_Amiga_TOSEC_2012_04_10.zip),
+and there are alternative extraction tools a
+[quick Google search](https://www.google.com/search?q=tools+for+extracting+data+from+amiga+disk+images)
+away.
 
 Other platforms' data files (DOS floppy/CD, Macintosh `FLASHBACK.BIN`
 / `FLASHBACK.RSRC`, PC98, SegaCD `VOICE.VCE` for speech, `.mod`
@@ -79,14 +96,24 @@ music sets) are supported by the SDL build. See the upstream
 
 ### Music
 
-There is no music in the Amiga data set: the Amiga score ships as
-separate `.mod` files. `tools/make-music.sh --download` converts
-those modules into YM2149 register streams instead, which every
-ST can play — a chip version of the soundtrack rather than the
-sampled original. Copy the resulting `.STM` files into `DATA\` and
-set `music=true` in `RS.CFG`. Without them the game plays as before:
-each missing track is noted once in `RS.LOG` (with `logging=true`)
-and the scene runs silent.
+The score is on the disks, in `music/` — one ProTracker module per
+track. The ST cannot play them as they are: they are sampled music,
+and a plain ST has no DMA sound. So `tools/make-music.sh` converts
+them offline into YM2149 register streams, which every ST can play —
+a chip version of the soundtrack rather than the sampled original.
+
+`extract-data.sh` puts the modules in `tmp/music`, and
+`tools/make-music.sh` with no arguments converts whatever it finds
+there. Copy the resulting `.STM` files into `DATA\` and set
+`music=true` in `RS.CFG`.
+
+If you no longer have the disks, `tools/make-music.sh --download`
+fetches the same score from The Mod Archive. That set is one track
+short — it has no `memoire` — so that one cue stays silent.
+
+Without the `.STM` files the game plays as it always did: each
+missing track is noted once in `RS.LOG` (with `logging=true`) and the
+scene runs silent.
 
 ## Configuration
 

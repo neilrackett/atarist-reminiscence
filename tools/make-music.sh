@@ -8,13 +8,22 @@
 # streams offline: MOD -> SMF (tools/mod2smf.py) -> STM (stdlconv).
 #
 # Usage: tools/make-music.sh [module-dir]
-#        tools/make-music.sh --download        (fetch the modules first)
+#        tools/make-music.sh --download        (fetch the modules instead)
 #        RS_MUSIC_DIR=/some/where tools/make-music.sh ...
 #
 # With no arguments it reads modules from tmp/music/ and writes the
-# .STM files back there. Both directories are gitignored: the
-# modules are other people's work and the streams are derived from
-# them, so neither belongs in the repository.
+# .STM files back there, which is where tools/extract-data.sh puts
+# the modules it finds on the game's own disks. That is the route to
+# prefer: the disks carry the complete score, and they are the
+# player's own data.
+#
+# --download fetches the same score from The Mod Archive for anyone
+# who no longer has the disks. It is one track short: the archive
+# set has no `memoire`, so MEMOIRE.STM cannot be built from it and
+# that cue plays silent. The disks have it.
+#
+# tmp/music is gitignored: the modules are other people's work and
+# the streams are derived from them, so neither belongs here.
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$HERE/.."
@@ -55,13 +64,19 @@ if [ "${1:-}" = "--download" ]; then
 fi
 
 SRC="${1:-$OUT}"
-if [ ! -d "$SRC" ]; then
-    echo "no module directory: $SRC (try --download)" >&2
+no_modules() {
+    echo "no modules in $1" >&2
+    echo "Extract them from your own disks with:" >&2
+    echo "    tools/extract-data.sh disk1.ipf disk2.ipf disk3.ipf disk4.ipf" >&2
+    echo "or, if you no longer have them, fetch the score with:" >&2
+    echo "    tools/make-music.sh --download   (no memoire - see the header)" >&2
     exit 2
+}
+if [ ! -d "$SRC" ]; then
+    no_modules "$SRC"
 fi
 if ! ls "$SRC"/*.mod >/dev/null 2>&1; then
-    echo "no .mod files in $SRC (try --download)" >&2
-    exit 2
+    no_modules "$SRC"
 fi
 mkdir -p "$OUT"
 

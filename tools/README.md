@@ -20,8 +20,34 @@ flattens every disk's `data/` and `cine/` directories plus the root
 (`replicant.spm` becomes `REPLICAN.SPM`; the ST build asks for that
 name). Set `RS_DATA_DIR` to write somewhere other than `dist/DATA`.
 
+It also collects each disk's `music/` directory into **`tmp/music/`**
+as the ProTracker modules `make-music.sh` expects. Those are named
+from each module's own 20-byte title field rather than its filename:
+the filename is the engine's primary track name, while the port looks
+up the alternate one (`ModPlayer::_names` in `src/staticres.cpp`), and
+the title is the alternate. Reading it out of the file means no
+mapping table here to drift out of step. Set `RS_MUSIC_DIR` to write
+them somewhere else.
+
 `dist/` is the Hatari GEMDOS C: drive during development; the game
 expects its files in `DATA\` next to `FLASHBAK.TOS`.
+
+## check-names.sh
+
+```
+tools/check-names.sh [dir]        # default: dist/
+```
+
+Reports anything that cannot live on a GEMDOS volume: a name over
+eight characters, an extension over three, lower case, characters
+outside `A-Z 0-9 _ -`, more than one dot, or — the one that actually
+breaks a game — two files that collide once GEMDOS has truncated
+them, the way `REPLICANT.SPM` and `REPLICAN.SPM` do. Exits non-zero
+if it finds anything, so it can gate a release.
+
+`extract-data.sh` already names its output correctly. This is for
+data extracted with something else, which the main README suggests
+for anyone whose disks have gone.
 
 ## ipf2adf.c
 
@@ -49,10 +75,20 @@ does have the YM2149, so the modules are converted offline into YM
 register streams:
 
 ```
-tools/make-music.sh --download      # fetch modules, then convert
-tools/make-music.sh                 # convert what is already there
+tools/make-music.sh                 # convert what extract-data.sh found
+tools/make-music.sh --download      # fetch the score instead, then convert
 RS_MUSIC_DIR=/some/where tools/make-music.sh
 ```
+
+Prefer the first. `extract-data.sh` takes the modules off the game's
+own disks into `tmp/music/`, which is where this reads from by
+default, so with the disks to hand there is nothing to download and
+the music is the player's own data.
+
+`--download` is for anyone who no longer has the disks. It is one
+track short: the archive set has no `memoire`, so `MEMOIRE.STM`
+cannot be built from it and that cue plays silent. The disks have
+it, which is how the gap was found.
 
 The chain is `MOD -> SMF -> STM`: `mod2smf.py` reads the module's
 pattern data and writes a Standard MIDI File, then STDL's
@@ -61,12 +97,13 @@ pattern data and writes a Standard MIDI File, then STDL's
 gitignored - the modules are somebody else's work and the streams are
 derived from them, so neither belongs in this repository.
 
-All 21 Flashback modules (by Raphael Gesqua, from
-[The Mod Archive](https://modarchive.org)) convert to about 106KB of
-STM in total, from a 6-second lift cue to the 198-second options
+All 21 Flashback modules (by Raphael Gesqua) convert to about 107KB
+of STM in total, from a 6-second lift cue to the 198-second options
 theme. They carry the same track names the engine uses internally -
 `jungle`, `holocube`, `introb`, `options1` - so they map onto its
-music numbers directly. Output names are uppercase 8.3 for GEMDOS and
+music numbers directly. The same score is on
+[The Mod Archive](https://modarchive.org), which is where
+`--download` gets it. Output names are uppercase 8.3 for GEMDOS and
 uniquified where they would collide (`teleport2` and `teleporta` both
 truncate to `TELEPORT`, so the second becomes `TELEPOR1`).
 

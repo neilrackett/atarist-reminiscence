@@ -1,10 +1,12 @@
 #!/bin/bash
-# Extract the Flashback Amiga data files from CAPS IPF disk images
+# Extract the Flashback Amiga data and music from CAPS IPF disk
 # Copyright (C) 2026 Neil Rackett
-# into dist/DATA with GEMDOS-safe uppercase 8.3 names.
+# images into dist/DATA with GEMDOS-safe uppercase 8.3 names, and the
+# score's ProTracker modules into tmp/music for tools/make-music.sh.
 #
 # Usage: tools/extract-data.sh disk1.ipf disk2.ipf disk3.ipf disk4.ipf
 #        RS_DATA_DIR=/some/where tools/extract-data.sh ...   (override output)
+#        RS_MUSIC_DIR=/some/where tools/extract-data.sh ...  (override modules)
 #
 # Requires:
 #  - tools/ipf2adf built against capsimg
@@ -17,6 +19,7 @@
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
 OUT="${RS_DATA_DIR:-$HERE/../dist/DATA}"
+MUSIC="${RS_MUSIC_DIR:-$HERE/../tmp/music}"
 WORK="$HERE/extracted"
 ADF="$HERE/adf"
 
@@ -40,7 +43,7 @@ if ! command -v xdftool >/dev/null 2>&1; then
 fi
 
 rm -rf "$WORK" "$ADF"
-mkdir -p "$OUT" "$WORK" "$ADF"
+mkdir -p "$OUT" "$WORK" "$ADF" "$MUSIC"
 
 n=1
 for ipf in "$@"; do
@@ -58,6 +61,20 @@ find "$WORK" -type f | while read -r f; do
     dir="$(basename "$(dirname "$f")" | tr '[:upper:]' '[:lower:]')"
     base="$(basename "$f" | tr '[:lower:]' '[:upper:]')"
     case "$dir:$base" in
+        music:*)
+            # The score is on the disks as one ProTracker module per
+            # track. Their FILENAMES are the engine's primary track
+            # names, but the port looks up the ALTERNATE name (see
+            # ModPlayer::_names in src/staticres.cpp) - and that is
+            # exactly what each module carries in its own 20-byte
+            # title field. So the title is the name make-music.sh
+            # needs, and reading it out of the file beats keeping a
+            # mapping table here that could drift.
+            [ "$(head -c 1084 "$f" | tail -c 4)" = "M.K." ] || continue
+            title="$(head -c 20 "$f" | tr -d '\0' | tr -cd 'A-Za-z0-9_-')"
+            [ -n "$title" ] || continue
+            cp "$f" "$MUSIC/$title.mod"
+            continue ;;
         data:*|cine:*) ;;
         *:FONT8.SPR) ;;
         *) continue ;;
@@ -67,3 +84,4 @@ find "$WORK" -type f | while read -r f; do
     cp "$f" "$OUT/$base"
 done
 echo "$(ls "$OUT" | wc -l | tr -d ' ') files in $OUT"
+echo "$(find "$MUSIC" -name '*.mod' | wc -l | tr -d ' ') modules in $MUSIC (run tools/make-music.sh to convert them)"
