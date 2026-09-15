@@ -10,13 +10,11 @@ by [Neil Rackett](https://neilrackett.com/atarist).
 Of all the games that never had an official release on the Atari ST, one of
 the ones I was most disappointed about was Flashback (Delphine Software, 1992).
 
-So, using [STDL](https://github.com/neilrackett/atarist-stdl) and the Amiga
+Using [STDL](https://github.com/neilrackett/atarist-stdl) and the Amiga
 data files, I've ported [REminiscence](https://github.com/cyxx/REminiscence),
 Gregory Montoir's re-implementation of the original game engine, to the Atari ST.
 
-So, just three decades after the original was released...
-
-**_Say hello to Flashback for the Atari ST._**
+So, just three decades after the original was released... **_Say hello to Flashback for the Atari ST._**
 
 ## Requirements
 
@@ -63,7 +61,7 @@ Ctrl combinations, and a pad button emulates a single key.
 Flashback is still copyright Delphine Software, so you'll need to extract the
 files needed from your legally owned original Amiga installation disks.
 
-Everything the game needs is in four places on 1 or more of the 4 disks:
+Everything you need is on one or more of the four disks (some may span multiple disks):
 
 | On the disk | What it is                                        | Where it goes               |
 | ----------- | ------------------------------------------------- | --------------------------- |
@@ -72,25 +70,26 @@ Everything the game needs is in four places on 1 or more of the 4 disks:
 | `font8.spr` | the font, in the root of disk 1                   | Copy the file into `DATA\`  |
 | `music/`    | the score, as ProTracker modules (optional)       | (see below)                 |
 
+If you're unable to find your disks, try sites like
+[Archive.org](https://ia600803.us.archive.org/view_archive.php?archive=/21/items/Commodore_Amiga_TOSEC_2012_04_10/Commodore_Amiga_TOSEC_2012_04_10.zip),
+or [Planet Emulation](https://www.planetemu.net/roms/commodore-amiga-games-adf?page=F).
+
+For CAPS/SPS `.ipf` disk images, `tools/extract-data.sh` extracts and renames the
+files for you; see [tools/README.md](tools/README.md) for the dependencies
+you'll need to install first. Alternatively, you could try
+[HxC Floppy Emulator software](https://hxc2001.com/download/floppy_drive_emulator/#sdhxc)
+or one of the other tools available via a
+[quick Google search](https://www.google.com/search?q=tools+for+extracting+data+from+amiga+disk+images)
+to extract files from `ADF` format disk images.
+
 The extracted files all go into a `DATA\` folder next to `FLASHBAK.TOS`,
-with uppercase 8.3 ST-friendly names, e.g. `replicant.spm` becomes
-`REPLICAN.SPM`. `extract-data.sh` handles that;
+and must be renamed to have uppercase 8.3 ST-friendly names, e.g. `replicant.spm`
+becomes `REPLICAN.SPM`.
 
 You can run `tools/check-names.sh` after extracting the files and it will tell
 you about any name too long, not uppercase, or quietly colliding with another.
 Add `--fix` and it renames the ones it can do safely, listing anything that
 needs you to decide.
-
-If you're unable to find your disks, try sites like
-[Archive.org](https://ia600803.us.archive.org/view_archive.php?archive=/21/items/Commodore_Amiga_TOSEC_2012_04_10/Commodore_Amiga_TOSEC_2012_04_10.zip),
-or [Planet Emulation](https://www.planetemu.net/roms/commodore-amiga-games-adf?page=F).
-
-For CAPS/SPS `.ipf` disk images, `tools/extract-data.sh` extracts the
-files for you; see
-[tools/README.md](tools/README.md) for the dependencies you'll need to install first.
-Alternatively, you could try [HxC Floppy Emulator software](https://hxc2001.com/download/floppy_drive_emulator/#sdhxc)
-or one of the other tools available via a [quick Google search](https://www.google.com/search?q=tools+for+extracting+data+from+amiga+disk+images)
-to extract files from ADF format disk images.
 
 _All of the `.sh` tools run on macOS, Linux, or Windows via WSL._
 
@@ -99,7 +98,7 @@ for more information.
 
 ### Music
 
-Music support is still experimental.
+Music is still experimental and so remains optional.
 
 The score is on the disks, in `music/` — one ProTracker module per
 track. The ST cannot play them as they are, so `tools/make-music.sh`
@@ -109,8 +108,8 @@ can play.
 `extract-data.sh` puts the modules in `tmp/music`, and
 `tools/make-music.sh` with no arguments converts whatever it finds
 there. Copy the resulting `.STM` files into a `MUSIC\` folder next to
-`FLASHBAK.TOS` — not into `DATA\`, which stays exactly what came off
-the disks — and set `music=true` in `RS.CFG`.
+`FLASHBAK.TOS` — not into `DATA\`, which holds the game's own files —
+and set `music=true` in `RS.CFG`.
 
 Without the `.STM` files the game plays as it always did: each
 missing track is noted once in `RS.LOG` (with `logging=true`) and the

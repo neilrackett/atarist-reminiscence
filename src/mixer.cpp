@@ -105,7 +105,7 @@ static STDL_Music *_ymMusic;
 static int _ymTrack = -1;
 static uint32_t _ymMissing;          /* one bit per track, log once */
 
-// DATA\ is GEMDOS 8.3: strip the underscore, uppercase, and where a
+// MUSIC\ is GEMDOS 8.3: strip the underscore, uppercase, and where a
 // name is too long keep its last character rather than truncating -
 // teleporta and teleport2 differ only there, and would otherwise
 // both become TELEPORT. tools/make-music.sh names its output with
@@ -144,10 +144,11 @@ static bool ATARIST_playMusic(int num) {
 	}
 	char stem[16];
 	ATARIST_musicName(want, stem);
-	// MUSIC\, not DATA\: DATA is exactly what comes off the Amiga
-	// disks, and these streams are built from them rather than found
-	// on them. Keeping the two apart means a data folder can be
-	// compared against a fresh extraction without the music in the way.
+	// MUSIC\, not DATA\: these streams are derived, optional and
+	// unshippable, where DATA\ holds the game's own files. Different
+	// provenance, different lifetime, so a data folder can be replaced
+	// or compared against a fresh extraction without the music in the
+	// way.
 	char path[32];
 	snprintf(path, sizeof(path), "MUSIC\\%s.STM", stem);
 

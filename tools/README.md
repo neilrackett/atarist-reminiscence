@@ -116,9 +116,12 @@ All 21 Flashback modules (by Raphael Gesqua) convert to about 107KB
 of STM in total, from a 6-second lift cue to the 198-second options
 theme. They carry the same track names the engine uses internally -
 `jungle`, `holocube`, `introb`, `options1` - so they map onto its
-music numbers directly. Output names are uppercase 8.3 for GEMDOS and
-uniquified where they would collide (`teleport2` and `teleporta` both
-truncate to `TELEPORT`, so the second becomes `TELEPOR1`).
+music numbers directly. Output names are uppercase 8.3 for GEMDOS,
+keeping the last character where a name is too long rather than
+truncating: `teleport2` and `teleporta` differ only there and would
+both become `TELEPORT`, so they become `TELEPOR2` and `TELEPORA`.
+`ATARIST_musicName` in `src/mixer.cpp` derives the same name on the
+ST - the two have to agree.
 
 To hear one before wiring anything up, STDL's example player takes an
 STM as `DEMO.STM`:

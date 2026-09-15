@@ -7,8 +7,9 @@
 #
 # The SDL build for desktop platforms lives in Makefile.sdl.
 #
-# Amiga data files go in dist/DATA (see tools/README.md for how to
-# extract them from the original disk images).
+# Amiga data files go in dist/DATA and the optional chip music in
+# dist/MUSIC (see tools/README.md for how to extract both from the
+# original disk images).
 
 CXX    = m68k-atari-mint-g++
 STRIP  = m68k-atari-mint-strip

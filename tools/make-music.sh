@@ -26,17 +26,11 @@ OUT="${RS_MUSIC_DIR:-$ROOT/tmp/music}"
 STDLCONV="$ROOT/stdl/tools/stdlconv/stdlconv.py"
 
 SRC="${1:-$OUT}"
-no_modules() {
-    echo "no modules in $1" >&2
+if ! ls "$SRC"/*.mod >/dev/null 2>&1; then     # also covers "no such dir"
+    echo "no modules in $SRC" >&2
     echo "Extract them from your own disks with:" >&2
     echo "    tools/extract-data.sh disk1.ipf disk2.ipf disk3.ipf disk4.ipf" >&2
     exit 2
-}
-if [ ! -d "$SRC" ]; then
-    no_modules "$SRC"
-fi
-if ! ls "$SRC"/*.mod >/dev/null 2>&1; then
-    no_modules "$SRC"
 fi
 mkdir -p "$OUT"
 
@@ -49,6 +43,9 @@ used, total, failed = {}, 0, 0
 for path in sorted(glob.glob(os.path.join(src, "*.mod"))):
     base = os.path.basename(path)
     stem = base[:-4]
+    # Every module titles itself "flashback-<track>", and
+    # extract-data.sh names the file from that title, so the prefix is
+    # on every input and comes off here.
     if stem.startswith("flashback-"):
         stem = stem[len("flashback-"):]
     # GEMDOS 8.3, uppercase, underscore dropped. Where a name is too

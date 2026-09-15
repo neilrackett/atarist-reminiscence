@@ -54,14 +54,19 @@ done
 
 # Flatten each disk's data/ and cine/ directories (plus the root
 # font8.spr) into OUT with uppercase names.
-find "$WORK" -type f | while read -r f; do
+#
+# -print0 rather than a bare `read`, which mangles any name with a
+# space in it, and shell parameter expansion rather than basename and
+# dirname: this runs for every file on four disks, and a fork costs
+# more than all the tests here together.
+find "$WORK" -type f -print0 | while IFS= read -r -d '' f; do
     case "$f" in
         *.xdfmeta|*.blkdev|*.bootcode) continue ;;
     esac
-    dir="$(basename "$(dirname "$f")" | tr '[:upper:]' '[:lower:]')"
-    base="$(basename "$f" | tr '[:lower:]' '[:upper:]')"
-    case "$dir:$base" in
-        music:*)
+    d="${f%/*}"; d="${d##*/}"
+    name="${f##*/}"
+    case "$d" in
+        [Mm][Uu][Ss][Ii][Cc])
             # The score is on the disks as one ProTracker module per
             # track. Their FILENAMES are the engine's primary track
             # names, but the port looks up the ALTERNATE name (see
@@ -70,16 +75,30 @@ find "$WORK" -type f | while read -r f; do
             # title field. So the title is the name make-music.sh
             # needs, and reading it out of the file beats keeping a
             # mapping table here that could drift.
-            [ "$(head -c 1084 "$f" | tail -c 4)" = "M.K." ] || continue
-            title="$(head -c 20 "$f" | tr -d '\0' | tr -cd 'A-Za-z0-9_-')"
-            [ -n "$title" ] || continue
+            [ "$(head -c 1084 "$f" | tail -c 4)" = "M.K." ] || {
+                echo "  skipped $name: not a ProTracker module" >&2
+                continue
+            }
+            # LC_ALL=C: a module header is not UTF-8, and tr complains
+            # about it otherwise. One tr, not two - deleting everything
+            # outside the set already takes the NUL padding with it.
+            title="$(head -c 20 "$f" | LC_ALL=C tr -cd 'A-Za-z0-9_-')"
+            [ -n "$title" ] || {
+                echo "  skipped $name: no title to name it from" >&2
+                continue
+            }
             cp "$f" "$MUSIC/$title.mod"
             continue ;;
-        data:*|cine:*) ;;
-        *:FONT8.SPR) ;;
-        *) continue ;;
+        [Dd][Aa][Tt][Aa]|[Cc][Ii][Nn][Ee]) ;;
+        *) case "$name" in
+               [Ff][Oo][Nn][Tt]8.[Ss][Pp][Rr]) ;;
+               *) continue ;;
+           esac ;;
     esac
-    # GEMDOS 8.3: the engine's ST build asks for REPLICAN.SPM
+    base="$(printf '%s' "$name" | LC_ALL=C tr '[:lower:]' '[:upper:]')"
+    # Not a truncation rule: the ST build was changed to ASK for this
+    # name, at the #ifdef ATARIST in src/staticres.cpp (_monsterNames).
+    # The two have to agree, so keep them named rather than derived.
     [ "$base" = "REPLICANT.SPM" ] && base="REPLICAN.SPM"
     cp "$f" "$OUT/$base"
 done
