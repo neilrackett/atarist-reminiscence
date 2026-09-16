@@ -131,6 +131,7 @@ with defaults named, so switching one is a matter of deleting a `#`.
 | `overscan`                 | ✓           | Open the top border: all 224 lines shown natively, nothing dropped (**on** by default)                             |
 | `overscan_bottom`          | ✓           | Open the bottom border too, centring the picture in 273 lines (off by default: can be unstable on Mega STE)        |
 | `music`                    | ✓           | YM chip music, if the tracks have been built (see above)                                                           |
+| `music_volume`             | ✓           | Chip music level, 0-100 (default 60, which sits it level with the sampled effects)                                 |
 | `frame_skip`               | ✓           | Drop cutscene frames to hold the scripted pace (**on** by default; `frame_skip=false` draws every frame, slower)   |
 | `bypass_protection`        |             | Skip the copy-protection screen                                                                                    |
 | `enable_password_menu`     |             | Show the level password menu                                                                                       |

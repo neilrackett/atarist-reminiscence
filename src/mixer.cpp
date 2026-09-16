@@ -166,6 +166,11 @@ static bool ATARIST_playMusic(int num) {
 	}
 	_ymMusic = m;
 	_ymTrack = num;
+	// STDL scales the YM volume registers on the fly, 0..128 for
+	// mute..full; the option is a percentage. Set here rather than
+	// once at init so the value is read when the music does play,
+	// whichever order the devices came up in.
+	STDL_VolumeMusic((g_options.music_volume * 128) / 100);
 	STDL_PlayMusic(_ymMusic, -1);    // loop until the scene ends
 	return true;
 }

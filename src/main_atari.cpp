@@ -102,6 +102,14 @@ static void initOptions() {
 	// ways of fitting 224 lines on the screen
 	g_options.overscan = true;
 	g_options.music = false;
+	// 60% puts the chip music level with the sampled effects. The
+	// effects come through the STE voice mixer at a quarter of DMA
+	// scale at most (four voices sum without clipping), so full YM
+	// output stood some 15dB above them: a tester called it crazy
+	// loud after a cutscene. Measured in Hatari (music -34dBFS RMS
+	// against -33 for running footsteps) - hardware may want a
+	// different figure, which is why it is an RS.CFG option.
+	g_options.music_volume = 60;
 	g_options.log_fps = false;
 	g_options.bench = false;
 	g_options.logging = false;
@@ -146,6 +154,15 @@ static void initOptions() {
 		{ "overscan_bottom", &g_options.overscan_bottom },
 		{ 0, 0 }
 	};
+	// options that take a number rather than true/false
+	struct {
+		const char *name;
+		int *value;
+		int min, max;
+	} ints[] = {
+		{ "music_volume", &g_options.music_volume, 0, 100 },
+		{ 0, 0, 0, 0 }
+	};
 	FILE *fp = fopen("RS.CFG", "rb");
 	if (fp) {
 		char buf[256];
@@ -178,8 +195,23 @@ static void initOptions() {
 					++p;
 				}
 				if (*p && nameLen != 0) {
+					bool found = false;
+					for (int i = 0; ints[i].name; ++i) {
+						if (strlen(ints[i].name) == nameLen
+						    && strncmp(name, ints[i].name, nameLen) == 0) {
+							int v = atoi(p);
+							if (v < ints[i].min) {
+								v = ints[i].min;
+							} else if (v > ints[i].max) {
+								v = ints[i].max;
+							}
+							*ints[i].value = v;
+							found = true;
+							break;
+						}
+					}
 					const bool value = (*p == 't' || *p == 'T' || *p == '1');
-					for (int i = 0; opts[i].name; ++i) {
+					for (int i = 0; !found && opts[i].name; ++i) {
 						if (strlen(opts[i].name) == nameLen
 						    && strncmp(name, opts[i].name, nameLen) == 0) {
 							*opts[i].value = value;

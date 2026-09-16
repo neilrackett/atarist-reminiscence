@@ -155,6 +155,7 @@ struct Options {
 	bool crop_screen;
 	bool overscan;
 	bool music;
+	int music_volume;     // ST port: YM music level, percent of full
 	bool log_fps;
 	bool bench;
 	bool logging;
