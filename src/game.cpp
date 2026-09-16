@@ -823,11 +823,11 @@ void Game::playCutscene(int id) {
 		}
 		_mix.stopMusic();
 #ifdef ATARIST
-		info("Cutscene done: %u frames, %u late, %u skipped, %u unshown, work %ums (copy %ums) of %ums budget (overscan misses %u)",
+		info("Cutscene done: %u frames, %u late, %u skipped, %u unshown, work %ums (copy %ums) of %ums budget (overscan misses %u), ready after %ums",
 			_cut._statFrames, _cut._statLate, _cut._statSkipped, _cut._statNoShow,
 			(unsigned)_cut._statWork, (unsigned)_cut._statCopy,
 			(unsigned)_cut._statBudget,
-			(unsigned)ST_overscanMisses());
+			(unsigned)ST_overscanMisses(), (unsigned)_cut._statLoad);
 #else
 		info("Cutscene done");
 #endif

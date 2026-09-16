@@ -101,6 +101,17 @@ struct Cutscene {
 	const uint8_t *_cmdPtr;
 	const uint8_t *_cmdStartPtr;
 	uint32_t _tstamp;
+	// A skip needs a key pressed after the scene is on screen: the
+	// input queue is drained when the scene is ready, and presses in
+	// the first kSkipGraceMs after that are dropped too. Keys pressed
+	// while a scene loaded (a second or more on an ST, on top of the
+	// level load before an intro) used to skip it before its first
+	// frame - a player tapping the action key again because nothing
+	// seemed to happen never saw the holocube.
+	enum { kSkipGraceMs = 1000 };
+	uint32_t _skipArmedAt;
+	uint32_t _playStart;
+	uint32_t _statLoad;       // ms from play() to the first opcode
 	uint8_t _frameDelay;
 	// per-scene pacing stats, logged when the scene ends: late
 	// frames mean the machine is not keeping up with the scripted

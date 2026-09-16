@@ -36,6 +36,7 @@ Cutscene::Cutscene(Resource *res, SystemStub *stub, Video *vid)
 	_paletteNum = -1;
 	_isConcavePolygonShape = false;
 	_stPrescan = false;
+	_skipArmedAt = _playStart = _statLoad = 0;
 	_stPrescanOps = 0;
 	_stSkipDraw = false;
 	_stSkipShow = false;
@@ -1429,6 +1430,16 @@ void Cutscene::stPrescanPalette(uint16_t num) {
 void Cutscene::mainLoop(uint16_t num) {
 	_frameDelay = 5;
 	_tstamp = _stub->getTimeStamp();
+	if (!_stPrescan) {
+		// discard whatever was pressed while the scene loaded (see
+		// kSkipGraceMs): those keys were aimed at the game, not at a
+		// scene nobody had seen yet
+		_stub->processEvents();
+		_stub->_pi.backspace = false;
+		_stub->_pi.anyKey = false;
+		_skipArmedAt = _tstamp + kSkipGraceMs;
+		_statLoad = _tstamp - _playStart;
+	}
 #ifdef ATARIST
 	_stSched = _tstamp;
 	_stSkipDraw = false;
@@ -1506,11 +1517,14 @@ void Cutscene::mainLoop(uint16_t num) {
 		}
 		_stub->processEvents();
 		// any key skips: backspace is the original's key, but nobody
-		// guesses that
+		// guesses that. A press inside the grace period is dropped,
+		// not deferred: it was a reflex, not a request.
 		if (_stub->_pi.backspace || _stub->_pi.anyKey) {
 			_stub->_pi.backspace = false;
 			_stub->_pi.anyKey = false;
-			_interrupted = true;
+			if ((int32_t)(_stub->getTimeStamp() - _skipArmedAt) >= 0) {
+				_interrupted = true;
+			}
 		}
 	}
 }
@@ -1630,6 +1644,7 @@ void Cutscene::playCredits() {
 		if (cut_id == 0xFF) {
 			break;
 		}
+		_playStart = _stub->getTimeStamp();
 		prepare();
 		const uint8_t *offsets = _res->isAmiga() ? _offsetsTableAmiga : _offsetsTableDOS;
 		uint8_t cutName = offsets[cut_id * 2];
@@ -1691,6 +1706,8 @@ void Cutscene::playText(const char *str) {
 
 void Cutscene::play() {
 	if (_id != 0xFFFF) {
+		_playStart = _stub->getTimeStamp();
+		_statLoad = 0;
 		_textCurBuf = NULL;
 		debug(DBG_CUT, "Cutscene::play() _id=0x%X", _id);
 		_creditsSequence = false;
