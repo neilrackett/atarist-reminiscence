@@ -273,9 +273,15 @@ void Video::updateScreen() {
 		_stub->updateScreen(_shakeOffset);
 		_fullRefresh = false;
 #ifdef ATARIST
-		memset(_blkDirty, 0, sizeof(_blkDirty));
-		memset(_blkShown, 0, sizeof(_blkShown));
-		memset(_blkOwed, 0, sizeof(_blkOwed));
+		// The sprites this frame drew went up with the page and owe
+		// a restore like any other: zeroing the marks here left them
+		// in the front layer for good - a Conrad ghost at the room
+		// entry position whenever the next frame skipped him.
+		for (int j = 0; j < (int)(sizeof(_blkDirty) / sizeof(_blkDirty[0])); ++j) {
+			_blkShown[j] = _blkDirty[j];
+			_blkDirty[j] = 0;
+			_blkOwed[j] = 0;
+		}
 #endif
 #ifdef ATARIST
 	// A fresh mark blits and then awaits its restore; a restored
@@ -362,7 +368,14 @@ void Video::updateScreen() {
 #undef VIDEO_BLIT
 	if (_shakeOffset != 0) {
 		_shakeOffset = 0;
+#ifndef ATARIST
+		// the page was drawn offset; put it back
 		_fullRefresh = true;
+#endif
+		// The ST stub ignores the offset, so there is nothing to put
+		// back - and a full refresh there is a VBL wait plus a whole-
+		// layer restore and copy, some 40ms on every frame a script
+		// shakes the screen.
 	}
 }
 

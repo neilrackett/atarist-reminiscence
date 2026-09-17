@@ -162,6 +162,7 @@ struct Options {
 	bool frame_skip;
 	bool blitter;
 	bool overscan_bottom;
+	bool megaste_speedup;  // ST port: 16MHz and cache on a Mega STE
 };
 
 struct Features {

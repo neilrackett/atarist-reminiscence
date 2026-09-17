@@ -108,6 +108,10 @@ struct Game {
 	bool _saveStateCompleted;
 	bool _endLoop;
 	uint32_t _frameTimestamp;
+	// ST: game pace decoupled from the drawn frame rate (see mainLoop)
+	enum { kLogicStepMs = 1000 / 30, kLogicStallMs = 250 };
+	int32_t _logicDebt;
+	uint16_t _logicCatchUps;
 	WidescreenMode _widescreenMode;
 	bool _autoSave;
 	uint32_t _saveTimestamp;
@@ -118,6 +122,7 @@ struct Game {
 	void displayTitleScreenAmiga();
 	void resetGameState();
 	void mainLoop();
+	bool stepLogic();
 	void updateTiming();
 	void playCutscene(int id = -1);
 	bool playCutsceneSeq(const char *name);

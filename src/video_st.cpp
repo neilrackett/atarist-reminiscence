@@ -1020,7 +1020,9 @@ void ST_amigaPlaceCovEnd(uint8_t *layer, uint8_t colour8) {
 }
 
 void ST_drawSprite(uint8_t *layer, const uint8_t *src, int pitch, int x, int y, int w, int h, const uint8_t *map16, unsigned flags, bool setPrio) {
-	STDL_Surface *s = layerView(layer, true);
+	// maskless view unless the priority plane is read or set: see
+	// blitBaked
+	STDL_Surface *s = layerView(layer, (flags & kSTSpriteRespectPrio) != 0 || setPrio);
 	if (!s) {
 		return;
 	}
@@ -1082,6 +1084,10 @@ struct SprEntry {
 	// blit its shift and its read-modify-write
 	uint8_t offG, useG;     // groups skipped at the left, groups kept
 	uint8_t offY, useH;     // rows skipped at the top, rows kept
+	// the same trim as word offsets into planes and mask: computed
+	// once here rather than as a 32-bit multiply on every blit
+	uint16_t offWords, offMaskWords;
+	uint32_t shUse;         // draw tick of the last blit (pool LRU)
 	// A sprite that stays where it is gets a copy shifted into its
 	// destination phase, so the blit runs aligned: the shift chain
 	// costs an extra ~120 cycles a group-row over an aligned merge,
@@ -1100,6 +1106,7 @@ struct SprEntry {
 // takes one when it has been drawn at the same phase twice.
 enum { kShMax = 12 };
 static int g_shCount;
+static uint32_t g_drawTick;
 
 static SprEntry g_spr[kSprSlots];
 // which way of each set to overwrite next; a hit points it at the other
@@ -1253,6 +1260,8 @@ static bool bakeSprite(SprEntry *e, const uint8_t *src, int pitch, int w, int h,
 		e->useG = (uint8_t)(g1 - g0 + 1);
 		e->offY = (uint8_t)y0;
 		e->useH = (uint8_t)(y1 - y0 + 1);
+		e->offWords = (uint16_t)(y0 * groups * 4 + g0 * 4);
+		e->offMaskWords = (uint16_t)(y0 * groups + g0);
 	}
 	e->shPhase = 0;
 	e->lastPhase = 0;
@@ -1276,7 +1285,26 @@ static bool buildShifted(SprEntry *e, int phase) {
 	enum { kGuard = 4 };
 	if (e->shCap < words) {
 		if (!e->shBlock && g_shCount >= kShMax) {
-			return false;
+			// The pool is full: take the block from the slot drawn
+			// longest ago. It used to be first come, first served
+			// for the whole level, so the first room's scenery kept
+			// all twelve and Conrad standing still in every later
+			// room paid the shift chain each frame.
+			SprEntry *victim = 0;
+			for (int i = 0; i < kSprSlots; ++i) {
+				SprEntry *c = &g_spr[i];
+				if (c->shBlock && (!victim || (int32_t)(c->shUse - victim->shUse) < 0)) {
+					victim = c;
+				}
+			}
+			if (!victim) {
+				return false;
+			}
+			free(victim->shBlock);
+			victim->shBlock = 0;
+			victim->shCap = 0;
+			victim->shPhase = 0;
+			--g_shCount;
 		}
 		if (!e->shBlock) {
 			++g_shCount;
@@ -1293,8 +1321,8 @@ static bool buildShifted(SprEntry *e, int phase) {
 	e->shPlanes = e->shBlock + kGuard;
 	e->shMask = e->shPlanes + sg * 4 * rows;
 	e->shG = (uint8_t)sg;
-	const uint16_t *sp = e->planes + e->offY * e->groups * 4 + e->offG * 4;
-	const uint16_t *sm = e->mask + e->offY * e->groups + e->offG;
+	const uint16_t *sp = e->planes + e->offWords;
+	const uint16_t *sm = e->mask + e->offMaskWords;
 	uint16_t *dp = e->shPlanes;
 	uint16_t *dm = e->shMask;
 	const int last = e->useG;
@@ -1323,10 +1351,16 @@ static bool buildShifted(SprEntry *e, int phase) {
 }
 
 static void blitBaked(uint8_t *layer, SprEntry *e, int x, int y, bool respectPrio, bool setPrio) {
-	STDL_Surface *dst = layerView(layer, true);
+	// A draw that neither reads nor sets the priority plane goes to
+	// the maskless view: on the masked one STDL's default upkeep
+	// cleared the plane's bits under every opaque pixel, and nothing
+	// restored them - the room's foreground marks under a door were
+	// gone until the next full copy.
+	STDL_Surface *dst = layerView(layer, respectPrio || setPrio);
 	if (!dst) {
 		return;
 	}
+	e->shUse = ++g_drawTick;
 	static STDL_Surface *view;
 	if (!view) {
 		view = STDL_CreateSurfaceFrom((uint8_t *)e->planes,
@@ -1363,8 +1397,8 @@ static void blitBaked(uint8_t *layer, SprEntry *e, int x, int y, bool respectPri
 		useW = e->useG * 16;
 		stride = e->groups * 8;
 		maskStride = e->groups * 2;
-		planes = e->planes + e->offY * e->groups * 4 + e->offG * 4;
-		mask = e->mask + e->offY * e->groups + e->offG;
+		planes = e->planes + e->offWords;
+		mask = e->mask + e->offMaskWords;
 		dstX = dx;
 	}
 	view->pixels = (uint8_t *)planes;

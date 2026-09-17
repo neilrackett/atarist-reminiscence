@@ -268,6 +268,13 @@ void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int
 	if (STDL_Init(0x20 | 0x200) != 0) { // VIDEO | JOYSTICK
 		error("STDL_Init failed");
 	}
+	if (!g_options.megaste_speedup) {
+		// megaste_speedup=false: leave a Mega STE at whatever speed
+		// it was set to before the game ran, rather than switching
+		// it to 16MHz with the cache. Through the library only: it
+		// keeps the border timing calibrated to the clock in use.
+		STDL_UseMegaSteSpeedup(0);
+	}
 	if (!g_options.blitter) {
 		// diagnostic: a BLiTTER operation runs in hog mode while a
 		// border is open and cannot be interrupted once started, so

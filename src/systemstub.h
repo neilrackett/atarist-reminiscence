@@ -54,8 +54,20 @@ struct PlayerInput {
 // while running, say) has to be released before it counts, or the
 // menu would pick an item the instant it appears.
 struct MenuConfirm {
-	MenuConfirm() : _fireHeld(true) {}
+	MenuConfirm() : _fireHeld(true), _first(true) {}
 	bool operator()(PlayerInput &pi) {
+		if (_first) {
+			// Whatever was pressed to reach this screen is not an
+			// answer to it: enter stays set until the poll after its
+			// release, so the Return that skipped the intro's last
+			// scene started the game from the title screen, and the
+			// key that skipped a death scene answered the continue
+			// prompt. Fire already has its held guard below.
+			_first = false;
+			pi.enter = false;
+			_fireHeld = pi.shift;
+			return false;
+		}
 		bool confirmed = pi.enter;
 		pi.enter = false;
 #ifdef ATARIST
@@ -69,6 +81,7 @@ struct MenuConfirm {
 		return confirmed;
 	}
 	bool _fireHeld;
+	bool _first;
 };
 
 struct ScalerParameters {

@@ -23,6 +23,15 @@
 # (default: false, squash)
 #crop_screen=true
 
+# --- machine ------------------------------------------------------
+
+# Leave a Mega STE at the speed it was set to before the game ran
+# (the control panel's setting), rather than switching it to 16MHz
+# with the cache. Set the machine to 8MHz first and it plays at STE
+# speed - for testing, not for playing. (default: true, 16MHz and
+# cache on)
+#megaste_speedup=false
+
 # --- sound --------------------------------------------------------
 
 # Play YM chip music. Needs the .STM tracks in a MUSIC\ folder beside

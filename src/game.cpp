@@ -37,19 +37,34 @@ struct SpriteCache {
 	// miss does not just re-decode: it hands the frame a NEW buffer
 	// address, which invalidates the planar cache keyed on it. The
 	// frames of a walk cycle have to stay put to be worth baking.
-	enum { N = 64 };
+	enum { N = 64, H = 256 };
 	const uint8_t *key[N];
 	uint8_t *buf[N];
 	int cap[N];
 	int pos;
+	// A direct-mapped hint in front of the scan: slot + 1, 0 for
+	// none. The scan was ~1000 cycles a sprite piece, every frame
+	// (average 32 of 64 compares for a hit), 2-3ms a frame in a
+	// busy room. A wrong hint costs one compare and falls back.
+	uint8_t hint[H];
 
+	static int hashOf(const uint8_t *p) {
+		const uintptr_t v = (uintptr_t)p;
+		return (int)((v >> 3) ^ (v >> 11)) & (H - 1);
+	}
 	// Round-robin over a scanned table rather than direct-mapped:
 	// hashing on the frame address collides, and a collision evicts a
 	// frame that is still on screen - which then re-decodes into a new
 	// buffer and invalidates its baked planar copy too.
 	uint8_t *lookup(const uint8_t *p) {
+		const int h = hashOf(p);
+		const int s = hint[h];
+		if (s != 0 && key[s - 1] == p) {
+			return buf[s - 1];
+		}
 		for (int i = 0; i < N; ++i) {
 			if (key[i] == p) {
+				hint[h] = (uint8_t)(i + 1);
 				return buf[i];
 			}
 		}
@@ -58,6 +73,7 @@ struct SpriteCache {
 	uint8_t *insert(const uint8_t *p, int size) {
 		const int i = pos;
 		pos = (pos + 1) & (N - 1);
+		hint[hashOf(p)] = (uint8_t)(i + 1);
 		if (cap[i] < size) {   // grow only: no free/malloc per miss
 			::free(buf[i]);
 			buf[i] = (uint8_t *)malloc(size);
@@ -75,6 +91,7 @@ struct SpriteCache {
 		for (int i = 0; i < N; ++i) {
 			key[i] = 0;
 		}
+		memset(hint, 0, sizeof(hint));
 	}
 };
 static SpriteCache _spmCache;
@@ -401,6 +418,8 @@ void Game::run() {
 			resetGameState();
 			_endLoop = false;
 			_frameTimestamp = _stub->getTimeStamp();
+			_logicDebt = 0;
+			_logicCatchUps = 0;
 			_saveTimestamp = _frameTimestamp;
 			while (!_stub->_pi.quit && !_endLoop) {
 				mainLoop();
@@ -595,45 +614,30 @@ void Game::mainLoop() {
 		}
 	}
 #ifdef ATARIST
+	// The engine advances the game once per drawn frame, so a machine
+	// that draws in 43ms plays at 76% speed: Conrad walked, fell and
+	// shot in slow motion on an STE. Keep the game at 30 steps a second
+	// instead: updateTiming banks the time each frame runs over its
+	// 33ms, and once a whole step is owed the logic runs twice for
+	// one draw. One catch-up per frame at most, so the shown rate
+	// never drops below half the step rate; the cutscene player
+	// holds its pace the same way (Cutscene::stDecideSkip).
+	if (_logicDebt >= kLogicStepMs) {
+		_logicDebt -= kLogicStepMs;
+		++_logicCatchUps;
+		if (!stepLogic()) {
+			return;
+		}
+		if (_blinkingConradCounter != 0) {
+			--_blinkingConradCounter;
+		}
+	}
 	_vid.ST_restoreDirty();
 #else
 	memcpy(_vid._frontLayer, _vid._backLayer, _vid._layerSize);
 #endif
-	pge_getInput();
-	pge_prepare();
-	col_prepareRoomState();
-	uint8_t oldLevel = _currentLevel;
-	for (uint16_t i = 0; i < _res._pgeNum; ++i) {
-		LivePGE *pge = _pge_liveTable2[i];
-		if (pge) {
-			_col_currentPiegeGridPosY = (pge->pos_y / 36) & ~1;
-			_col_currentPiegeGridPosX = (pge->pos_x + 8) >> 4;
-			pge_process(pge);
-		}
-	}
-	if (oldLevel != _currentLevel) {
-		if (_res._isDemo) {
-			_currentLevel = oldLevel;
-		}
-		changeLevel();
-		_pge_opGunVar = 0;
+	if (!stepLogic()) {
 		return;
-	}
-	if (_cut._id != 0xFFFF) {
-		// do not draw room level background when switching between cutscenes
-		return;
-	}
-	if (_loadMap) {
-		if (_currentRoom == 0xFF || !hasLevelRoom(_currentLevel, _pgeLive[0].room_location)) {
-			_cut._id = 6;
-			_deathCutsceneCounter = 1;
-		} else {
-			_currentRoom = _pgeLive[0].room_location;
-			info("Room %d", _currentRoom);
-			loadLevelRoom();
-			_loadMap = false;
-			_vid.fullRefresh();
-		}
 	}
 	if (_res.isDOS() && (_stub->_pi.dbgMask & PlayerInput::DF_AUTOZOOM) != 0) {
 		pge_updateZoom();
@@ -671,6 +675,55 @@ void Game::mainLoop() {
 			_saveTimestamp = _stub->getTimeStamp();
 		}
 	}
+}
+
+// One step of the game: input, collision setup, every live object's
+// script. Returns false when the caller must return without drawing
+// (a level change or a cutscene queued).
+bool Game::stepLogic() {
+	pge_getInput();
+	pge_prepare();
+	col_prepareRoomState();
+	uint8_t oldLevel = _currentLevel;
+	{
+		// walking pointer and a counter in registers, as pge_prepare
+		// does: indexed over a member count, gcc 4.6 reloads both the
+		// table address and the count every iteration
+		LivePGE **p = _pge_liveTable2;
+		for (int n = _res._pgeNum; --n >= 0; ++p) {
+			LivePGE *pge = *p;
+			if (pge) {
+				_col_currentPiegeGridPosY = (pge->pos_y / 36) & ~1;
+				_col_currentPiegeGridPosX = (pge->pos_x + 8) >> 4;
+				pge_process(pge);
+			}
+		}
+	}
+	if (oldLevel != _currentLevel) {
+		if (_res._isDemo) {
+			_currentLevel = oldLevel;
+		}
+		changeLevel();
+		_pge_opGunVar = 0;
+		return false;
+	}
+	if (_cut._id != 0xFFFF) {
+		// do not draw room level background when switching between cutscenes
+		return false;
+	}
+	if (_loadMap) {
+		if (_currentRoom == 0xFF || !hasLevelRoom(_currentLevel, _pgeLive[0].room_location)) {
+			_cut._id = 6;
+			_deathCutsceneCounter = 1;
+		} else {
+			_currentRoom = _pgeLive[0].room_location;
+			info("Room %d", _currentRoom);
+			loadLevelRoom();
+			_loadMap = false;
+			_vid.fullRefresh();
+		}
+	}
+	return true;
 }
 
 void Game::updateTiming() {
@@ -711,17 +764,37 @@ void Game::updateTiming() {
 				// the miss count rides along: a border that drops
 				// under load shows here rather than only in the
 				// per-cutscene line
-				info("fps %d.%d (%d ms/frame) misses %u", (int)(64000 / d), (int)((640000 / d) % 10), (int)(d / 64),
-					(unsigned)ST_overscanMisses());
+				// steps = frames + catch-ups: the game's own pace
+				info("fps %d.%d (%d ms/frame) catch-ups %u misses %u", (int)(64000 / d), (int)((640000 / d) % 10), (int)(d / 64),
+					(unsigned)_logicCatchUps, (unsigned)ST_overscanMisses());
 			}
 			t0 = now;
 			frames = 0;
+			_logicCatchUps = 0;
 		}
 	}
 #endif
 	static const int frameHz = 30;
 	int32_t delay = _stub->getTimeStamp() - _frameTimestamp;
 	int32_t pause = (_stub->_pi.dbgMask & PlayerInput::DF_FASTMODE) ? 20 : (1000 / frameHz);
+#ifdef ATARIST
+	// Bank the overrun for mainLoop's catch-up step. A frame that ran
+	// very long was a load or a cutscene, not gameplay, and is not
+	// made up; and the debt is capped at two steps so a machine that
+	// cannot keep pace even with catch-ups slows down instead of
+	// falling ever further behind.
+	if (delay > pause) {
+		const int32_t over = delay - pause;
+		if (over > kLogicStallMs) {
+			_logicDebt = 0;
+		} else {
+			_logicDebt += over;
+			if (_logicDebt > 2 * kLogicStepMs) {
+				_logicDebt = 2 * kLogicStepMs;
+			}
+		}
+	}
+#endif
 	pause -= delay;
 	if (pause > 0) {
 		_stub->sleep(pause);

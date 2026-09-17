@@ -123,6 +123,10 @@ static void initOptions() {
 	// border shows every line either way; it just sits the picture on
 	// the bottom edge instead of centring it.
 	g_options.overscan_bottom = false;
+	// A Mega STE is switched to 16MHz with its cache on. Off leaves
+	// it at the speed set before the game ran, so it can stand in
+	// for an STE when testing.
+	g_options.megaste_speedup = true;
 	struct {
 		const char *name;
 		bool *value;
@@ -152,6 +156,7 @@ static void initOptions() {
 		{ "frame_skip", &g_options.frame_skip },
 		{ "blitter", &g_options.blitter },
 		{ "overscan_bottom", &g_options.overscan_bottom },
+		{ "megaste_speedup", &g_options.megaste_speedup },
 		{ 0, 0 }
 	};
 	// options that take a number rather than true/false
