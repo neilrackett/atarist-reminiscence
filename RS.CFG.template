@@ -44,11 +44,17 @@
 # with the sampled effects, which come through the STE mixer well
 # below full scale - at 100 the music stood some 15dB above them.
 # The chip's own volume steps are coarse, about 3dB each, so a
-# change of a few points may do nothing. (default: 60)
+# change of a few points may do nothing. (default: 70)
 #music_volume=100
 
 # Use the .PRF music files rather than the .STM ones. (default: false)
 #use_prf_music=true
+
+# Turn off the STE's sampled sound entirely - nothing opens the sound
+# DMA at all. Chip music (music=true) is unaffected, since that drives
+# the YM instead. For diagnosing sound faults, and for anyone who
+# wants the game silent. (default: true)
+#ste_sound=false
 
 # --- speed --------------------------------------------------------
 

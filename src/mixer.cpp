@@ -53,6 +53,16 @@ static const uint8_t *ATARIST_volumeTable(uint8_t volume) {
 }
 
 static void ATARIST_playSample(const uint8_t *data, uint32_t len, uint16_t freq, uint8_t volume) {
+	// ste_sound=false means no sampled sound at all. Without this the
+	// option only skips the voice device, and every effect then falls
+	// through to the one-shot path below - which still makes sound,
+	// and pays that path's resample per effect (a comment above
+	// measures it at ~75ms on an 8MHz machine, more than a frame).
+	// So the option would have been quieter, slower and still not
+	// silent, which is none of the three things it says.
+	if (!g_options.ste_sound) {
+		return;
+	}
 	if (STDL_VoicesOpen()) {
 		STDL_SetVoice(3, (const int8_t *)data, len, 0, 0, freq,
 		              (volume > 64) ? 64 : volume);
@@ -198,7 +208,11 @@ void Mixer::init() {
 #ifdef ATARIST
 	// the voice mixer carries both music (0-2) and effects (3);
 	// fails cleanly on a plain ST and we fall back to one-shots
-	STDL_OpenVoices(6258);
+	if (g_options.ste_sound) {
+		STDL_OpenVoices(6258);
+	} else {
+		info("STE sample sound disabled (ste_sound=false)");
+	}
 #endif
 	_stub->startAudio(Mixer::mixCallback, this);
 }

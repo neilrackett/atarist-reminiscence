@@ -163,6 +163,7 @@ struct Options {
 	bool blitter;
 	bool overscan_bottom;
 	bool megaste_speedup;  // ST port: 16MHz and cache on a Mega STE
+	bool ste_sound;        // ST port: open the STE sample device at all
 };
 
 struct Features {

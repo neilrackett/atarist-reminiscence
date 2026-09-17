@@ -102,14 +102,16 @@ static void initOptions() {
 	// ways of fitting 224 lines on the screen
 	g_options.overscan = true;
 	g_options.music = false;
-	// 60% puts the chip music level with the sampled effects. The
-	// effects come through the STE voice mixer at a quarter of DMA
-	// scale at most (four voices sum without clipping), so full YM
-	// output stood some 15dB above them: a tester called it crazy
-	// loud after a cutscene. Measured in Hatari (music -34dBFS RMS
-	// against -33 for running footsteps) - hardware may want a
-	// different figure, which is why it is an RS.CFG option.
-	g_options.music_volume = 60;
+	// 70% puts the chip music level with the sampled effects, which
+	// a tester once called crazy loud against full YM output. The
+	// figure was 60 while the STE voice mixer reserved a quarter of
+	// DMA scale for four voices; STDL v1.8.2 halved that reserve, so
+	// effects gained about 6dB (walking peaks -26.0 -> -20.3 dBFS)
+	// and the music had to follow. Measured in Hatari on one binary:
+	// effects peak -20.3, music at 70 peaks -21.4, at 80 -17.9.
+	// Hardware may want a different figure, which is why it is an
+	// RS.CFG option.
+	g_options.music_volume = 70;
 	g_options.log_fps = false;
 	g_options.bench = false;
 	g_options.logging = false;
@@ -127,6 +129,13 @@ static void initOptions() {
 	// it at the speed set before the game ran, so it can stand in
 	// for an STE when testing.
 	g_options.megaste_speedup = true;
+	// The STE's sample device. Off, nothing opens the sound DMA at
+	// all: no sampled effects, and the chip music (music=true) is
+	// unaffected because that drives the YM instead. Exists because
+	// the DMA ring loops every 82ms whether or not a sound is
+	// playing, so this is the way to tell a fault in the ring from
+	// a fault in something else.
+	g_options.ste_sound = true;
 	struct {
 		const char *name;
 		bool *value;
@@ -157,6 +166,7 @@ static void initOptions() {
 		{ "blitter", &g_options.blitter },
 		{ "overscan_bottom", &g_options.overscan_bottom },
 		{ "megaste_speedup", &g_options.megaste_speedup },
+		{ "ste_sound", &g_options.ste_sound },
 		{ 0, 0 }
 	};
 	// options that take a number rather than true/false
