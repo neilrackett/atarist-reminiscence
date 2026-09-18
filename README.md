@@ -58,8 +58,13 @@ Ctrl combinations, and a pad button emulates a single key.
 
 ## Data files
 
-Flashback is still copyright Delphine Software, so you'll need to extract the
-files needed from your legally owned original Amiga installation disks.
+**Flashback is still copyright Delphine Software, so you'll need to extract the
+files needed from your legally owned original Amiga installation disks.**
+
+The easiest way to extract the data files from your Amiga installation disks
+in the correct format is to use the [RExtract online tool](https://labs.neilrackett.com/web-rextract/).
+
+### Extracting the files manually
 
 Everything you need is on one or more of the four disks (some may span multiple disks):
 
