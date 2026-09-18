@@ -122,6 +122,8 @@ void SfxPlayer::playSample(int channel, const uint8_t *sampleData, uint16_t peri
 	{
 		const bool looping = (si->loopLen > 2);
 		const uint32_t end = looping ? (uint32_t)si->loopPos + si->loopLen : si->len;
+		// see the note in mixer.cpp: unconditional, never guarded
+		STDL_ResumeVoices();
 		STDL_SetVoice(channel, (const int8_t *)si->data, end,
 		              si->loopPos, looping ? si->loopLen : 0,
 		              si->freq, (si->vol > 64) ? 64 : (uint8_t)si->vol);

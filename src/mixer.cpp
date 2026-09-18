@@ -52,6 +52,55 @@ static const uint8_t *ATARIST_volumeTable(uint8_t volume) {
 	return table;
 }
 
+/*
+ * Stop the sound DMA while nothing is playing.
+ *
+ * An open DMA clicks about once every 30 seconds on real hardware
+ * even looping pure silence with no software running - a property of
+ * the machine, documented in stdl_voice.h, and not something any
+ * mixing fix reaches. Time spent paused is time without it, and
+ * pausing itself was measured on hardware as inaudible.
+ *
+ * STDL_PauseVoices only asks: the library stops the DMA once the ring
+ * has drained to silence, so asking early cannot cut a sound short or
+ * park the DAC away from zero. That makes the delay below an
+ * optimisation rather than a correctness requirement.
+ *
+ * Two seconds, and the number matters. Polling the voices every frame
+ * across a whole run - intro, both intro cutscenes, title screen, the
+ * level's opening cutscene, then walking gameplay - the longest gap
+ * between effects during play was 1.16s, with 44 gaps measured and a
+ * median of 585ms. So two seconds never fires while the game is
+ * running, and fires exactly once per cutscene, title screen or menu,
+ * where the device then stays stopped for tens of seconds: the intro
+ * alone is one unbroken 61.8s stretch. A shorter delay would ask the
+ * library to pause and cancel dozens of times a minute during play
+ * for nothing.
+ */
+enum { kVoiceIdlePauseMs = 2000 };
+
+void ATARIST_mixerTick() {
+	if (!STDL_VoicesOpen()) {
+		return;
+	}
+	static uint32_t idleSince;
+	static bool asked;
+	for (int v = 0; v < 4; ++v) {
+		if (STDL_VoiceActive(v)) {
+			idleSince = 0;
+			asked = false;
+			return;
+		}
+	}
+	const uint32_t now = STDL_GetTicks();
+	if (idleSince == 0) {
+		idleSince = now ? now : 1;   // 0 is the "not idle" marker
+	} else if (!asked && now - idleSince >= kVoiceIdlePauseMs) {
+		STDL_PauseVoices();
+		asked = true;
+	}
+}
+
 static void ATARIST_playSample(const uint8_t *data, uint32_t len, uint16_t freq, uint8_t volume) {
 	// ste_sound=false means no sampled sound at all. Without this the
 	// option only skips the voice device, and every effect then falls
@@ -64,6 +113,11 @@ static void ATARIST_playSample(const uint8_t *data, uint32_t len, uint16_t freq,
 		return;
 	}
 	if (STDL_VoicesOpen()) {
+		// Unconditionally, never behind a STDL_VoicesPaused() test:
+		// while a pause is draining it is the cancel that matters,
+		// and a guarded call leaves the device stopped later with no
+		// error and no sound.
+		STDL_ResumeVoices();
 		STDL_SetVoice(3, (const int8_t *)data, len, 0, 0, freq,
 		              (volume > 64) ? 64 : volume);
 		return;

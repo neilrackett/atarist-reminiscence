@@ -258,7 +258,15 @@ int main(int argc, char *argv[]) {
 	FileSystem fs("DATA");
 	const int version = detectVersion(&fs);
 	if (version == -1) {
-		printf("Unable to find Amiga data files in DATA\\ - press a key\n");
+		// The ST console is 40 columns, so every line here is
+		// written to fit one - a wrapped error reads as a mess on
+		// the machine it is meant to help.
+		printf("Game data not found!\n\n");
+		printf("Please add the Amiga data files to a\n");
+		printf("DATA folder beside FLASHBAK.TOS\n\n");
+		printf("Visit neilrackett.com/atarist\n");
+		printf("for more information.\n\n");
+		printf("Press a key\n");
 		getchar();
 		return -1;
 	}

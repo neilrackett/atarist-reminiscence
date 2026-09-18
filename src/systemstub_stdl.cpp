@@ -268,6 +268,21 @@ void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int
 	if (STDL_Init(0x20 | 0x200) != 0) { // VIDEO | JOYSTICK
 		error("STDL_Init failed");
 	}
+	// The game never reads the mouse, and leaving it reporting costs
+	// three IKBD interrupts per movement. With a border open those
+	// delay the timer interrupt that reopens it, so moving the mouse
+	// flickered the screen - measured on hardware, where turning
+	// reporting off stopped both the flicker and the growth of the
+	// missed-border count.
+	//
+	// It also retires a workaround: while the mouse reports, the
+	// IKBD takes joystick 1's fire button and delivers it as the
+	// right mouse button instead, which STDL has to fold back.
+	// Silenced, the button arrives in the joystick's own packet.
+	// STDL puts reporting back when it releases the keyboard,
+	// including down the terminate path, so the desktop still gets
+	// a working pointer if we crash.
+	STDL_EnableMouse(0);
 	if (!g_options.megaste_speedup) {
 		// megaste_speedup=false: leave a Mega STE at whatever speed
 		// it was set to before the game ran, rather than switching
@@ -1416,6 +1431,11 @@ void SystemStub_STDL::fadeScreen() {
 }
 
 void SystemStub_STDL::processEvents() {
+	// The sound DMA is stopped while nothing plays (see mixer.cpp).
+	// Driven from here because it is the one per-frame call the game
+	// loop and the cutscene player both make - and cutscenes, where
+	// nothing plays for a minute at a time, are most of the win.
+	{ extern void ATARIST_mixerTick(); ATARIST_mixerTick(); }
 	_pi.dirMask &= ~_upDirMask;
 	_upDirMask = 0;
 	if (_upEnter) { _pi.enter = false; _upEnter = false; }
