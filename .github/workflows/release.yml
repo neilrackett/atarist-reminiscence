@@ -106,39 +106,17 @@ jobs:
             || gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" \
                  -f ref=refs/tags/latest -f sha="$GITHUB_SHA" --silent
 
-      - name: Bundle the data and music tools
-        # A tester extracted their disks with the hand-built tools.zip
-        # from an earlier release, which went stale the moment the
-        # scripts changed underneath it. Building it here means it can
-        # only ever be the tools that shipped beside this binary.
-        #
-        # stdlconv comes from the STDL submodule, already present from
-        # the recursive checkout, and make-music.sh finds it by a path
-        # relative to its own directory - so the two keep their repo
-        # layout inside the zip rather than being flattened.
-        #
-        # The splash tooling is deliberately absent: it has nothing to
-        # do with data or music, and tools/README.md - which is in the
-        # zip - documents exactly this set and no more.
-        run: |
-          zip -q -X tools.zip \
-            tools/README.md \
-            tools/check-names.sh \
-            tools/extract-data.sh \
-            tools/ipf2adf.c \
-            tools/make-music.sh \
-            tools/mod2smf.py \
-            stdl/tools/stdlconv/stdlconv.py
-          unzip -l tools.zip
-
       - name: Replace the files on the latest release
-        # The binary, its documented config, and the tools to get the
-        # data out of your own disks. DATA/ itself comes from the
-        # player's Amiga disks and is never published here.
+        # The binary and its documented config, and nothing else. The
+        # data tools used to ship here as tools.zip; RExtract does that
+        # job in a browser now, so there is no longer a bundle of
+        # scripts to keep in step with the binary beside it. DATA/
+        # itself comes from the player's Amiga disks and is never
+        # published here.
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release view latest >/dev/null 2>&1 \
             || gh release create latest --title "Flashback" --notes "Rolling build of the Atari ST port."
-          gh release upload latest dist/FLASHBAK.TOS dist/RS.CFG tools.zip --clobber
+          gh release upload latest dist/FLASHBAK.TOS dist/RS.CFG --clobber
           echo "Published $VERSION to the latest release."
