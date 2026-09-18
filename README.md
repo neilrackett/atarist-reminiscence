@@ -70,17 +70,14 @@ Everything you need is on one or more of the four disks (some may span multiple 
 | `font8.spr` | the font, in the root of disk 1                   | Copy the file into `DATA\`  |
 | `music/`    | the score, as ProTracker modules (optional)       | (see below)                 |
 
-If you're unable to find your disks, try sites like
-[Archive.org](https://ia600803.us.archive.org/view_archive.php?archive=/21/items/Commodore_Amiga_TOSEC_2012_04_10/Commodore_Amiga_TOSEC_2012_04_10.zip),
-or [Planet Emulation](https://www.planetemu.net/roms/commodore-amiga-games-adf?page=F).
-
-For CAPS/SPS `.ipf` disk images, `tools/extract-data.sh` extracts and renames the
+For CAPS/SPS `.IPF` disk images, `tools/extract-data.sh` extracts and renames the
 files for you; see [tools/README.md](tools/README.md) for the dependencies
-you'll need to install first. Alternatively, you could try
+you'll need to install first.
+
+Alternatively, if you have `.ADF` disk images, you could try
 [HxC Floppy Emulator software](https://hxc2001.com/download/floppy_drive_emulator/#sdhxc)
 or one of the other tools available via a
-[quick Google search](https://www.google.com/search?q=tools+for+extracting+data+from+amiga+disk+images)
-to extract files from `ADF` format disk images.
+[quick Google search](https://www.google.com/search?q=tools+for+extracting+data+from+amiga+disk+images).
 
 The extracted files all go into a `DATA\` folder next to `FLASHBAK.TOS`,
 and must be renamed to have uppercase 8.3 ST-friendly names, e.g. `replicant.spm`
@@ -132,7 +129,7 @@ with defaults named, so switching one is a matter of deleting a `#`.
 | `overscan_bottom`          | ✓           | Open the bottom border too, centring the picture in 273 lines (off by default: can be unstable on Mega STE)        |
 | `music`                    | ✓           | YM chip music, if the tracks have been built (see above)                                                           |
 | `music_volume`             | ✓           | Chip music level, 0-100 (default 70, which sits it level with the sampled effects)                                 |
-| `ste_sound`                | ✓           | Open the STE sample device (**on** by default; `false` disables sampled sound entirely, chip music unaffected)      |
+| `ste_sound`                | ✓           | Open the STE sample device (**on** by default; `false` disables sampled sound entirely, chip music unaffected)     |
 | `megaste_speedup`          | ✓           | Switch a Mega STE to 16MHz with its cache (**on** by default; `false` keeps the speed set before the game ran)     |
 | `frame_skip`               | ✓           | Drop cutscene frames to hold the scripted pace (**on** by default; `frame_skip=false` draws every frame, slower)   |
 | `bypass_protection`        |             | Skip the copy-protection screen                                                                                    |
