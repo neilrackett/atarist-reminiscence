@@ -129,11 +129,10 @@ with defaults named, so switching one is a matter of deleting a `#`.
 | Option                     | ST-specific | Effect                                                                                                             |
 | -------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------ |
 | `skip_intro`               | ✓           | Go straight to the title screen, skipping the intro sequence                                                       |
-| `crop_screen`              | ✓           | With `overscan=false`: crop 12 lines off the top and bottom instead of squashing 224 into 200                      |
-| `overscan`                 | ✓           | Open the top border: all 224 lines shown natively, nothing dropped (**on** by default)                             |
-| `overscan_bottom`          | ✓           | Open the bottom border too, centring the picture in 273 lines (off by default: can be unstable on Mega STE)        |
+| `screen`                   | ✓           | How 224 lines meet the 200-line screen: `fill` crops 12 off each end (default), `fit` squashes, `top` opens the top border, `full` both. Also on the title menu |
 | `music`                    | ✓           | YM chip music, if the tracks have been built (see above)                                                           |
 | `music_volume`             | ✓           | Chip music level, 0-100 (default 70, which sits it level with the sampled effects)                                 |
+| `cheats`                   | ✓           | `true` for all of them, or bits added together: 1 monsters die in one hit, 2 Conrad is never hit, 4 his life never drops |
 | `ste_sound`                | ✓           | Open the STE sample device (**on** by default; `false` disables sampled sound entirely, chip music unaffected)     |
 | `megaste_speedup`          | ✓           | Switch a Mega STE to 16MHz with its cache (**on** by default; `false` keeps the speed set before the game ran)     |
 | `frame_skip`               | ✓           | Drop cutscene frames to hold the scripted pace (**on** by default; `frame_skip=false` draws every frame, slower)   |

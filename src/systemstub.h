@@ -104,6 +104,10 @@ struct SystemStub {
 
 	virtual bool hasWidescreen() const = 0;
 	virtual void setScreenSize(int w, int h) = 0;
+	// ST port: change how the picture meets the screen (a ScreenMode)
+	// and return the mode actually in effect - a border that will
+	// not open falls back. The caller redraws everything afterwards.
+	virtual int setScreenMode(int mode) { return mode; }
 	virtual void setPalette(const uint8_t *pal, int n) = 0;
 	virtual void getPalette(uint8_t *pal, int n) = 0;
 	virtual void setPaletteEntry(int i, const Color *c) = 0;

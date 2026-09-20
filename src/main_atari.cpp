@@ -8,6 +8,7 @@
  */
 
 #include <ctype.h>
+#include <strings.h>
 #include "file.h"
 #include "fs.h"
 #include "game.h"
@@ -100,7 +101,8 @@ static void initOptions() {
 	// on by default: it shows the whole picture, and since the line
 	// mapping is then one-to-one it is also the fastest of the three
 	// ways of fitting 224 lines on the screen
-	g_options.overscan = true;
+	g_options.overscan = false;
+	g_options.screen = kScreenFill;
 	g_options.music = false;
 	// 70% puts the chip music level with the sampled effects, which
 	// a tester once called crazy loud against full YM output. The
@@ -112,6 +114,7 @@ static void initOptions() {
 	// Hardware may want a different figure, which is why it is an
 	// RS.CFG option.
 	g_options.music_volume = 70;
+	g_options.cheats = 0;
 	g_options.log_fps = false;
 	g_options.bench = false;
 	g_options.logging = false;
@@ -176,8 +179,14 @@ static void initOptions() {
 		int min, max;
 	} ints[] = {
 		{ "music_volume", &g_options.music_volume, 0, 100 },
+		// The engine has carried these since the desktop build's
+		// --cheats: 1 monsters die in one hit, 2 Conrad is never
+		// hit, 4 his life never goes down. Add them up, or say
+		// true for all three. Nothing is on unless asked for.
+		{ "cheats", &g_options.cheats, 0, 7 },
 		{ 0, 0, 0, 0 }
 	};
+	bool screenSet = false;
 	FILE *fp = fopen("RS.CFG", "rb");
 	if (fp) {
 		char buf[256];
@@ -211,10 +220,39 @@ static void initOptions() {
 				}
 				if (*p && nameLen != 0) {
 					bool found = false;
+					// screen=fill|fit|top|full - the one option that takes a
+					// word. Matched on the whole word, since fill and fit
+					// share a first letter; anything else is left as it was.
+					if (nameLen == 6 && strncmp(name, "screen", 6) == 0) {
+						static const char *const words[kScreenModes] = { "fill", "fit", "top", "full" };
+						for (int i = 0; i < kScreenModes; ++i) {
+							const size_t n = strlen(words[i]);
+							if (strncasecmp(p, words[i], n) == 0 && !isalpha((unsigned char)p[n])) {
+								g_options.screen = i;
+								screenSet = true;
+							}
+						}
+						found = true;
+					}
 					for (int i = 0; ints[i].name; ++i) {
 						if (strlen(ints[i].name) == nameLen
 						    && strncmp(name, ints[i].name, nameLen) == 0) {
-							int v = atoi(p);
+							// A number also answers to true and
+							// false, meaning all of it and none of
+							// it: cheats=true is easier to hand a
+							// tester than cheats=7, and the numbers
+							// stay there for anyone wanting one bit
+							// rather than the lot. Digits are read
+							// as digits, so cheats=1 is still the
+							// first bit and not "true".
+							int v;
+							if (*p == 't' || *p == 'T') {
+								v = ints[i].max;
+							} else if (*p == 'f' || *p == 'F') {
+								v = ints[i].min;
+							} else {
+								v = atoi(p);
+							}
 							if (v < ints[i].min) {
 								v = ints[i].min;
 							} else if (v > ints[i].max) {
@@ -248,6 +286,16 @@ static void initOptions() {
 		// front, so the log explains the exit that follows.
 		info("bench=true in RS.CFG: this is a benchmark run and the game will quit after 512 gameplay frames");
 	}
+	// The old spellings still work: overscan=true is top, with
+	// overscan_bottom=true full, and crop_screen=true is fill. An old
+	// RS.CFG keeps the picture it had; only the default has moved.
+	if (!screenSet) {
+		if (g_options.overscan) {
+			g_options.screen = g_options.overscan_bottom ? kScreenFull : kScreenTop;
+		} else {
+			g_options.screen = kScreenFill;
+		}
+	}
 }
 
 extern SystemStub *SystemStub_STDL_create();
@@ -273,7 +321,8 @@ int main(int argc, char *argv[]) {
 	const Language language = detectLanguage(&fs);
 	ScalerParameters scalerParameters = ScalerParameters::defaults();
 	SystemStub *stub = SystemStub_STDL_create();
-	Game *g = new Game(stub, &fs, ".", 0, (ResourceType)version, language, kWidescreenNone, false, 0, 0, 0);
+	Game *g = new Game(stub, &fs, ".", 0, (ResourceType)version, language, kWidescreenNone, false, 0, 0,
+	                   (uint32_t)g_options.cheats);
 	stub->init(g_caption, g->_vid._w, g->_vid._h, true, kWidescreenNone, false, &scalerParameters, 0);
 	g->run();
 	delete g;

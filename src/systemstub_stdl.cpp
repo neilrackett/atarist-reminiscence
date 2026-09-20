@@ -71,6 +71,7 @@ struct SystemStub_STDL : SystemStub {
 	virtual void destroy();
 	virtual bool hasWidescreen() const { return false; }
 	virtual void setScreenSize(int w, int h);
+	virtual int setScreenMode(int mode);
 	virtual void setPalette(const uint8_t *pal, int n);
 	virtual void getPalette(uint8_t *pal, int n);
 	virtual void setPaletteEntry(int i, const Color *c);
@@ -311,78 +312,7 @@ void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int
 	_fade = 256;
 	_shadow = (uint8_t *)malloc(kMaxSrcW * kMaxSrcH);
 	_shadowValid = false;
-	// 224 lines onto the ST's 200: open the borders so all 224
-	// display natively (50Hz screens only - a 60Hz picture already
-	// starts on the first possible line), or crop 12 lines off the
-	// top and bottom (every displayed line is intact and screen
-	// copies stay one contiguous run, but the edges of the playfield
-	// are hidden), or squash with dst = y * 25 / 28, dropping
-	// collisions
-	_ovscOpen = false;
-	int ovscY = 0;   // screen row the first source line goes to
-	if (g_options.overscan) {
-		const int topH = STDL_OpenTopBorder();
-		if (topH != 0) {
-			_ovscOpen = true;
-			// Both borders (273 rows) centre the picture: the
-			// 224 lines sit in the middle with black bands above
-			// and below, instead of hanging off the top of the
-			// tube. Costs about 2.5% of an 8MHz frame against
-			// 1.4% for the top border alone.
-			const int both = g_options.overscan_bottom ? STDL_OpenBottomBorder() : 0;
-			if (both != 0) {
-				ovscY = (both - kMaxSrcH) / 2;
-				info("Both borders open: %d lines, picture centred at row %d", both, ovscY);
-			} else {
-				// Top border alone: sit the picture on the bottom
-				// of the screen rather than the top. The first two
-				// or three displayed lines come up shifted a few
-				// pixels left while the Shifter settles after the
-				// sync-rate switch, and the spare rows are the only
-				// place to put that where nobody sees it.
-				ovscY = topH - kMaxSrcH;
-				if (ovscY < 0) {
-					ovscY = 0;
-				}
-				if (g_options.overscan_bottom) {
-					warning("Bottom border unavailable (%s), top border only",
-						STDL_GetError());
-				}
-				info("Top border only: %d lines, picture at row %d", topH, ovscY);
-			}
-		} else {
-			warning("Overscan unavailable (%s), using %s",
-				STDL_GetError(),
-				g_options.crop_screen ? "crop" : "squash");
-		}
-	}
-	if (_ovscOpen) {
-		for (int y = 0; y < kMaxSrcH; ++y) {
-			_yDrop[y] = 0;
-			_yMap[y] = (uint8_t)(y + ovscY);
-		}
-	} else if (g_options.crop_screen) {
-		for (int y = 0; y < kMaxSrcH; ++y) {
-			const bool off = (y < 12) || (y >= kMaxSrcH - 12);
-			_yDrop[y] = off ? 1 : 0;
-			_yMap[y] = off ? 0 : (y - 12);
-		}
-	} else {
-		int prev = -1;
-		for (int y = 0; y < kMaxSrcH; ++y) {
-			const int d = y * 25 / 28;
-			_yDrop[y] = (d == prev) ? 1 : 0;
-			_yMap[y] = d;
-			prev = d;
-		}
-	}
-	_yLinear = true;
-	for (int y = 0; y < kMaxSrcH; ++y) {
-		if (_yDrop[y]) {
-			_yLinear = false;
-			break;
-		}
-	}
+	setScreenMode(g_options.screen);
 	setScreenSize(w, h);
 	// black screen until the first frame arrives
 	memset(_screen->pixels, 0, kScreenStride * _screen->h);
@@ -447,6 +377,110 @@ void SystemStub_STDL::setScreenSize(int w, int h) {
 		_shadowValid = false;
 		memset(_screen->pixels, 0, kScreenStride * _screen->h);
 	}
+}
+
+// 224 lines onto the ST's 200. Fill crops 12 lines off the top and
+// bottom (every displayed line is intact and screen copies stay one
+// contiguous run, but the edges of the playfield are hidden); Fit
+// crops two at each end and drops every eleventh row between; Top opens the
+// top border so all 224 display natively (50Hz screens only - a 60Hz
+// picture already starts on the first possible line); Full opens both
+// borders and centres the picture between them.
+//
+// Called once from init and again from the title menu, so it has to
+// undo whatever the previous mode left open. Each border transition
+// reshapes the screen surface, so the caller repaints afterwards.
+int SystemStub_STDL::setScreenMode(int mode) {
+	if (_ovscOpen) {
+		_ovscOpen = false;
+		STDL_CloseBottomBorder();
+		STDL_CloseTopBorder();
+	}
+	int ovscY = 0;   // screen row the first source line goes to
+	if (mode == kScreenTop || mode == kScreenFull) {
+		const int topH = STDL_OpenTopBorder();
+		if (topH != 0) {
+			_ovscOpen = true;
+			// Both borders (273 rows) centre the picture: the
+			// 224 lines sit in the middle with black bands above
+			// and below, instead of hanging off the top of the
+			// tube. Costs about 2.5% of an 8MHz frame against
+			// 1.4% for the top border alone.
+			const int both = (mode == kScreenFull) ? STDL_OpenBottomBorder() : 0;
+			if (both != 0) {
+				ovscY = (both - kMaxSrcH) / 2;
+				info("Both borders open: %d lines, picture centred at row %d", both, ovscY);
+			} else {
+				// Top border alone: sit the picture on the bottom
+				// of the screen rather than the top. The first two
+				// or three displayed lines come up shifted a few
+				// pixels left while the Shifter settles after the
+				// sync-rate switch, and the spare rows are the only
+				// place to put that where nobody sees it.
+				ovscY = topH - kMaxSrcH;
+				if (ovscY < 0) {
+					ovscY = 0;
+				}
+				if (mode == kScreenFull) {
+					warning("Bottom border unavailable (%s), top border only",
+						STDL_GetError());
+					mode = kScreenTop;
+				}
+				info("Top border only: %d lines, picture at row %d", topH, ovscY);
+			}
+		} else {
+			warning("Overscan unavailable (%s), using fill", STDL_GetError());
+			mode = kScreenFill;
+		}
+	}
+	if (_ovscOpen) {
+		for (int y = 0; y < kMaxSrcH; ++y) {
+			_yDrop[y] = 0;
+			_yMap[y] = (uint8_t)(y + ovscY);
+		}
+	} else if (mode == kScreenFill) {
+		for (int y = 0; y < kMaxSrcH; ++y) {
+			const bool off = (y < 12) || (y >= kMaxSrcH - 12);
+			_yDrop[y] = off ? 1 : 0;
+			_yMap[y] = off ? 0 : (y - 12);
+		}
+	} else {
+		// Fit: two rows cropped at each end, then every eleventh of
+		// the 220 between dropped - twenty of them, 200 rows exactly.
+		// The old dst = y * 25 / 28 lost the same twenty-four lines
+		// but in an 8/8/9 rhythm, and it is the rhythm that shows:
+		// edges wobble where the gap changes length. Regular ten-row
+		// runs read as a faint even texture instead, and an 8-pixel
+		// glyph placed on the run phase (see the title menu) stays
+		// whole. A dropped row maps to the last row that was kept,
+		// the same convention the squash used.
+		enum { kFitCrop = 2, kFitRun = 11 };
+		int d = 0;
+		for (int y = 0; y < kMaxSrcH; ++y) {
+			const bool cropped = (y < kFitCrop) || (y >= kMaxSrcH - kFitCrop);
+			const bool dropped = !cropped && ((y - kFitCrop) % kFitRun) == kFitRun - 1;
+			if (cropped || dropped) {
+				_yDrop[y] = 1;
+				_yMap[y] = (uint8_t)(d ? d - 1 : 0);
+			} else {
+				_yDrop[y] = 0;
+				_yMap[y] = (uint8_t)d++;
+			}
+		}
+	}
+	_yLinear = true;
+	for (int y = 0; y < kMaxSrcH; ++y) {
+		if (_yDrop[y]) {
+			_yLinear = false;
+			break;
+		}
+	}
+	// The surface may have changed shape and the shadow no longer
+	// describes what is on it: black until the caller repaints.
+	_shadowValid = false;
+	memset(_screen->pixels, 0, kScreenStride * _screen->h);
+	writeHwPalette();
+	return mode;
 }
 
 void SystemStub_STDL::setPalette(const uint8_t *pal, int n) {

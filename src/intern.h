@@ -152,10 +152,14 @@ struct Options {
 	bool order_inventory_original;
 	bool fix_fmopl_e0_reg;
 	bool skip_intro;
+	// ST port: how 224 lines meet a 200-line screen. The three
+	// booleans below it are the old spellings, read as aliases.
+	int screen;
 	bool crop_screen;
 	bool overscan;
 	bool music;
 	int music_volume;     // ST port: YM music level, percent of full
+	int cheats;           // ST port: the engine's cheat bits, see RS.CFG
 	bool log_fps;
 	bool bench;
 	bool logging;
@@ -164,6 +168,17 @@ struct Options {
 	bool overscan_bottom;
 	bool megaste_speedup;  // ST port: 16MHz and cache on a Mega STE
 	bool ste_sound;        // ST port: open the STE sample device at all
+};
+
+// ST port: the four screen modes, in the order the menu cycles them
+// - safest first. Fill crops 12 lines off each end, Fit squashes 224
+// into 200, Top opens the top border, Full opens both.
+enum ScreenMode {
+	kScreenFill = 0,
+	kScreenFit = 1,
+	kScreenTop = 2,
+	kScreenFull = 3,
+	kScreenModes = 4
 };
 
 struct Features {

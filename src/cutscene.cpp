@@ -1716,6 +1716,16 @@ void Cutscene::play() {
 		prepare();
 #ifdef ATARIST
 		ST_setCutscenePalMode(true);
+		// A cutscene is a half-height picture centred in the frame,
+		// with its captions on the middle line. Fit would squash it
+		// for nothing - the 12 rows Fill hides at each end are blank
+		// here - so Fit steps over to Fill for the duration and back
+		// for the room. Neither touches a border, so the switch is
+		// two table rebuilds and a clear.
+		const bool fillForCutscene = (g_options.screen == kScreenFit);
+		if (fillForCutscene) {
+			_stub->setScreenMode(kScreenFill);
+		}
 #endif
 		const uint8_t *offsets = _res->isAmiga() ? _offsetsTableAmiga : _offsetsTableDOS;
 		uint8_t cutName = offsets[_id * 2];
@@ -1785,6 +1795,9 @@ void Cutscene::play() {
 #ifdef ATARIST
 		ST_cutscenePalUnlock();
 		ST_setCutscenePalMode(false);
+		if (fillForCutscene) {
+			_stub->setScreenMode(kScreenFit);
+		}
 		_vid->ST_rebakeRoom();
 #endif
 		_vid->fullRefresh();

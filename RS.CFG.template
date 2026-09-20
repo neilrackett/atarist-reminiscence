@@ -7,21 +7,23 @@
 
 # --- picture ------------------------------------------------------
 
-# Turn off overscan and go back to a 200-line screen: 224 lines are
-# squashed to fit unless crop_screen is on. Try this if the picture
-# is unstable on your machine. (default: overscan=true)
-#overscan=false
-
-# Open the bottom border as well as the top: 273 lines with the
-# picture centred, rather than 228 with it on the bottom edge. The
-# whole picture shows either way. Known to jump and stripe on some
-# machines, which is why the top border alone is the default.
-#overscan_bottom=true
-
-# With overscan=false, crop 12 lines off the top and bottom instead
-# of squashing 224 lines into 200. Ignored while overscan is on.
-# (default: false, squash)
-#crop_screen=true
+# How the game's 224 lines meet the ST's 200-line screen. One of:
+#   fill  crop 12 lines off the top and bottom; every line shown is
+#         intact and nothing is resampled (default)
+#   fit   squash all 224 lines into 200; everything is visible, but
+#         one line in nine is dropped, so text looks a little ragged
+#   top   open the top border: all 224 lines shown natively, picture
+#         on the bottom edge of a 228-line screen
+#   full  open both borders: 273 lines with the picture centred.
+#         Known to jump and stripe on some machines
+# The two overscan modes can flicker on some hardware - a cartridge
+# with resident firmware, a mouse being moved, or disk activity is
+# enough - which is why fill is the default. The title menu has a
+# "Screen mode" line that cycles through the four for the current
+# run; this line sets what it starts on. Replaces the old overscan,
+# overscan_bottom and crop_screen settings, which are still read as
+# top, full and fill if an older RS.CFG has them. (default: fill)
+#screen=top
 
 # --- machine ------------------------------------------------------
 
@@ -87,6 +89,12 @@
 # Skip the intro sequence and go straight to the title screen.
 # (default: false)
 #skip_intro=true
+
+# Cheats, for seeing the whole game rather than beating it: true turns
+# them all on, or add up the ones you want - 1 monsters die in one
+# hit, 2 Conrad is never hit, 4 his life never goes down. So 6 is
+# invincible without the one-hit kills. (default: 0, none)
+#cheats=true
 
 # --- engine options (from upstream REminiscence) -------------------
 

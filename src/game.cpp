@@ -480,11 +480,22 @@ void Game::displayTitleScreenAmiga() {
 	_vid.AMIGA_decodeCmp(_res._scratchBuffer + 6, buf);
 	int h = 0;
 	int shownLevel = -1;   // which selection the screen is showing
-	// The list gained a Quit entry below the levels, so it starts a
-	// line higher and the last item still clears the FLASHBACK logo.
-	// kQuitItem is the selection index for it; _currentLevel only
-	// ever holds a real level.
-	enum { kQuitItem = Menu::LEVELS_COUNT };
+	// Below the levels sit the screen mode and Quit. The rows are
+	// chosen so the menu is whole in every mode it can select. Fill
+	// hides rows 0-11, so the list starts below them. Fit keeps rows
+	// in runs of ten from row 2, dropping every eleventh, so an
+	// 11-pixel pitch from row 13 puts each 8-pixel line inside one
+	// run and none of them loses a row. Ten lines then end at 120,
+	// well clear of the FLASHBACK logo. _currentLevel only ever holds
+	// a real level.
+	enum { kScreenItem = Menu::LEVELS_COUNT, kQuitItem = Menu::LEVELS_COUNT + 1 };
+	static const int kTextY = 13;
+	static const int kTextPitch = 11;
+	static const char *const kScreenNames[kScreenModes] = { "Fill", "Fit", "Overscan Top", "Overscan Full" };
+	// The mode's name changes length as it cycles, so the strip of
+	// picture under it is kept and put back before each redraw.
+	uint8_t band[kW * Video::CHAR_H];
+	memcpy(band, buf + (kTextY + kScreenItem * kTextPitch) * kW, sizeof(band));
 	int selected = _currentLevel;
 	bool quitSelected = false;
 	MenuConfirm confirm;
@@ -505,7 +516,6 @@ void Game::displayTitleScreenAmiga() {
 			// selection moves and spend the rest of the time
 			// listening.
 			if (shownLevel != selected) {
-				static const int kTextY = 8;    // first name, 16-pixel pitch
 				static const uint8_t selectedColor = 0xE4;
 				static const uint8_t defaultColor = 0xE8;
 				for (int i = 0; i <= kQuitItem; ++i) {
@@ -513,15 +523,20 @@ void Game::displayTitleScreenAmiga() {
 					if (shownLevel >= 0 && i != shownLevel && i != selected) {
 						continue;
 					}
+					char screenLabel[40];
+					snprintf(screenLabel, sizeof(screenLabel), "Screen mode: %s", kScreenNames[g_options.screen]);
 					const char *str = (i == kQuitItem)
 						? (const char *)_res.getMenuString(LocaleData::LI_11_QUIT)
-						: Menu::_levelNames[i];
+						: (i == kScreenItem) ? screenLabel : Menu::_levelNames[i];
 					const uint8_t color = (selected == i) ? selectedColor : defaultColor;
 					// left-aligned with the F of the FLASHBACK logo
 					// below: its ink starts at x=13, and the font
 					// carries two blank columns before a glyph
 					const int x = 11;
-					const int y = kTextY + i * 16;
+					const int y = kTextY + i * kTextPitch;
+					if (i == kScreenItem) {
+						memcpy(buf + y * kW, band, sizeof(band));
+					}
 					for (int j = 0; str[j]; ++j) {
 						_vid.AMIGA_drawStringChar(buf, kW, x + j * Video::CHAR_W, y, _res._fnt, color, str[j]);
 					}
@@ -529,11 +544,11 @@ void Game::displayTitleScreenAmiga() {
 				// the picture behind the names is untouched, so blit
 				// the lines that swapped colour rather than the screen
 				if (shownLevel < 0) {
-					const int textH = kQuitItem * 16 + Video::CHAR_H;
+					const int textH = kQuitItem * kTextPitch + Video::CHAR_H;
 					_stub->copyRect(0, kTextY, kW, textH, buf, kW);
 				} else {
-					_stub->copyRect(0, kTextY + shownLevel * 16, kW, Video::CHAR_H, buf, kW);
-					_stub->copyRect(0, kTextY + selected * 16, kW, Video::CHAR_H, buf, kW);
+					_stub->copyRect(0, kTextY + shownLevel * kTextPitch, kW, Video::CHAR_H, buf, kW);
+					_stub->copyRect(0, kTextY + selected * kTextPitch, kW, Video::CHAR_H, buf, kW);
 				}
 				_stub->updateScreen(0);
 				shownLevel = selected;
@@ -550,7 +565,29 @@ void Game::displayTitleScreenAmiga() {
 					++selected;
 				}
 			}
-			if (selected != kQuitItem) {
+			// Left, right or fire on the screen mode line cycles it,
+			// and the change is made there and then: the menu is a
+			// static screen, the one place a mode change costs nothing
+			// but a repaint. Each border transition reshapes the
+			// surface, so the whole picture goes back up, not just
+			// the line that changed.
+			int step = 0;
+			if (selected == kScreenItem) {
+				if (_stub->_pi.dirMask & PlayerInput::DIR_LEFT) {
+					step = -1;
+				} else if (_stub->_pi.dirMask & PlayerInput::DIR_RIGHT) {
+					step = 1;
+				}
+				_stub->_pi.dirMask &= ~(PlayerInput::DIR_LEFT | PlayerInput::DIR_RIGHT);
+			}
+			if (step != 0) {
+				const int want = (g_options.screen + kScreenModes + step) % kScreenModes;
+				g_options.screen = _stub->setScreenMode(want);
+				shownLevel = -1;
+				_stub->copyRect(0, 0, kW, kH, buf, kW);
+				_stub->updateScreen(0);
+			}
+			if (selected != kQuitItem && selected != kScreenItem) {
 				_currentLevel = selected;
 			}
 		}
@@ -559,6 +596,10 @@ void Game::displayTitleScreenAmiga() {
 			break;
 		}
 		if (confirm(_stub->_pi)) {
+			if (selected == kScreenItem) {
+				_stub->_pi.dirMask |= PlayerInput::DIR_RIGHT;   // fire cycles it too
+				continue;
+			}
 			quitSelected = (selected == kQuitItem);
 			break;
 		}
