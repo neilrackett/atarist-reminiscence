@@ -399,6 +399,7 @@ void Game::run() {
 			break;
 		case kResourceTypeAmiga:
 			displayTitleScreenAmiga();
+			_skillLevel = _menu._skill;
 			_stub->setScreenSize(Video::GAMESCREEN_W, Video::GAMESCREEN_H);
 			break;
 		case kResourceTypeSega:
@@ -480,22 +481,29 @@ void Game::displayTitleScreenAmiga() {
 	_vid.AMIGA_decodeCmp(_res._scratchBuffer + 6, buf);
 	int h = 0;
 	int shownLevel = -1;   // which selection the screen is showing
-	// Below the levels sit the screen mode and Quit. The rows are
-	// chosen so the menu is whole in every mode it can select. Fill
-	// hides rows 0-11, so the list starts below them. Fit keeps rows
-	// in runs of ten from row 2, dropping every eleventh, so an
-	// 11-pixel pitch from row 13 puts each 8-pixel line inside one
-	// run and none of them loses a row. Ten lines then end at 120,
-	// well clear of the FLASHBACK logo. _currentLevel only ever holds
+	// Below the levels sit the skill, the screen mode and Quit. The
+	// rows are chosen so the menu is whole in every mode it can
+	// select. Fill hides rows 0-11, so the list starts below them. Fit
+	// keeps rows in runs of ten from row 2, dropping every eleventh,
+	// so an 11-pixel pitch from row 13 puts each 8-pixel line inside
+	// one run and none of them loses a row. Eleven lines then end at
+	// 130, clear of the FLASHBACK logo. _currentLevel only ever holds
 	// a real level.
-	enum { kScreenItem = Menu::LEVELS_COUNT, kQuitItem = Menu::LEVELS_COUNT + 1 };
+	enum {
+		kSkillItem = Menu::LEVELS_COUNT,
+		kScreenItem = Menu::LEVELS_COUNT + 1,
+		kQuitItem = Menu::LEVELS_COUNT + 2
+	};
 	static const int kTextY = 13;
 	static const int kTextPitch = 11;
 	static const char *const kScreenNames[kScreenModes] = { "Fill", "Fit", "Overscan Top", "Overscan Full" };
-	// The mode's name changes length as it cycles, so the strip of
-	// picture under it is kept and put back before each redraw.
-	uint8_t band[kW * Video::CHAR_H];
-	memcpy(band, buf + (kTextY + kScreenItem * kTextPitch) * kW, sizeof(band));
+	static const char *const kSkillNames[3] = { "Easy", "Normal", "Expert" };
+	// Two lines change length as they cycle, so the strip of picture
+	// under each is kept and put back before every redraw.
+	uint8_t skillBand[kW * Video::CHAR_H];
+	uint8_t screenBand[kW * Video::CHAR_H];
+	memcpy(skillBand, buf + (kTextY + kSkillItem * kTextPitch) * kW, sizeof(skillBand));
+	memcpy(screenBand, buf + (kTextY + kScreenItem * kTextPitch) * kW, sizeof(screenBand));
 	int selected = _currentLevel;
 	bool quitSelected = false;
 	MenuConfirm confirm;
@@ -524,10 +532,13 @@ void Game::displayTitleScreenAmiga() {
 						continue;
 					}
 					char screenLabel[40];
-					snprintf(screenLabel, sizeof(screenLabel), "Screen mode: %s", kScreenNames[g_options.screen]);
+					snprintf(screenLabel, sizeof(screenLabel), "Screen: %s", kScreenNames[g_options.screen]);
+					char skillLabel[24];
+					snprintf(skillLabel, sizeof(skillLabel), "Skill: %s", kSkillNames[_menu._skill]);
 					const char *str = (i == kQuitItem)
 						? (const char *)_res.getMenuString(LocaleData::LI_11_QUIT)
-						: (i == kScreenItem) ? screenLabel : Menu::_levelNames[i];
+						: (i == kScreenItem) ? screenLabel
+						: (i == kSkillItem) ? skillLabel : Menu::_levelNames[i];
 					const uint8_t color = (selected == i) ? selectedColor : defaultColor;
 					// left-aligned with the F of the FLASHBACK logo
 					// below: its ink starts at x=13, and the font
@@ -535,7 +546,9 @@ void Game::displayTitleScreenAmiga() {
 					const int x = 11;
 					const int y = kTextY + i * kTextPitch;
 					if (i == kScreenItem) {
-						memcpy(buf + y * kW, band, sizeof(band));
+						memcpy(buf + y * kW, screenBand, sizeof(screenBand));
+					} else if (i == kSkillItem) {
+						memcpy(buf + y * kW, skillBand, sizeof(skillBand));
 					}
 					for (int j = 0; str[j]; ++j) {
 						_vid.AMIGA_drawStringChar(buf, kW, x + j * Video::CHAR_W, y, _res._fnt, color, str[j]);
@@ -572,7 +585,7 @@ void Game::displayTitleScreenAmiga() {
 			// surface, so the whole picture goes back up, not just
 			// the line that changed.
 			int step = 0;
-			if (selected == kScreenItem) {
+			if (selected == kScreenItem || selected == kSkillItem) {
 				if (_stub->_pi.dirMask & PlayerInput::DIR_LEFT) {
 					step = -1;
 				} else if (_stub->_pi.dirMask & PlayerInput::DIR_RIGHT) {
@@ -580,14 +593,19 @@ void Game::displayTitleScreenAmiga() {
 				}
 				_stub->_pi.dirMask &= ~(PlayerInput::DIR_LEFT | PlayerInput::DIR_RIGHT);
 			}
-			if (step != 0) {
+			if (step != 0 && selected == kScreenItem) {
 				const int want = (g_options.screen + kScreenModes + step) % kScreenModes;
 				g_options.screen = _stub->setScreenMode(want);
 				shownLevel = -1;
 				_stub->copyRect(0, 0, kW, kH, buf, kW);
 				_stub->updateScreen(0);
+			} else if (step != 0) {
+				// The Amiga screen never offered this: the port pinned
+				// the skill at Normal, and Expert was unreachable.
+				_menu._skill = (_menu._skill + 3 + step) % 3;
+				shownLevel = -1;
 			}
-			if (selected != kQuitItem && selected != kScreenItem) {
+			if (selected != kQuitItem && selected != kScreenItem && selected != kSkillItem) {
 				_currentLevel = selected;
 			}
 		}
@@ -596,7 +614,7 @@ void Game::displayTitleScreenAmiga() {
 			break;
 		}
 		if (confirm(_stub->_pi)) {
-			if (selected == kScreenItem) {
+			if (selected == kScreenItem || selected == kSkillItem) {
 				_stub->_pi.dirMask |= PlayerInput::DIR_RIGHT;   // fire cycles it too
 				continue;
 			}
@@ -1002,7 +1020,16 @@ void Game::drawCurrentInventoryItem() {
 	uint16_t src = _pgeLive[0].current_inventory_PGE;
 	if (src != 0xFF) {
 		_currentIcon = _res._pgeInit[src].icon_num;
+#ifdef ATARIST
+		// One row higher than the engine puts it. Fit drops rows 12 and
+		// 23, and at y=8 the icon's bottom row is 23 - the circle came
+		// out with a flat base. From 7 it spans 7-22 and loses only row
+		// 12, in the middle, where a missing line disappears into the
+		// shading.
+		drawIcon(_currentIcon, 232, 7, 0xA);
+#else
 		drawIcon(_currentIcon, 232, 8, 0xA);
+#endif
 	}
 }
 

@@ -19,7 +19,7 @@
 # The two overscan modes can flicker on some hardware - a cartridge
 # with resident firmware, a mouse being moved, or disk activity is
 # enough - which is why fill is the default. The title menu has a
-# "Screen mode" line that cycles through the four for the current
+# "Screen" line that cycles through the four for the current
 # run; this line sets what it starts on. Replaces the old overscan,
 # overscan_bottom and crop_screen settings, which are still read as
 # top, full and fill if an older RS.CFG has them. (default: fill)
