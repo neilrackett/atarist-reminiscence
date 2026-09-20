@@ -45,6 +45,22 @@ DEPS = $(OBJS:.o=.d)
 
 TARGET = dist/FLASHBAK.TOS
 
+# The version the binary announces on the console and in RS.LOG: the
+# nearest release tag, then the commit's hash when the build is not
+# that exact commit, then + when the tree had uncommitted changes.
+# v0.5.6-atarist.123-56da7ca+ is the longest that can come out, and
+# with the name in front it still fits the ST's 40-column console.
+# The release workflow passes in the tag it is about to create, so a
+# release reads as the tag alone. It lands in a generated header that
+# is rewritten only when the string changes, so an incremental build
+# cannot carry a stale one and an unchanged one rebuilds nothing.
+PORT_VERSION ?= $(shell git describe --tags --match 'v*-atarist.*' --always --dirty=+ 2>/dev/null \
+	| sed -E 's/-[0-9]+-g([0-9a-f]+)/-\1/')
+ifeq ($(PORT_VERSION),)
+PORT_VERSION = unknown
+endif
+CXXFLAGS += -Ibuild
+
 all: $(TARGET)
 
 # Depend on the library's own sources: without this the archive is
@@ -65,6 +81,13 @@ $(TARGET): $(OBJS) $(STDL_LIB) | dist
 	$(STRIP) $@
 	@# the documented template, but never over a config in use
 	@test -f dist/RS.CFG || cp RS.CFG.template dist/RS.CFG
+
+build/version.h: FORCE | build
+	@printf '#define PORT_VERSION "%s"\n' '$(PORT_VERSION)' > $@.tmp; \
+	cmp -s $@.tmp $@ || mv $@.tmp $@; rm -f $@.tmp
+build/main_atari.o: build/version.h
+.PHONY: FORCE
+FORCE:
 
 build/%.o: src/%.cpp | build
 	$(CXX) $(CXXFLAGS) -c -o $@ $<

@@ -14,6 +14,7 @@
 #include "game.h"
 #include "systemstub.h"
 #include "util.h"
+#include "version.h"
 
 // mintlib: stack reserved by crt0 before the heap takes the rest of
 // the TPA. Video::AMIGA_decodeSpm alone puts 8K on the stack.
@@ -302,7 +303,12 @@ extern SystemStub *SystemStub_STDL_create();
 
 #undef main
 int main(int argc, char *argv[]) {
+	// On the TOS console, where it sits through the cursor's pause
+	// before the splash takes the screen: the one moment a tester can
+	// read which build this is without opening a log.
+	printf("REminiscence %s\n", PORT_VERSION);
 	initOptions();
+	info("REminiscence %s", PORT_VERSION);
 	FileSystem fs("DATA");
 	const int version = detectVersion(&fs);
 	if (version == -1) {
