@@ -1489,7 +1489,14 @@ void ST_drawSpriteCached(uint8_t *layer, const uint8_t *src, int pitch, int x, i
 			f |= STDL_I8_COLMAJOR;
 		}
 		if (!bakeSprite(e, src, pitch, w, h, map16, f)) {
+			// Out of memory for the bake. Draw it the slow way rather
+			// than not at all: this used to return, and the sprite
+			// simply was not there. Conrad kept taking input and kept
+			// being solid, so he read as having vanished - and it
+			// happened when the most was going on, which is exactly
+			// when the heap is tightest and when it is least welcome.
 			e->src = 0;
+			ST_drawSprite(layer, src, pitch, x, y, w, h, map16, flags, setPrio);
 			return;
 		}
 		e->src = src;

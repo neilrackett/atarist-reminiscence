@@ -75,6 +75,15 @@ struct SpriteCache {
 		pos = (pos + 1) & (N - 1);
 		hint[hashOf(p)] = (uint8_t)(i + 1);
 		if (cap[i] < size) {   // grow only: no free/malloc per miss
+			// Before it goes, not after: a bake keyed into this slab
+			// outlives the free otherwise, and malloc hands the same
+			// address to the next sprite that asks for one. The bake
+			// then matches a pointer holding somebody else's pixels,
+			// which is how a room a few screens in starts drawing
+			// fragments of the room before it.
+			if (buf[i]) {
+				ST_invalidateBakedRange(buf[i], (uint32_t)cap[i]);
+			}
 			::free(buf[i]);
 			buf[i] = (uint8_t *)malloc(size);
 			cap[i] = buf[i] ? size : 0;
