@@ -54,7 +54,9 @@ TARGET = dist/FLASHBAK.TOS
 # release reads as the tag alone. It lands in a generated header that
 # is rewritten only when the string changes, so an incremental build
 # cannot carry a stale one and an unchanged one rebuilds nothing.
-PORT_VERSION ?= $(shell git describe --tags --match 'v*-atarist.*' --always --dirty=+ 2>/dev/null \
+# -c safe.directory: the build runs inside the toolkit container, where
+# the checkout belongs to another user and git otherwise refuses it.
+PORT_VERSION ?= $(shell git -c safe.directory='*' describe --tags --match 'v*-atarist.*' --always --dirty=+ 2>/dev/null \
 	| sed -E 's/-[0-9]+-g([0-9a-f]+)/-\1/')
 ifeq ($(PORT_VERSION),)
 PORT_VERSION = unknown

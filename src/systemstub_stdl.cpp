@@ -553,6 +553,7 @@ struct RemapSnapshot {
 	uint8_t remap[256];
 	Color hwPal[16];
 	Color basePal[256];
+	Color pal[256];
 };
 static RemapSnapshot g_gameRemap;
 
@@ -569,6 +570,7 @@ void ST_setCutscenePalMode(bool enable) {
 		memcpy(g_gameRemap.remap, stub->_remap, sizeof(stub->_remap));
 		memcpy(g_gameRemap.hwPal, stub->_hwPal, sizeof(stub->_hwPal));
 		memcpy(g_gameRemap.basePal, stub->_basePal, sizeof(stub->_basePal));
+		memcpy(g_gameRemap.pal, stub->_pal, sizeof(stub->_pal));
 		g_gameRemap.valid = true;
 		stub->_palDirty = true;
 		stub->_remapStale = true;
@@ -576,11 +578,22 @@ void ST_setCutscenePalMode(bool enable) {
 		memcpy(stub->_remap, g_gameRemap.remap, sizeof(stub->_remap));
 		memcpy(stub->_hwPal, g_gameRemap.hwPal, sizeof(stub->_hwPal));
 		memcpy(stub->_basePal, g_gameRemap.basePal, sizeof(stub->_basePal));
+		// The logical palette comes back too. It used to be left
+		// holding the cutscene's entries with the remap marked dirty,
+		// to be reconciled at the next flip - which was fine until two
+		// cutscenes ran back to back. Dying plays the death scene and
+		// then the continue screen's own scene straight after, and the
+		// second one's snapshot was taken from that unreconciled state:
+		// a remap rebuilt around the first scene's colours, restored
+		// as if it were the room's. Every colour was wrong until the
+		// level reloaded. With the palette itself put back there is
+		// nothing to reconcile; only the registers need the room's
+		// colours written again.
+		memcpy(stub->_pal, g_gameRemap.pal, sizeof(stub->_pal));
 		++g_remapGen;
-		// the registers still hold the cutscene's colours; a palette
-		// that moved meanwhile goes through the usual patch or rebuild
-		stub->_palDirty = true;
+		stub->_palDirty = false;
 		stub->_remapStale = false;
+		stub->_hwDirty = true;
 	} else {
 		stub->_palDirty = true;
 		stub->_remapStale = true;

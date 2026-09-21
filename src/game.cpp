@@ -469,6 +469,21 @@ void Game::displayTitleScreenAmiga() {
 		0x17B, 0x788, 0xB84, 0xC92, 0x49C, 0xF00, 0x9A8, 0x9AA,
 		0xCA7, 0xEA3, 0x8BD, 0xBBB, 0xEC7, 0xBCD, 0xDDB, 0xEED
 	};
+#ifdef ATARIST
+	// The title only ever sets its own 32 entries. On the first visit
+	// the rest of the logical palette is black and the 16 hardware
+	// colours are all its own; after a level they hold that level's
+	// colours, and the quantiser shares the 16 out between the two -
+	// the eyes came back green and the text yellow after a game over.
+	// Black out what is not the title's first. The cutscene banks
+	// stay: game mode leaves 0xC0-0xDF out of the quantiser anyway.
+	{
+		const Color black = { 0, 0, 0 };
+		for (int i = 32; i < 0xC0; ++i) {
+			_stub->setPaletteEntry(i, &black);
+		}
+	}
+#endif
 	for (int i = 0; i < 32; ++i) {
 		Color c = Video::AMIGA_convertColor(kAmigaColors[i]);
 		_stub->setPaletteEntry(i, &c);
