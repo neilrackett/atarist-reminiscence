@@ -307,8 +307,11 @@ extern SystemStub *SystemStub_STDL_create();
 int main(int argc, char *argv[]) {
 	// On the TOS console, where it sits through the cursor's pause
 	// before the splash takes the screen: the one moment a tester can
-	// read which build this is without opening a log.
-	printf("REminiscence %s\n", PORT_VERSION);
+	// read which build this is without opening a log. Just the release
+	// number - r13, or r13-6992ccc+ between releases - because it is
+	// there briefly and has to be readable; the log carries the full
+	// form.
+	printf("%s\n", PORT_RELEASE);
 	initOptions();
 	info("REminiscence %s", PORT_VERSION);
 	FileSystem fs("DATA");

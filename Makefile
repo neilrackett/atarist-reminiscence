@@ -61,6 +61,11 @@ PORT_VERSION ?= $(shell git -c safe.directory='*' describe --tags --match 'v*-at
 ifeq ($(PORT_VERSION),)
 PORT_VERSION = unknown
 endif
+# What the console shows at startup: the release number alone, with the
+# hash and + carried over - r13, r13-6992ccc+. The tag's v0.5.6-atarist.
+# prefix is upstream's version and the tag's namespace, neither of which
+# a tester needs to read off a photograph. RS.LOG keeps the full form.
+PORT_RELEASE := $(shell echo '$(PORT_VERSION)' | sed -E 's/^v[0-9.]+-atarist\.([0-9]+)/r\1/')
 CXXFLAGS += -Ibuild
 
 all: $(TARGET)
@@ -85,7 +90,7 @@ $(TARGET): $(OBJS) $(STDL_LIB) | dist
 	@test -f dist/RS.CFG || cp RS.CFG.template dist/RS.CFG
 
 build/version.h: FORCE | build
-	@printf '#define PORT_VERSION "%s"\n' '$(PORT_VERSION)' > $@.tmp; \
+	@printf '#define PORT_VERSION "%s"\n#define PORT_RELEASE "%s"\n' '$(PORT_VERSION)' '$(PORT_RELEASE)' > $@.tmp; \
 	cmp -s $@.tmp $@ || mv $@.tmp $@; rm -f $@.tmp
 build/main_atari.o: build/version.h
 .PHONY: FORCE
