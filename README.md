@@ -129,7 +129,7 @@ with defaults named, so switching one is a matter of deleting a `#`.
 | Option                     | ST-specific | Effect                                                                                                             |
 | -------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------ |
 | `skip_intro`               | ✓           | Go straight to the title screen, skipping the intro sequence                                                       |
-| `screen`                   | ✓           | How 224 lines meet the 200-line screen: `fit` drops a row in eleven (default), `fill` crops 12 off each end, `top` opens the top border, `full` both. Also on the title menu |
+| `screen`                   | ✓           | How 224 lines meet the 200-line screen: `fit` drops a row in eleven (default), `fill` crops 18 off the top and 6 off the bottom in play (12 and 12 elsewhere), `top` opens the top border, `full` both. Also on the title menu |
 | `music`                    | ✓           | YM chip music, if the tracks have been built (see above)                                                           |
 | `music_volume`             | ✓           | Chip music level, 0-100 (default 70, which sits it level with the sampled effects)                                 |
 | `cheats`                   | ✓           | `true` for all of them, or bits added together: 1 monsters die in one hit, 2 Conrad is never hit, 4 his life never drops |

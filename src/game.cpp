@@ -399,6 +399,7 @@ void Game::run() {
 			break;
 		case kResourceTypeAmiga:
 			displayTitleScreenAmiga();
+			_stub->useFillWindow(true);
 			_skillLevel = _menu._skill;
 			_stub->setScreenSize(Video::GAMESCREEN_W, Video::GAMESCREEN_H);
 			break;
@@ -455,6 +456,7 @@ void Game::run() {
 
 void Game::displayTitleScreenAmiga() {
 	info("Title screen");
+	_stub->useFillWindow(false);
 	static const char *FILENAME = "present.cmp";
 	_res.load_CMP_menu(FILENAME);
 	static const int kW = 320;
@@ -1011,6 +1013,19 @@ void Game::inp_handleSpecialKeys() {
 		loadGameState(_stateSlot);
 		_stub->_pi.load = false;
 	}
+#ifdef ATARIST
+	// Ctrl+Up / Ctrl+Down: in Fill, slide the 200-row window over the
+	// 224-row picture, to find where it best sits. Up shows more of the
+	// top, Down more of the bottom; the rows shown go to RS.LOG.
+	if (_stub->_pi.panUp || _stub->_pi.panDown) {
+		const int top = _stub->panScreen(_stub->_pi.panUp ? -1 : 1);
+		_stub->_pi.panUp = _stub->_pi.panDown = false;
+		if (top >= 0) {
+			info("Fill shows rows %d-%d", top, top + 199);
+			_vid.fullRefresh();
+		}
+	}
+#endif
 	if (_stub->_pi.save) {
 		saveGameState(_stateSlot);
 		_stub->_pi.save = false;
@@ -1038,13 +1053,13 @@ void Game::drawCurrentInventoryItem() {
 	if (src != 0xFF) {
 		_currentIcon = _res._pgeInit[src].icon_num;
 #ifdef ATARIST
-		// Five rows lower than the engine puts it, for both modes at
-		// once. Fill hides rows 0-11, so it has to start at 12 or
-		// later; Fit drops rows 12 and 23, so at 12 its top edge would
-		// go and at the engine's 8 its bottom edge did. From 13 it
-		// spans 13-28: nothing cropped, and the one dropped row, 23,
-		// is in the middle where a missing line hides in the shading.
-		drawIcon(_currentIcon, 232, 13, 0xA);
+		// Placed for the mode. Fit drops rows 12 and 23, and at the
+		// engine's y=8 the icon's bottom row was 23 - a flat base; from
+		// 7 it spans 7-22 and loses only row 12, in the middle, where a
+		// missing line hides in the shading. Fill in play starts at row
+		// 18, so there it sits just under that edge.
+		const int iconY = (g_options.screen == kScreenFill) ? 19 : 7;
+		drawIcon(_currentIcon, 232, iconY, 0xA);
 #else
 		drawIcon(_currentIcon, 232, 8, 0xA);
 #endif

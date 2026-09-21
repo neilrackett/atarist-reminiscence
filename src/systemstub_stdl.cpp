@@ -35,6 +35,13 @@ extern "C" {
 static const int kMaxSrcW = 320;
 static const int kMaxSrcH = 224;
 static const int kScreenStride = 160;
+// Fit's geometry, shared with ST_textRow: two rows cropped at each
+// end, then runs of kFitRun - 1 kept rows with one dropped between,
+// so the kept runs start at kFitCrop + n * kFitRun.
+enum { kFitCrop = 2, kFitRun = 11 };
+// Fill's two windows: where the 200 shown rows start on the menu and
+// in cutscenes, and where they start in play (see buildFillTable).
+enum { kFillScreensTop = 12, kFillGameTop = 18 };
 
 struct SystemStub_STDL : SystemStub {
 	STDL_Surface *_screen;
@@ -72,6 +79,13 @@ struct SystemStub_STDL : SystemStub {
 	virtual bool hasWidescreen() const { return false; }
 	virtual void setScreenSize(int w, int h);
 	virtual int setScreenMode(int mode);
+	virtual int panScreen(int delta);
+	virtual void useFillWindow(bool game);
+	void buildFillTable();
+	void applyFillTop(int top);
+	int _mode;                 // the ScreenMode in effect
+	int _fillTop;              // Fill: first of the 224 rows shown now
+	int _fillTopGame;          // Fill: the row play starts from
 	virtual void setPalette(const uint8_t *pal, int n);
 	virtual void getPalette(uint8_t *pal, int n);
 	virtual void setPaletteEntry(int i, const Color *c);
@@ -312,6 +326,8 @@ void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int
 	_fade = 256;
 	_shadow = (uint8_t *)malloc(kMaxSrcW * kMaxSrcH);
 	_shadowValid = false;
+	_fillTop = kFillScreensTop;
+	_fillTopGame = kFillGameTop;
 	setScreenMode(g_options.screen);
 	setScreenSize(w, h);
 	// black screen until the first frame arrives
@@ -390,11 +406,6 @@ void SystemStub_STDL::setScreenSize(int w, int h) {
 // Called once from init and again from the title menu, so it has to
 // undo whatever the previous mode left open. Each border transition
 // reshapes the screen surface, so the caller repaints afterwards.
-// Fit's geometry, shared with ST_textRow below: two rows cropped at
-// each end, then runs of kFitRun - 1 kept rows with one dropped
-// between, so the kept runs start at kFitCrop + n * kFitRun.
-enum { kFitCrop = 2, kFitRun = 11 };
-
 // The nearest row to y on which an 8-pixel line of text loses nothing
 // in Fit: the first three rows of a kept run, so the line ends inside
 // it. The engine's fixed-row text - the continue screen, the score,
@@ -469,11 +480,7 @@ int SystemStub_STDL::setScreenMode(int mode) {
 			_yMap[y] = (uint8_t)(y + ovscY);
 		}
 	} else if (mode == kScreenFill) {
-		for (int y = 0; y < kMaxSrcH; ++y) {
-			const bool off = (y < 12) || (y >= kMaxSrcH - 12);
-			_yDrop[y] = off ? 1 : 0;
-			_yMap[y] = off ? 0 : (y - 12);
-		}
+		buildFillTable();
 	} else {
 		// Fit: two rows cropped at each end, then every eleventh of
 		// the 220 between dropped - twenty of them, 200 rows exactly.
@@ -509,7 +516,55 @@ int SystemStub_STDL::setScreenMode(int mode) {
 	_shadowValid = false;
 	memset(_screen->pixels, 0, kScreenStride * _screen->h);
 	writeHwPalette();
+	_mode = mode;
 	return mode;
+}
+
+// Fill shows 200 of the 224 rows, from _fillTop down - and where that
+// window sits depends on what is being shown. In play it starts at
+// row 18, six from the bottom: the rooms put their floors and lower
+// platforms in the last rows, and a centred window lost the whole
+// bottom platform of the first room, while the top rows are canopy.
+// The menu and the cutscenes were laid out for a centred window and
+// keep one. The pan (Ctrl+Up/Down in play) moves only the play window
+// and is there for trying other positions.
+void SystemStub_STDL::buildFillTable() {
+	for (int y = 0; y < kMaxSrcH; ++y) {
+		const bool off = (y < _fillTop) || (y >= _fillTop + 200);
+		_yDrop[y] = off ? 1 : 0;
+		_yMap[y] = off ? 0 : (uint8_t)(y - _fillTop);
+	}
+}
+
+void SystemStub_STDL::applyFillTop(int top) {
+	if (top == _fillTop) {
+		return;
+	}
+	_fillTop = top;
+	if (_mode == kScreenFill) {
+		buildFillTable();
+		_shadowValid = false;
+		memset(_screen->pixels, 0, kScreenStride * _screen->h);
+	}
+}
+
+void SystemStub_STDL::useFillWindow(bool game) {
+	applyFillTop(game ? _fillTopGame : kFillScreensTop);
+}
+
+int SystemStub_STDL::panScreen(int delta) {
+	if (_mode != kScreenFill) {
+		return -1;
+	}
+	int top = _fillTopGame + delta;
+	if (top < 0) {
+		top = 0;
+	} else if (top > kMaxSrcH - 200) {
+		top = kMaxSrcH - 200;
+	}
+	_fillTopGame = top;
+	applyFillTop(top);
+	return _fillTopGame;
 }
 
 void SystemStub_STDL::setPalette(const uint8_t *pal, int n) {
@@ -1533,9 +1588,11 @@ void SystemStub_STDL::processEvents() {
 			}
 			switch (sym) {
 			case STDLK_UP:
+				if (down && (mod & (STDL_KMOD_LCTRL | STDL_KMOD_RCTRL))) { _pi.panUp = true; break; }
 				if (down) { _pi.dirMask |= PlayerInput::DIR_UP; _upDirMask &= ~PlayerInput::DIR_UP; } else _upDirMask |= PlayerInput::DIR_UP;
 				break;
 			case STDLK_DOWN:
+				if (down && (mod & (STDL_KMOD_LCTRL | STDL_KMOD_RCTRL))) { _pi.panDown = true; break; }
 				if (down) { _pi.dirMask |= PlayerInput::DIR_DOWN; _upDirMask &= ~PlayerInput::DIR_DOWN; } else _upDirMask |= PlayerInput::DIR_DOWN;
 				break;
 			case STDLK_LEFT:

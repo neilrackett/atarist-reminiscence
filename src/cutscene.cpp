@@ -1722,6 +1722,7 @@ void Cutscene::play() {
 		// here - so Fit steps over to Fill for the duration and back
 		// for the room. Neither touches a border, so the switch is
 		// two table rebuilds and a clear.
+		_stub->useFillWindow(false);
 		const bool fillForCutscene = (g_options.screen == kScreenFit);
 		if (fillForCutscene) {
 			_stub->setScreenMode(kScreenFill);
@@ -1798,6 +1799,7 @@ void Cutscene::play() {
 		if (fillForCutscene) {
 			_stub->setScreenMode(kScreenFit);
 		}
+		_stub->useFillWindow(true);
 		_vid->ST_rebakeRoom();
 #endif
 		_vid->fullRefresh();

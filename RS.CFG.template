@@ -11,7 +11,9 @@
 #   fit   two lines cropped at each end and one row in eleven dropped
 #         between; everything is visible at a slight cost in texture
 #         (default)
-#   fill  crop 12 lines off the top and bottom; every line shown is
+#   fill  in play, crop 18 lines off the top and 6 off the bottom
+#         (the rooms keep their floors low and only canopy up top);
+#         12 and 12 on the menu and in cutscenes. Every line shown is
 #         intact, but the edges of the playfield are hidden
 #   top   open the top border: all 224 lines shown natively, picture
 #         on the bottom edge of a 228-line screen

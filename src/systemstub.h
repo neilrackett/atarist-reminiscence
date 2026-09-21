@@ -37,6 +37,9 @@ struct PlayerInput {
 	bool save;
 	bool load;
 	int stateSlot;
+	// ST port: Ctrl+Up / Ctrl+Down, to pan the picture in Fill
+	bool panUp;
+	bool panDown;
 	bool rewind;
 
 	uint8_t dbgMask;
@@ -108,6 +111,12 @@ struct SystemStub {
 	// and return the mode actually in effect - a border that will
 	// not open falls back. The caller redraws everything afterwards.
 	virtual int setScreenMode(int mode) { return mode; }
+	// ST port: in Fill, move the 200-row window over the 224 rows by
+	// delta and return the row it now starts on; -1 when not in Fill.
+	virtual int panScreen(int delta) { return -1; }
+	// ST port: Fill has one window for play and another, centred, for
+	// the menu and cutscenes. The caller repaints after a change.
+	virtual void useFillWindow(bool game) {}
 	virtual void setPalette(const uint8_t *pal, int n) = 0;
 	virtual void getPalette(uint8_t *pal, int n) = 0;
 	virtual void setPaletteEntry(int i, const Color *c) = 0;
