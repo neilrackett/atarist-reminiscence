@@ -390,6 +390,36 @@ void SystemStub_STDL::setScreenSize(int w, int h) {
 // Called once from init and again from the title menu, so it has to
 // undo whatever the previous mode left open. Each border transition
 // reshapes the screen surface, so the caller repaints afterwards.
+// Fit's geometry, shared with ST_textRow below: two rows cropped at
+// each end, then runs of kFitRun - 1 kept rows with one dropped
+// between, so the kept runs start at kFitCrop + n * kFitRun.
+enum { kFitCrop = 2, kFitRun = 11 };
+
+// The nearest row to y on which an 8-pixel line of text loses nothing
+// in Fit: the first three rows of a kept run, so the line ends inside
+// it. The engine's fixed-row text - the continue screen, the score,
+// a level code - was laid out for a screen that shows every row; on
+// Fit most of it straddled a dropped one and came out ragged. The
+// shift is at most five rows and is applied in every mode, so a
+// screen looks the same whichever the player chose.
+int ST_textRow(int y) {
+	int best = y;
+	int bestDist = kFitRun;
+	for (int d = -(kFitRun / 2); d <= kFitRun / 2; ++d) {
+		const int c = y + d;
+		if (c < kFitCrop) {
+			continue;
+		}
+		const int phase = (c - kFitCrop) % kFitRun;
+		const int dist = d < 0 ? -d : d;
+		if (phase <= 2 && dist < bestDist) {
+			best = c;
+			bestDist = dist;
+		}
+	}
+	return best;
+}
+
 int SystemStub_STDL::setScreenMode(int mode) {
 	if (_ovscOpen) {
 		_ovscOpen = false;
@@ -429,8 +459,8 @@ int SystemStub_STDL::setScreenMode(int mode) {
 				info("Top border only: %d lines, picture at row %d", topH, ovscY);
 			}
 		} else {
-			warning("Overscan unavailable (%s), using fill", STDL_GetError());
-			mode = kScreenFill;
+			warning("Overscan unavailable (%s), using fit", STDL_GetError());
+			mode = kScreenFit;
 		}
 	}
 	if (_ovscOpen) {
@@ -454,7 +484,6 @@ int SystemStub_STDL::setScreenMode(int mode) {
 		// glyph placed on the run phase (see the title menu) stays
 		// whole. A dropped row maps to the last row that was kept,
 		// the same convention the squash used.
-		enum { kFitCrop = 2, kFitRun = 11 };
 		int d = 0;
 		for (int y = 0; y < kMaxSrcH; ++y) {
 			const bool cropped = (y < kFitCrop) || (y >= kMaxSrcH - kFitCrop);

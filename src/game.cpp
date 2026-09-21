@@ -511,7 +511,7 @@ void Game::displayTitleScreenAmiga() {
 	};
 	static const int kTextY = 13;
 	static const int kTextPitch = 11;
-	static const char *const kScreenNames[kScreenModes] = { "Fill", "Fit", "Overscan Top", "Overscan Full" };
+	static const char *const kScreenNames[kScreenModes] = { "Fit", "Fill", "Overscan Top", "Overscan Full" };
 	static const char *const kSkillNames[3] = { "Easy", "Normal", "Expert" };
 	// Two lines change length as they cycle, so the strip of picture
 	// under each is kept and put back before every redraw.
@@ -550,8 +550,10 @@ void Game::displayTitleScreenAmiga() {
 					snprintf(screenLabel, sizeof(screenLabel), "Screen: %s", kScreenNames[g_options.screen]);
 					char skillLabel[24];
 					snprintf(skillLabel, sizeof(skillLabel), "Skill: %s", kSkillNames[_menu._skill]);
+					// "Quit Game" rather than the engine's "QUIT": every other
+					// line on this screen is in title case.
 					const char *str = (i == kQuitItem)
-						? (const char *)_res.getMenuString(LocaleData::LI_11_QUIT)
+						? "Quit Game"
 						: (i == kScreenItem) ? screenLabel
 						: (i == kSkillItem) ? skillLabel : Menu::_levelNames[i];
 					const uint8_t color = (selected == i) ? selectedColor : defaultColor;
@@ -1036,12 +1038,13 @@ void Game::drawCurrentInventoryItem() {
 	if (src != 0xFF) {
 		_currentIcon = _res._pgeInit[src].icon_num;
 #ifdef ATARIST
-		// One row higher than the engine puts it. Fit drops rows 12 and
-		// 23, and at y=8 the icon's bottom row is 23 - the circle came
-		// out with a flat base. From 7 it spans 7-22 and loses only row
-		// 12, in the middle, where a missing line disappears into the
-		// shading.
-		drawIcon(_currentIcon, 232, 7, 0xA);
+		// Five rows lower than the engine puts it, for both modes at
+		// once. Fill hides rows 0-11, so it has to start at 12 or
+		// later; Fit drops rows 12 and 23, so at 12 its top edge would
+		// go and at the engine's 8 its bottom edge did. From 13 it
+		// spans 13-28: nothing cropped, and the one dropped row, 23,
+		// is in the middle where a missing line hides in the shading.
+		drawIcon(_currentIcon, 232, 13, 0xA);
 #else
 		drawIcon(_currentIcon, 232, 8, 0xA);
 #endif
@@ -1055,9 +1058,9 @@ void Game::showFinalScore() {
 	playCutscene(0x49);
 	char buf[50];
 	snprintf(buf, sizeof(buf), "SCORE %08u", _score);
-	_vid.drawString(buf, (Video::GAMESCREEN_W - strlen(buf) * Video::CHAR_W) / 2, 40, 0xE5);
+	_vid.drawString(buf, (Video::GAMESCREEN_W - strlen(buf) * Video::CHAR_W) / 2, TEXT_ROW(40), 0xE5);
 	const char *str = _menu.getLevelPassword(7, _skillLevel);
-	_vid.drawString(str, (Video::GAMESCREEN_W - strlen(str) * Video::CHAR_W) / 2, 16, 0xE7);
+	_vid.drawString(str, (Video::GAMESCREEN_W - strlen(str) * Video::CHAR_W) / 2, TEXT_ROW(16), 0xE7);
 	MenuConfirm confirm;
 	while (!_stub->_pi.quit) {
 		GAME_COPYRECT_FRONT();
@@ -1154,15 +1157,27 @@ bool Game::handleConfigPanel() {
 	uint8_t colors[] = { 2, 3, 3, 3 };
 	int current = 0;
 	MenuConfirm confirm;
+#ifdef ATARIST
+	// Rows in pixels rather than cells, placed for Fit: it keeps rows
+	// in runs of ten from row 2 and drops every eleventh, so an
+	// 11-pixel pitch from 102 puts each 8-pixel line inside one run,
+	// and the five lines sit centred in the panel's 80-176 box.
+	static const int16_t kRow[5] = { 102, 113, 124, 135, 146 };
+#else
+	static const int16_t kRow[5] = {
+		(y + 2) * Video::CHAR_H, (y + 4) * Video::CHAR_H, (y + 6) * Video::CHAR_H,
+		(y + 8) * Video::CHAR_H, (y + 10) * Video::CHAR_H
+	};
+#endif
 	while (!_stub->_pi.quit) {
-		_menu.drawString(_res.getMenuString(LocaleData::LI_18_RESUME_GAME), y + 2, 9, colors[0]);
-		_menu.drawString(_res.getMenuString(LocaleData::LI_19_ABORT_GAME), y + 4, 9, colors[1]);
-		_menu.drawString(_res.getMenuString(LocaleData::LI_20_LOAD_GAME), y + 6, 9, colors[2]);
-		_menu.drawString(_res.getMenuString(LocaleData::LI_21_SAVE_GAME), y + 8, 9, colors[3]);
-		_vid.fillRect(Video::CHAR_W * (x + 1), Video::CHAR_H * (y + 10), Video::CHAR_W * (w - 2), Video::CHAR_H, 0xE2);
+		_menu.drawStringPx(_res.getMenuString(LocaleData::LI_18_RESUME_GAME), kRow[0], 9, colors[0]);
+		_menu.drawStringPx(_res.getMenuString(LocaleData::LI_19_ABORT_GAME), kRow[1], 9, colors[1]);
+		_menu.drawStringPx(_res.getMenuString(LocaleData::LI_20_LOAD_GAME), kRow[2], 9, colors[2]);
+		_menu.drawStringPx(_res.getMenuString(LocaleData::LI_21_SAVE_GAME), kRow[3], 9, colors[3]);
+		_vid.fillRect(Video::CHAR_W * (x + 1), kRow[4], Video::CHAR_W * (w - 2), Video::CHAR_H, 0xE2);
 		char buf[32];
 		snprintf(buf, sizeof(buf), "%s < %02d >", _res.getMenuString(LocaleData::LI_22_SAVE_SLOT), _stateSlot);
-		_menu.drawString(buf, y + 10, 9, 1);
+		_menu.drawStringPx(buf, kRow[4], 9, 1);
 
 		_vid.updateScreen();
 		_stub->sleep(80);
@@ -1230,17 +1245,17 @@ bool Game::handleContinueAbort() {
 	while (timeout >= 0 && !_stub->_pi.quit) {
 		const char *str;
 		str = _res.getMenuString(LocaleData::LI_01_CONTINUE_OR_ABORT);
-		_vid.drawString(str, (Video::GAMESCREEN_W - strlen(str) * Video::CHAR_W) / 2, 64, 0xE3);
+		_vid.drawString(str, (Video::GAMESCREEN_W - strlen(str) * Video::CHAR_W) / 2, TEXT_ROW(64), 0xE3);
 		str = _res.getMenuString(LocaleData::LI_02_TIME);
 		char buf[50];
 		snprintf(buf, sizeof(buf), "%s : %d", str, timeout / 10);
-		_vid.drawString(buf, 96, 88, 0xE3);
+		_vid.drawString(buf, 96, TEXT_ROW(88), 0xE3);
 		str = _res.getMenuString(LocaleData::LI_03_CONTINUE);
-		_vid.drawString(str, (Video::GAMESCREEN_W - strlen(str) * Video::CHAR_W) / 2, 104, colors[0]);
+		_vid.drawString(str, (Video::GAMESCREEN_W - strlen(str) * Video::CHAR_W) / 2, TEXT_ROW(104), colors[0]);
 		str = _res.getMenuString(LocaleData::LI_04_ABORT);
-		_vid.drawString(str, (Video::GAMESCREEN_W - strlen(str) * Video::CHAR_W) / 2, 112, colors[1]);
+		_vid.drawString(str, (Video::GAMESCREEN_W - strlen(str) * Video::CHAR_W) / 2, TEXT_ROW(112), colors[1]);
 		snprintf(buf, sizeof(buf), "SCORE  %08u", _score);
-		_vid.drawString(buf, 64, 154, 0xE3);
+		_vid.drawString(buf, 64, TEXT_ROW(154), 0xE3);
 		if (_stub->_pi.dirMask & PlayerInput::DIR_UP) {
 			_stub->_pi.dirMask &= ~PlayerInput::DIR_UP;
 			if (current_color > 0) {
@@ -1290,7 +1305,7 @@ void Game::printLevelCode() {
 		if (_printLevelCodeCounter != 0) {
 			char buf[32];
 			snprintf(buf, sizeof(buf), "CODE: %s", _menu.getLevelPassword(_currentLevel, _skillLevel));
-			_vid.drawString(buf, (Video::GAMESCREEN_W - strlen(buf) * Video::CHAR_W) / 2, 16, 0xE7);
+			_vid.drawString(buf, (Video::GAMESCREEN_W - strlen(buf) * Video::CHAR_W) / 2, TEXT_ROW(16), 0xE7);
 		}
 	}
 }
@@ -1298,7 +1313,7 @@ void Game::printLevelCode() {
 void Game::printSaveStateCompleted() {
 	if (_saveStateCompleted) {
 		const char *str = _res.getMenuString(LocaleData::LI_05_COMPLETED);
-		_vid.drawString(str, (176 - strlen(str) * Video::CHAR_W) / 2, 34, 0xE6);
+		_vid.drawString(str, (176 - strlen(str) * Video::CHAR_W) / 2, TEXT_ROW(34), 0xE6);
 	}
 }
 
@@ -1402,7 +1417,7 @@ void Game::drawStoryTexts() {
 				}
 				while (1) {
 					const int len = getLineLength(str);
-					str = (const uint8_t *)_vid.drawString((const char *)str, (176 - len * Video::CHAR_W) / 2, yPos, textColor);
+					str = (const uint8_t *)_vid.drawString((const char *)str, (176 - len * Video::CHAR_W) / 2, TEXT_ROW(yPos), textColor);
 					if (*str == 0 || *str == 0xB) {
 						break;
 					}
@@ -2534,11 +2549,11 @@ void Game::handleInventory() {
 						selected_pge = items[item_it].live_pge;
 						uint8_t txt_num = items[item_it].init_pge->text_num;
 						const uint8_t *str = _res.getTextString(_currentLevel, txt_num);
-						drawString(str, Video::GAMESCREEN_W, 189, 0xED, true);
+						drawString(str, Video::GAMESCREEN_W, TEXT_ROW(189), 0xED, true);
 						if (items[item_it].init_pge->init_flags & 4) {
 							char buf[10];
 							snprintf(buf, sizeof(buf), "%d", selected_pge->life);
-							_vid.drawString(buf, (Video::GAMESCREEN_W - strlen(buf) * Video::CHAR_W) / 2, 197, 0xED);
+							_vid.drawString(buf, (Video::GAMESCREEN_W - strlen(buf) * Video::CHAR_W) / 2, TEXT_ROW(197), 0xED);
 						}
 					}
 					icon_x_pos += 32;

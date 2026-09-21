@@ -8,21 +8,22 @@
 # --- picture ------------------------------------------------------
 
 # How the game's 224 lines meet the ST's 200-line screen. One of:
+#   fit   two lines cropped at each end and one row in eleven dropped
+#         between; everything is visible at a slight cost in texture
+#         (default)
 #   fill  crop 12 lines off the top and bottom; every line shown is
-#         intact and nothing is resampled (default)
-#   fit   squash all 224 lines into 200; everything is visible, but
-#         one line in nine is dropped, so text looks a little ragged
+#         intact, but the edges of the playfield are hidden
 #   top   open the top border: all 224 lines shown natively, picture
 #         on the bottom edge of a 228-line screen
 #   full  open both borders: 273 lines with the picture centred.
 #         Known to jump and stripe on some machines
 # The two overscan modes can flicker on some hardware - a cartridge
 # with resident firmware, a mouse being moved, or disk activity is
-# enough - which is why fill is the default. The title menu has a
+# enough - which is why a bordered mode is not the default. The title menu has a
 # "Screen" line that cycles through the four for the current
 # run; this line sets what it starts on. Replaces the old overscan,
 # overscan_bottom and crop_screen settings, which are still read as
-# top, full and fill if an older RS.CFG has them. (default: fill)
+# top, full and fill if an older RS.CFG has them. (default: fit)
 #screen=top
 
 # --- machine ------------------------------------------------------

@@ -103,7 +103,7 @@ static void initOptions() {
 	// mapping is then one-to-one it is also the fastest of the three
 	// ways of fitting 224 lines on the screen
 	g_options.overscan = false;
-	g_options.screen = kScreenFill;
+	g_options.screen = kScreenFit;
 	g_options.music = false;
 	// 70% puts the chip music level with the sampled effects, which
 	// a tester once called crazy loud against full YM output. The
@@ -225,7 +225,7 @@ static void initOptions() {
 					// word. Matched on the whole word, since fill and fit
 					// share a first letter; anything else is left as it was.
 					if (nameLen == 6 && strncmp(name, "screen", 6) == 0) {
-						static const char *const words[kScreenModes] = { "fill", "fit", "top", "full" };
+						static const char *const words[kScreenModes] = { "fit", "fill", "top", "full" };
 						for (int i = 0; i < kScreenModes; ++i) {
 							const size_t n = strlen(words[i]);
 							if (strncasecmp(p, words[i], n) == 0 && !isalpha((unsigned char)p[n])) {
@@ -293,8 +293,10 @@ static void initOptions() {
 	if (!screenSet) {
 		if (g_options.overscan) {
 			g_options.screen = g_options.overscan_bottom ? kScreenFull : kScreenTop;
-		} else {
+		} else if (g_options.crop_screen) {
 			g_options.screen = kScreenFill;
+		} else {
+			g_options.screen = kScreenFit;
 		}
 	}
 }

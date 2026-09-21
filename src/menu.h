@@ -84,6 +84,10 @@ struct Menu {
 
 	void drawString(const char *str, int16_t y, int16_t x, uint8_t colorConfig);
 	void drawString2(const char *str, int16_t y, int16_t x);
+	// The same two with the row given in pixels rather than character
+	// cells, for text that has to land on particular screen rows.
+	void drawStringPx(const char *str, int16_t yPx, int16_t x, uint8_t colorConfig);
+	void drawString2Px(const char *str, int16_t yPx, int16_t x);
 	void loadPicture(const char *prefix);
 	void displayTitleScreenMac(int num);
 

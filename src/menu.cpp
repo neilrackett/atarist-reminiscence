@@ -19,6 +19,10 @@ Menu::Menu(Resource *res, SystemStub *stub, Video *vid)
 }
 
 void Menu::drawString(const char *str, int16_t y, int16_t x, uint8_t colorConfig) {
+	drawStringPx(str, y * Video::CHAR_H, x, colorConfig);
+}
+
+void Menu::drawStringPx(const char *str, int16_t yPx, int16_t x, uint8_t colorConfig) {
 	debug(DBG_MENU, "Menu::drawString()");
 	const uint8_t v1b = _vid->_charFrontColor;
 	const uint8_t v2b = _vid->_charTransparentColor;
@@ -56,7 +60,7 @@ void Menu::drawString(const char *str, int16_t y, int16_t x, uint8_t colorConfig
 		break;
 	}
 
-	drawString2(str, y, x);
+	drawString2Px(str, yPx, x);
 
 	_vid->_charFrontColor = v1b;
 	_vid->_charTransparentColor = v2b;
@@ -64,6 +68,10 @@ void Menu::drawString(const char *str, int16_t y, int16_t x, uint8_t colorConfig
 }
 
 void Menu::drawString2(const char *str, int16_t y, int16_t x) {
+	drawString2Px(str, y * Video::CHAR_H, x);
+}
+
+void Menu::drawString2Px(const char *str, int16_t yPx, int16_t x) {
 	debug(DBG_MENU, "Menu::drawString2()");
 	const int w = Video::CHAR_W;
 	const int h = Video::CHAR_H;
@@ -71,23 +79,25 @@ void Menu::drawString2(const char *str, int16_t y, int16_t x) {
 	switch (_res->_type) {
 	case kResourceTypeAmiga:
 		for (; str[len]; ++len) {
-			_vid->AMIGA_drawStringChar(_vid->_frontLayer, _vid->_w, w * (x + len), h * y, _res->_fnt, _vid->_charFrontColor, (uint8_t)str[len]);
+			_vid->AMIGA_drawStringChar(_vid->_frontLayer, _vid->_w, w * (x + len), yPx, _res->_fnt, _vid->_charFrontColor, (uint8_t)str[len]);
 		}
 		break;
 	case kResourceTypeDOS:
 	case kResourceTypePC98:
 	case kResourceTypeSega:
+		// The DOS drawer only knows character rows, so a row that is
+		// not a multiple of the cell height lands on the cell above.
 		for (; str[len]; ++len) {
-			_vid->DOS_drawChar((uint8_t)str[len], y, x + len, true);
+			_vid->DOS_drawChar((uint8_t)str[len], yPx / h, x + len, true);
 		}
 		break;
 	case kResourceTypeMac:
 		for (; str[len]; ++len) {
-			_vid->MAC_drawStringChar(_vid->_frontLayer, _vid->_w, w * (x + len), h * y, _res->_fnt, _vid->_charFrontColor, (uint8_t)str[len]);
+			_vid->MAC_drawStringChar(_vid->_frontLayer, _vid->_w, w * (x + len), yPx, _res->_fnt, _vid->_charFrontColor, (uint8_t)str[len]);
 		}
 		break;
 	}
-	_vid->markBlockAsDirty(x * w, y * h, len * w, h, _vid->_layerScale);
+	_vid->markBlockAsDirty(x * w, yPx, len * w, h, _vid->_layerScale);
 }
 
 void Menu::loadPicture(const char *prefix) {

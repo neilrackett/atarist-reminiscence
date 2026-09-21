@@ -171,15 +171,25 @@ struct Options {
 };
 
 // ST port: the four screen modes, in the order the menu cycles them
-// - safest first. Fill crops 12 lines off each end, Fit squashes 224
-// into 200, Top opens the top border, Full opens both.
+// - the default first. Fit crops two lines off each end and drops
+// every eleventh between, Fill crops 12 off each end, Top opens the
+// top border, Full opens both.
 enum ScreenMode {
-	kScreenFill = 0,
-	kScreenFit = 1,
+	kScreenFit = 0,
+	kScreenFill = 1,
 	kScreenTop = 2,
 	kScreenFull = 3,
 	kScreenModes = 4
 };
+
+// ST port: fixed-row text is placed on a row it survives Fit on
+// (see ST_textRow); elsewhere the row is used as written.
+#ifdef ATARIST
+int ST_textRow(int y);
+#define TEXT_ROW(y) ST_textRow(y)
+#else
+#define TEXT_ROW(y) (y)
+#endif
 
 struct Features {
 	bool has_extended_intro;
