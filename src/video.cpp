@@ -1579,10 +1579,13 @@ void Video::AMIGA_drawStringChar(uint8_t *dst, int pitch, int x, int y, const ui
 	// drawn, so keep that much per character and decode each one
 	// once. The font pointer says which font the cache holds, which
 	// is enough here: the Amiga resources load one font and keep it.
+	// Rows are kept 8 bytes wide, the glyph's own width, rather than
+	// the decoded cell's 16: the other half was 6K of padding.
 	static const uint8_t *cachedFnt;
-	static uint8_t cache[96][8 * 16];
+	static uint8_t cache[96][8 * 8];
 	static uint8_t cached[96];
 	const int idx = chr - 32;
+	int stride = 16;
 	if (idx < 96) {
 		if (src != cachedFnt) {
 			memset(cached, 0, sizeof(cached));
@@ -1590,10 +1593,13 @@ void Video::AMIGA_drawStringChar(uint8_t *dst, int pitch, int x, int y, const ui
 		}
 		if (!cached[idx]) {
 			AMIGA_decodeIcn(src, idx, _res->_scratchBuffer);
-			memcpy(cache[idx], _res->_scratchBuffer, sizeof(cache[idx]));
+			for (int row = 0; row < 8; ++row) {
+				memcpy(cache[idx] + row * 8, _res->_scratchBuffer + row * 16, 8);
+			}
 			cached[idx] = 1;
 		}
 		src = cache[idx];
+		stride = 8;
 	} else {
 		AMIGA_decodeIcn(src, idx, _res->_scratchBuffer);
 		src = _res->_scratchBuffer;
@@ -1606,9 +1612,11 @@ void Video::AMIGA_drawStringChar(uint8_t *dst, int pitch, int x, int y, const ui
 	// pitch 256 = a planar layer / cutscene page; anything else is a
 	// plain chunky buffer (the 320-wide Amiga title screen)
 	if (pitch == GAMESCREEN_W) {
-		ST_drawGlyph(dst, src, x, y, color);
+		ST_drawGlyph(dst, src, stride, x, y, color);
 		return;
 	}
+#else
+	const int stride = 16;
 #endif
 	dst += y * pitch + x;
 	for (int y = 0; y < 8; ++y) {
@@ -1617,7 +1625,7 @@ void Video::AMIGA_drawStringChar(uint8_t *dst, int pitch, int x, int y, const ui
 				dst[x] = color;
 			}
 		}
-		src += 16;
+		src += stride;
 		dst += pitch;
 	}
 }

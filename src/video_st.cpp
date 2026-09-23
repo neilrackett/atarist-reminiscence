@@ -1627,11 +1627,11 @@ void ST_drawSpriteCached(uint8_t *layer, const uint8_t *src, int pitch, int x, i
 	blitBaked(layer, e, x, y, (flags & kSTSpriteRespectPrio) != 0, setPrio);
 }
 
-void ST_drawGlyph(uint8_t *layer, const uint8_t *src, int x, int y, uint8_t colour8) {
+void ST_drawGlyph(uint8_t *layer, const uint8_t *src, int pitch, int x, int y, uint8_t colour8) {
 	const uint8_t v = ST_getRemap()[colour8];
 	uint8_t map16[16];
 	memset(map16, v, sizeof(map16));
-	ST_drawSprite(layer, src, 16, x, y, 8, 8, map16, 0, (colour8 & 0x80) != 0);
+	ST_drawSprite(layer, src, pitch, x, y, 8, 8, map16, 0, (colour8 & 0x80) != 0);
 }
 
 // which pixels of 16-pixel group g lie inside [lo, hi]

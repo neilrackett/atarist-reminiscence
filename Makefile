@@ -29,16 +29,18 @@ CXXFLAGS = -O2 -fomit-frame-pointer -fno-exceptions -fno-rtti \
 
 LIBS = $(STDL_LIB) -lm
 
-# Amiga-data engine + ST platform layer. DOS/Mac/PC98/Sega loaders are
-# still compiled (they are small and keep the diff against upstream
-# minimal); the SDL stub, scalers and MIDI drivers are not.
-SRCS = collision.cpp cpc_player.cpp cutscene.cpp decode_mac.cpp file.cpp \
-	fs.cpp game.cpp graphics.cpp menu.cpp midi_parser.cpp mixer.cpp \
-	mod_player.cpp ogg_player.cpp piege.cpp prf_player.cpp \
-	protection.cpp resource.cpp resource_aba.cpp resource_mac.cpp \
-	resource_paq.cpp screenshot.cpp seq_player.cpp sfx_player.cpp \
+# Amiga-data engine + ST platform layer. The other versions' loaders
+# (Mac, PC98, the DOS demo archives), the SEQ cutscene player and the
+# digital music players can never run here, so st_stubs.cpp stands in
+# for them with the few entry points the engine still names, and the
+# upstream sources stay untouched. Nor are the SDL stub, scalers and
+# MIDI drivers built.
+SRCS = collision.cpp cutscene.cpp file.cpp \
+	fs.cpp game.cpp graphics.cpp menu.cpp mixer.cpp \
+	piege.cpp \
+	protection.cpp resource.cpp sfx_player.cpp \
 	staticres.cpp splash_data.cpp unpack.cpp util.cpp video.cpp \
-	main_atari.cpp systemstub_stdl.cpp video_st.cpp
+	main_atari.cpp systemstub_stdl.cpp video_st.cpp st_stubs.cpp
 
 OBJS = $(SRCS:%.cpp=build/%.o)
 DEPS = $(OBJS:.o=.d)

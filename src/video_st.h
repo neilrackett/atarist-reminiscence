@@ -200,7 +200,7 @@ void ST_logFreeMemory(const char *where);
 
 // 8x8 glyph from a 16-byte-stride chunky source (AMIGA_decodeIcn
 // output): nonzero source pixels painted in colour8
-void ST_drawGlyph(uint8_t *layer, const uint8_t *src, int x, int y, uint8_t colour8);
+void ST_drawGlyph(uint8_t *layer, const uint8_t *src, int pitch, int x, int y, uint8_t colour8);
 
 void ST_fillRect(uint8_t *layer, int x, int y, int w, int h, uint8_t colour8);
 void ST_hspan(uint8_t *layer, int x1, int x2, int y, uint8_t colour8);
