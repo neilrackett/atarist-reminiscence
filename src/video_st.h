@@ -127,6 +127,30 @@ void ST_copyLayer(uint8_t *dst, const uint8_t *src);
 // planes only: cutscene pages, whose priority plane is not kept
 void ST_copyPage(uint8_t *dst, const uint8_t *src);
 
+// Cutscene row band. A scene draws its shapes inside a 128-row
+// window, yet every page clear, page copy and screen push moved all
+// 224 rows. Between ST_pageBandStart and ST_pageBandEnd those three
+// work on the band only: rows outside it are the same on every page
+// and on screen, because the scene was started on cleared pages and
+// every primitive that draws widens the band to cover what it
+// touches first. A clear in another colour than the one the pages
+// started in widens it to the whole page, which is plain behaviour.
+//
+// Within the band, the two pages that take turns on screen are also
+// tracked against aux, the background each frame is restored from:
+// a box around where each differs. ST_copyPage then moves only that
+// box for a restore or a new background, and ST_pageShowRect gives
+// the rectangle a push to the screen has to copy (full = the whole
+// page, for the first push; false = nothing changed) and records the
+// page as what the screen now shows.
+void ST_pageBandStart(int y0, int y1, uint8_t colour8, uint8_t *front, uint8_t *back, uint8_t *aux);
+void ST_pageBandEnd();
+void ST_pageBand(int *y0, int *y1);
+bool ST_pageShowRect(const uint8_t *page, bool full, int *x, int *y, int *w, int *h);
+
+// with a border open, wait for the VBL before a big screen update
+void ST_beamSync();
+
 // Amiga planar sources into a layer with the remap applied (room
 // build). A unit is 8 pixels; a prepared cell is 8 bytes (the
 // remapped plane bytes 0-3, each followed by the mask), and cell

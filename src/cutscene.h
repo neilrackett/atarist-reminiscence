@@ -96,6 +96,11 @@ struct Cutscene {
 	uint16_t _statNoShow;
 	bool stSkipDraw() const { return _stSkipDraw && _clearScreen == 0; }
 	void stDecideSkip();
+	// the row band (ST_pageBandStart) for a scripted scene, and the
+	// screen push that goes with it
+	bool _stShowFull;
+	void stBandedLoop(uint16_t num);
+	void stShow(const uint8_t *page);
 	bool _stop;
 	const uint8_t *_polPtr;
 	const uint8_t *_cmdPtr;

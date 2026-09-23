@@ -41,6 +41,7 @@ Cutscene::Cutscene(Resource *res, SystemStub *stub, Video *vid)
 	_stSkipDraw = false;
 	_stSkipShow = false;
 	_stUsesCopyScreen = false;
+	_stShowFull = true;
 	_stSkipRun = 0;
 	_stSched = 0;
 	_statSkipped = _statNoShow = 0;
@@ -139,7 +140,7 @@ void Cutscene::updateScreen() {
 			++_statNoShow;
 		} else {
 			const uint32_t t0 = _stub->getTimeStamp();
-			_stub->copyRectPlanar(0, 0, _vid->_w, _vid->_h, _frontPage);
+			stShow(_frontPage);
 			_stub->updateScreen(0);
 			_statCopy += _stub->getTimeStamp() - t0;
 		}
@@ -153,6 +154,35 @@ void Cutscene::updateScreen() {
 }
 
 #ifdef ATARIST
+// A scripted scene on banded pages: all three pages and the screen
+// start cleared, so the band's outside is the same everywhere, and
+// from then on only the band moves (see ST_pageBandStart). The shapes
+// are clipped to the Graphics rect; the ellipse filler can reach one
+// row past it.
+void Cutscene::stBandedLoop(uint16_t num) {
+	ST_clearLayer(_frontPage, 0xC0);
+	ST_clearLayer(_backPage, 0xC0);
+	ST_clearLayer(_auxPage, 0xC0);
+	_stShowFull = true;
+	ST_pageBandStart(_gfx._cry, _gfx._cry + _gfx._crh + 1, 0xC0, _frontPage, _backPage, _auxPage);
+	mainLoop(num);
+	ST_pageBandEnd();
+}
+
+// Push a page to the screen: what changed since the last push (see
+// ST_pageShowRect), or the whole page the first time, which is what
+// makes the screen outside the band agree.
+void Cutscene::stShow(const uint8_t *page) {
+	int x, y, w, h;
+	if (ST_pageShowRect(page, _stShowFull, &x, &y, &w, &h)) {
+		if (h >= 96) {
+			ST_beamSync();
+		}
+		_stub->copyRectPlanar(x, y, w, h, page);
+	}
+	_stShowFull = false;
+}
+
 // Called after a frame is shown: does the next one get drawn? Frames
 // are skipped one at a time while the scripted clock is more than a
 // frame ahead, a few in a row at most so the scene never freezes.
@@ -1306,7 +1336,7 @@ void Cutscene::op_drawTextAtPos() {
 			if (_id == kCineVoyage && (strId & 0xFFF) == 0x45) {
 				if ((_cmdPtr - _cmdStartPtr) == 0xA) {
 					#ifdef ATARIST
-		_stub->copyRectPlanar(0, 0, _vid->_w, _vid->_h, _backPage);
+		stShow(_backPage);
 #else
 		_stub->copyRect(0, 0, _vid->_w, _vid->_h, _backPage, _vid->_w);
 #endif
@@ -1652,8 +1682,10 @@ void Cutscene::playCredits() {
 		if (load(cutName)) {
 #ifdef ATARIST
 			stPrescanPalette(cutOff);
-#endif
+			stBandedLoop(cutOff);
+#else
 			mainLoop(cutOff);
+#endif
 			unload();
 		}
 	}
@@ -1786,8 +1818,10 @@ void Cutscene::play() {
 			if (load(cutName)) {
 #ifdef ATARIST
 				stPrescanPalette(cutOff);
-#endif
+				stBandedLoop(cutOff);
+#else
 				mainLoop(cutOff);
+#endif
 				unload();
 			}
 		} else if (_id == 8 && g_options.play_caillou_cutscene) {

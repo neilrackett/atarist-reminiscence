@@ -133,6 +133,9 @@ static void initOptions() {
 	// it at the speed set before the game ran, so it can stand in
 	// for an STE when testing.
 	g_options.megaste_speedup = true;
+	// Draw each frame on a hidden page and flip to it at the VBL:
+	// no tearing, but every frame waits for the beam.
+	g_options.double_buffer = false;
 	// The STE's sample device. Off, nothing opens the sound DMA at
 	// all: no sampled effects, and the chip music (music=true) is
 	// unaffected because that drives the YM instead. Exists because
@@ -170,6 +173,7 @@ static void initOptions() {
 		{ "blitter", &g_options.blitter },
 		{ "overscan_bottom", &g_options.overscan_bottom },
 		{ "megaste_speedup", &g_options.megaste_speedup },
+		{ "double_buffer", &g_options.double_buffer },
 		{ "ste_sound", &g_options.ste_sound },
 		{ 0, 0 }
 	};

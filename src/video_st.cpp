@@ -13,6 +13,111 @@ extern "C" {
 }
 
 #include "video_st.h"
+#include "util.h"
+
+// see ST_pageBandStart; the whole page when no band is in force
+static int16_t g_bandY0 = 0, g_bandY1 = kSTLayerH;
+static int16_t g_bandFill = -1;   // hardware value outside the band
+
+static inline void bandTouch(int y0, int y1) {
+	if (y0 < g_bandY0) {
+		g_bandY0 = (int16_t)(y0 < 0 ? 0 : y0);
+	}
+	if (y1 > g_bandY1) {
+		g_bandY1 = (int16_t)(y1 > kSTLayerH ? kSTLayerH : y1);
+	}
+}
+
+// Cutscene page tracking (see ST_pageBandStart): for the two pages
+// that take turns on screen, and for the screen itself, a box around
+// everything that differs from the aux page - the background every
+// frame is restored from. A restore then copies only what the last
+// frame on that page drew over, and a push only what changed since
+// the last one, instead of the whole band every time. One box, not
+// a mask of blocks: marking every block of every shape, and copying
+// a region in pieces, cost more on a 68000 than the few clean blocks
+// a box takes along. Groups [g0, g1) of 16 pixels, rows [y0, y1).
+struct TrkBox {
+	int16_t g0, g1, y0, y1;
+};
+static bool g_trk;
+static uint8_t *g_trkPage[2];
+static uint8_t *g_trkAux;
+static TrkBox g_trkBox[2];
+static TrkBox g_scrBox;
+
+static inline void boxClear(TrkBox *b) {
+	b->g0 = 16;
+	b->g1 = 0;
+	b->y0 = kSTLayerH;
+	b->y1 = 0;
+}
+
+static inline bool boxEmpty(const TrkBox *b) {
+	return b->y0 >= b->y1;
+}
+
+static inline void boxAdd(TrkBox *b, int g0, int g1, int y0, int y1) {
+	if (g0 < b->g0) b->g0 = (int16_t)g0;
+	if (g1 > b->g1) b->g1 = (int16_t)g1;
+	if (y0 < b->y0) b->y0 = (int16_t)y0;
+	if (y1 > b->y1) b->y1 = (int16_t)y1;
+}
+
+static inline void boxUnion(TrkBox *b, const TrkBox *o) {
+	if (!boxEmpty(o)) {
+		boxAdd(b, o->g0, o->g1, o->y0, o->y1);
+	}
+}
+
+static inline TrkBox *trkBoxOf(const uint8_t *layer) {
+	if (layer == g_trkPage[0]) {
+		return &g_trkBox[0];
+	}
+	if (layer == g_trkPage[1]) {
+		return &g_trkBox[1];
+	}
+	return 0;
+}
+
+// pixels [x0, x1) of rows [y0, y1) of layer are about to change;
+// inlined, as it runs once per shape and the call cost more than
+// the work
+static inline __attribute__((always_inline)) void pageTouch(const uint8_t *layer, int x0, int x1, int y0, int y1) {
+	if (y0 < 0) {
+		y0 = 0;
+	}
+	if (y1 > kSTLayerH) {
+		y1 = kSTLayerH;
+	}
+	if (y0 >= y1) {
+		return;
+	}
+	bandTouch(y0, y1);
+	if (!g_trk) {
+		return;
+	}
+	if (x0 < 0) {
+		x0 = 0;
+	}
+	if (x1 > kSTLayerW) {
+		x1 = kSTLayerW;
+	}
+	if (x0 >= x1) {
+		return;
+	}
+	const int g0 = x0 >> 4, g1 = ((x1 - 1) >> 4) + 1;
+	if (layer == g_trkAux) {
+		// the background itself: everything else now differs there
+		boxAdd(&g_trkBox[0], g0, g1, y0, y1);
+		boxAdd(&g_trkBox[1], g0, g1, y0, y1);
+		boxAdd(&g_scrBox, g0, g1, y0, y1);
+		return;
+	}
+	if (TrkBox *b = trkBoxOf(layer)) {
+		boxAdd(b, g0, g1, y0, y1);
+	}
+}
 
 /*
  * The engine's layers are raw caller-owned blocks (pointer-swapped
@@ -1026,6 +1131,7 @@ void ST_drawSprite(uint8_t *layer, const uint8_t *src, int pitch, int x, int y, 
 	if (!s) {
 		return;
 	}
+	pageTouch(layer, x, x + w, y, y + h);
 	unsigned f = 0;
 	if (flags & kSTSpriteXflip) {
 		f |= STDL_I8_XFLIP;
@@ -2316,6 +2422,7 @@ void ST_fillRect(uint8_t *layer, int x, int y, int w, int h, uint8_t colour8) {
 		return;
 	}
 	ST_prioTouchedRect(x, y, w, h);
+	pageTouch(layer, x, x + w, y, y + h);
 	const uint8_t v = ST_getRemap()[colour8];
 	const bool setPrio = (colour8 & 0x80) != 0;
 	for (int j = 0; j < h; ++j) {
@@ -2333,6 +2440,7 @@ void ST_hspan(uint8_t *layer, int x1, int x2, int y, uint8_t colour8) {
 		return;
 	}
 	ST_prioTouchedRect(x1, y, x2 - x1 + 1, 1);
+	pageTouch(layer, x1, x2 + 1, y, y + 1);
 	fillRow(layer, x1, x2 - x1 + 1, y, ST_getRemap()[colour8], (colour8 & 0x80) != 0);
 }
 
@@ -2348,6 +2456,8 @@ void ST_fillArea(uint8_t *layer, const int16_t *pts, int crx, int cry,
 	if (x1 < 0) {
 		return;
 	}
+	const int yFirst = y;
+	int xMin = kSTLayerW, xMax = -1;
 	const uint16_t f0 = (v & 1) ? 0xFFFF : 0;
 	const uint16_t f1 = (v & 2) ? 0xFFFF : 0;
 	const uint16_t f2 = (v & 4) ? 0xFFFF : 0;
@@ -2370,6 +2480,12 @@ void ST_fillArea(uint8_t *layer, const int16_t *pts, int crx, int cry,
 			}
 			if (a <= b) {
 				fillRowPtr(row, prow, a, b, f0, f1, f2, f3, setPrio);
+				if (a < xMin) {
+					xMin = a;
+				}
+				if (b > xMax) {
+					xMax = b;
+				}
 			}
 		}
 		++y;
@@ -2377,6 +2493,7 @@ void ST_fillArea(uint8_t *layer, const int16_t *pts, int crx, int cry,
 		prow += kSTPrioRowBytes / 2;
 		x1 = *pts++;
 	} while (x1 >= 0);
+	pageTouch(layer, xMin, xMax + 1, yFirst, y);
 }
 
 // Fast scan conversion for the cutscene polygons. The upstream
@@ -2445,6 +2562,9 @@ bool ST_drawPolygonFast(uint8_t *layer, const void *ptsv, int n,
 		}
 	}
 	const int xmaxv = (crw < kSTLayerW - crx ? crw : kSTLayerW - crx) - 1;
+	// the vertex box, clipped, bounds every pixel written below
+	pageTouch(layer, crx + (xlo < 1 ? 0 : xlo - 1), crx + (xhi >= xmaxv ? xmaxv : xhi + 1) + 1,
+		cry + (ytop < 0 ? 0 : ytop), cry + (ybot > crh - 1 ? crh - 1 : ybot) + 1);
 	if (ytop == ybot) {
 		// flat: one row across the x extent
 		const int sy = cry + ytop;
@@ -2550,6 +2670,7 @@ void ST_hspanV(uint8_t *layer, int x1, int x2, int y, uint8_t v, bool setPrio) {
 	if (x1 > x2) {
 		return;
 	}
+	pageTouch(layer, x1, x2 + 1, y, y + 1);
 	fillRow(layer, x1, x2 - x1 + 1, y, v, setPrio);
 }
 
@@ -2569,6 +2690,7 @@ void ST_hspanOr(uint8_t *layer, int x1, int x2, int y, uint8_t colour8) {
 	if (x1 > x2) {
 		return;
 	}
+	pageTouch(layer, x1, x2 + 1, y, y + 1);
 	if (!ST_cutscenePalMode()) {
 		fillRow(layer, x1, x2 - x1 + 1, y, ST_getRemap()[colour8], (colour8 & 0x80) != 0);
 		return;
@@ -2610,6 +2732,7 @@ void ST_drawPoint(uint8_t *layer, int x, int y, uint8_t colour8) {
 	if (x < 0 || x >= kSTLayerW || y < 0 || y >= kSTLayerH) {
 		return;
 	}
+	pageTouch(layer, x, x + 1, y, y + 1);
 	const uint8_t v = ST_getRemap()[colour8];
 	const uint16_t bit = 0x8000 >> (x & 15);
 	const uint16_t keep = ~bit;
@@ -2657,6 +2780,75 @@ static inline void copyBlock(uint8_t *dst, const uint8_t *src) {
 #endif
 }
 
+// copyBlock for a length known only at run time (a multiple of 16)
+static void copyBytes(uint8_t *dst, const uint8_t *src, int bytes) {
+#ifdef __m68k__
+	int bursts = bytes / 48;
+	if (bursts > 0) {
+		__asm__ volatile(
+			"subq.w #1,%2\n"
+			"1:\n\t"
+			"movem.l (%1)+,%%d1-%%d7/%%a2-%%a6\n\t"
+			"movem.l %%d1-%%d7/%%a2-%%a6,(%0)\n\t"
+			"lea 48(%0),%0\n\t"
+			"dbra %2,1b"
+			: "+a"(dst), "+a"(src), "+d"(bursts)
+			:
+			: "d1","d2","d3","d4","d5","d6","d7",
+			  "a2","a3","a4","a5","a6","memory","cc");
+	}
+	const uint32_t *s32 = (const uint32_t *)src;
+	uint32_t *d32 = (uint32_t *)dst;
+	for (int n = (bytes % 48) / 4; --n >= 0; ) {
+		*d32++ = *s32++;
+	}
+#else
+	memcpy(dst, src, bytes);
+#endif
+}
+
+// bytes (a multiple of 16) of the long pair a, b repeated: movem
+// stores downward from the end, 48 bytes a burst
+static void fillBytes(uint8_t *dst, int bytes, uint32_t a, uint32_t b) {
+	uint32_t *d32 = (uint32_t *)dst;
+	const int tail = (bytes % 48) / 4;   // even: 48 and 16 keep the pair phase
+	for (int n = tail / 2; --n >= 0; ) {
+		*d32++ = a;
+		*d32++ = b;
+	}
+#ifdef __m68k__
+	int bursts = bytes / 48;
+	if (bursts > 0) {
+		uint8_t *end = (uint8_t *)d32 + bursts * 48;
+		register uint32_t ra __asm__("d1") = a;
+		register uint32_t rb __asm__("d2") = b;
+		__asm__ volatile(
+			"move.l %%d1,%%d3\n\t"
+			"move.l %%d2,%%d4\n\t"
+			"move.l %%d1,%%d5\n\t"
+			"move.l %%d2,%%d6\n\t"
+			"move.l %%d1,%%d7\n\t"
+			"move.l %%d2,%%a2\n\t"
+			"move.l %%d1,%%a3\n\t"
+			"move.l %%d2,%%a4\n\t"
+			"move.l %%d1,%%a5\n\t"
+			"move.l %%d2,%%a6\n\t"
+			"subq.w #1,%1\n"
+			"1:\n\t"
+			"movem.l %%d1-%%d7/%%a2-%%a6,-(%0)\n\t"
+			"dbra %1,1b"
+			: "+a"(end), "+d"(bursts), "+d"(ra), "+d"(rb)
+			:
+			: "d3","d4","d5","d6","d7","a2","a3","a4","a5","a6","memory","cc");
+	}
+#else
+	for (int n = bytes / 8 - tail / 2; --n >= 0; ) {
+		*d32++ = a;
+		*d32++ = b;
+	}
+#endif
+}
+
 void ST_copyLayer(uint8_t *dst, const uint8_t *src) {
 	ST_prioTouched();
 	copyBlock<kSTPlaneBytes + kSTPrioRowBytes * kSTLayerH>(dst, src);
@@ -2665,8 +2857,134 @@ void ST_copyLayer(uint8_t *dst, const uint8_t *src) {
 // Cutscene page copy: the planes only. The scene's pages carry no
 // live priority plane (see prioMode) and the copy is a fifth shorter
 // without it - 51 of them in the first scene.
+// Copy a box, clipped to the band: whole rows through movem when
+// it covers most of the width - a row of clean groups costs less
+// than splitting the copy - and a group (two longs) at a time
+// otherwise.
+static void copyBox(uint8_t *dst, const uint8_t *src, const TrkBox *b) {
+	int y0 = b->y0 < g_bandY0 ? g_bandY0 : b->y0;
+	int y1 = b->y1 > g_bandY1 ? g_bandY1 : b->y1;
+	if (y0 >= y1 || b->g0 >= b->g1) {
+		return;
+	}
+	const int n = b->g1 - b->g0;
+	if (n >= 10) {
+		const int off = y0 * kSTRowBytes;
+		copyBytes(dst + off, src + off, (y1 - y0) * kSTRowBytes);
+		return;
+	}
+	const uint32_t *s = (const uint32_t *)(src + y0 * kSTRowBytes + b->g0 * 8);
+	uint32_t *d = (uint32_t *)(dst + y0 * kSTRowBytes + b->g0 * 8);
+	const int skip = kSTRowBytes / 4 - n * 2;
+	for (int r = y1 - y0; --r >= 0; ) {
+		for (int k = n; --k >= 0; ) {
+			*d++ = *s++;
+			*d++ = *s++;
+		}
+		s += skip;
+		d += skip;
+	}
+}
+
+static void markBand(TrkBox *b) {
+	boxAdd(b, 0, 16, g_bandY0, g_bandY1);
+}
+
 void ST_copyPage(uint8_t *dst, const uint8_t *src) {
-	copyBlock<kSTPlaneBytes>(dst, src);
+	if (g_trk) {
+		TrkBox *bd = trkBoxOf(dst);
+		TrkBox *bs = trkBoxOf(src);
+		if (src == g_trkAux && bd) {
+			// the restore: put back what this page drew over
+			copyBox(dst, src, bd);
+			boxClear(bd);
+			return;
+		}
+		if (dst == g_trkAux && bs) {
+			// a new background: it moves only where src differed,
+			// and everything else now differs from it there too
+			copyBox(dst, src, bs);
+			boxUnion(&g_trkBox[bs == &g_trkBox[0] ? 1 : 0], bs);
+			boxUnion(&g_scrBox, bs);
+			boxClear(bs);
+			return;
+		}
+		if (bd && bs) {
+			// page to page: they differ only where either differs
+			// from the background
+			TrkBox both = *bd;
+			boxUnion(&both, bs);
+			copyBox(dst, src, &both);
+			*bd = *bs;
+			return;
+		}
+	}
+	if (g_bandY0 == 0 && g_bandY1 == kSTLayerH) {
+		copyBlock<kSTPlaneBytes>(dst, src);
+		return;
+	}
+	const int off = g_bandY0 * kSTRowBytes;
+	copyBytes(dst + off, src + off, (g_bandY1 - g_bandY0) * kSTRowBytes);
+}
+
+void ST_pageBandStart(int y0, int y1, uint8_t colour8, uint8_t *front, uint8_t *back, uint8_t *aux) {
+	g_bandY0 = (int16_t)(y0 < 0 ? 0 : y0);
+	g_bandY1 = (int16_t)(y1 > kSTLayerH ? kSTLayerH : y1);
+	g_bandFill = ST_getRemap()[colour8];
+	g_trk = true;
+	g_trkPage[0] = front;
+	g_trkPage[1] = back;
+	g_trkAux = aux;
+	boxClear(&g_trkBox[0]);
+	boxClear(&g_trkBox[1]);
+	boxClear(&g_scrBox);
+}
+
+void ST_pageBandEnd() {
+	g_bandY0 = 0;
+	g_bandY1 = kSTLayerH;
+	g_bandFill = -1;
+	g_trk = false;
+	g_trkPage[0] = g_trkPage[1] = g_trkAux = 0;
+}
+
+bool ST_pageShowRect(const uint8_t *page, bool full, int *x, int *y, int *w, int *h) {
+	const TrkBox *bp = g_trk ? trkBoxOf(page) : 0;
+	TrkBox r;
+	if (full) {
+		r.g0 = 0; r.g1 = 16; r.y0 = 0; r.y1 = kSTLayerH;
+	} else if (!bp) {
+		r.g0 = 0; r.g1 = 16; r.y0 = g_bandY0; r.y1 = g_bandY1;
+	} else {
+		r = *bp;
+		boxUnion(&r, &g_scrBox);
+		if (r.y0 < g_bandY0) r.y0 = g_bandY0;
+		if (r.y1 > g_bandY1) r.y1 = g_bandY1;
+	}
+	if (bp) {
+		g_scrBox = *bp;
+	} else {
+		boxClear(&g_scrBox);
+		markBand(&g_scrBox);
+	}
+	if (r.y0 >= r.y1 || r.g0 >= r.g1) {
+		return false;
+	}
+	// most of the width: whole rows, the copy's fast path
+	if (r.g1 - r.g0 >= 10) {
+		r.g0 = 0;
+		r.g1 = 16;
+	}
+	*x = r.g0 * 16;
+	*w = (r.g1 - r.g0) * 16;
+	*y = r.y0;
+	*h = r.y1 - r.y0;
+	return true;
+}
+
+void ST_pageBand(int *y0, int *y1) {
+	*y0 = g_bandY0;
+	*y1 = g_bandY1;
 }
 
 void ST_clearLayer(uint8_t *layer, uint8_t colour8) {
@@ -2677,12 +2995,26 @@ void ST_clearLayer(uint8_t *layer, uint8_t colour8) {
 	row[1] = (v & 2) ? 0xFFFF : 0;
 	row[2] = (v & 4) ? 0xFFFF : 0;
 	row[3] = (v & 8) ? 0xFFFF : 0;
-	uint32_t *dst = (uint32_t *)layer;
 	const uint32_t a = ((uint32_t)row[0] << 16) | row[1];
 	const uint32_t b = ((uint32_t)row[2] << 16) | row[3];
-	for (int n = 0; n < kSTPlaneBytes / 8; ++n) {
-		*dst++ = a;
-		*dst++ = b;
+	if (g_bandFill >= 0 && v != g_bandFill) {
+		// the rows outside the band are in the old colour on every
+		// page: from here on the band is the whole page
+		g_bandY0 = 0;
+		g_bandY1 = kSTLayerH;
+	}
+	const int off = g_bandY0 * kSTRowBytes;
+	fillBytes(layer + off, (g_bandY1 - g_bandY0) * kSTRowBytes, a, b);
+	if (g_trk) {
+		// nothing is known about how a cleared page compares with
+		// the background; a cleared background, likewise the others
+		if (layer == g_trkAux) {
+			markBand(&g_trkBox[0]);
+			markBand(&g_trkBox[1]);
+			markBand(&g_scrBox);
+		} else if (TrkBox *b = trkBoxOf(layer)) {
+			markBand(b);
+		}
 	}
 	if (!ST_cutscenePalMode()) {         // cutscene pages: no live plane
 		memset(layer + kSTPlaneBytes, (colour8 & 0x80) ? 0xFF : 0, kSTPrioRowBytes * kSTLayerH);

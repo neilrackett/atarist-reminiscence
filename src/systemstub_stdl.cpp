@@ -35,6 +35,8 @@ extern "C" {
 static const int kMaxSrcW = 320;
 static const int kMaxSrcH = 224;
 static const int kScreenStride = 160;
+// the tallest surface an open border gives (both borders: 273 rows)
+static const int kMaxScreenRows = 288;
 // Fit's geometry, shared with ST_textRow: two rows cropped at each
 // end, then runs of kFitRun - 1 kept rows with one dropped between,
 // so the kept runs start at kFitCrop + n * kFitRun.
@@ -68,6 +70,18 @@ struct SystemStub_STDL : SystemStub {
 	uint8_t _yDrop[kMaxSrcH];  // 1 = line not displayed
 	bool _ovscOpen;            // top border open: display starts line 34
 	bool _yLinear;             // no line dropped: rows step by a constant
+	// double_buffer: frames go to the hidden page and a VBL-synced
+	// flip shows them. What was written since the last flip is kept
+	// as a mask of 16-pixel groups per screen row, and after the
+	// flip those groups are copied from the page now shown to the
+	// new hidden one, so the two pages never drift apart and every
+	// caller can go on drawing as if there were only one.
+	bool _dblBuf;
+	uint32_t _dmg[kMaxScreenRows];
+	int _dmgLo, _dmgHi;
+	void addDamage(int row0, int row1, int g0, int g1);
+	void clearScreen();
+	void syncPages(const uint8_t *shown);
 	// key releases are applied at the start of the *next* poll so a
 	// press+release inside one slow frame is still seen by the game
 	uint8_t _upDirMask;
@@ -177,6 +191,9 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 		return;
 	}
 	const int xOffBytes = (_xOffset >> 4) << 3;
+	if (_dblBuf) {
+		addDamage(_yMap[y], _yMap[y + h - 1], gx0 + (_xOffset >> 4), gx1 + (_xOffset >> 4));
+	}
 	// Large copies (full refreshes, room loads) go through
 	// STDL_BlitSurface so a BLiTTER can take the aligned runs (same
 	// 16px phase, unmasked; runs break where the 224->200 squash
@@ -188,14 +205,15 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 	// every blit in hog mode and places it from the beam so it ends
 	// before a border ISR window (or splits it around one), so it
 	// neither shares the bus nor delays the flip.
-	if (_ovscOpen && h >= kSTLayerH - 8) {
+	if (_ovscOpen && h >= kSTLayerH - 8 && !_dblBuf) {
 		// Beam race: with a border open the display starts
 		// fetching at line 34 instead of 63, so a full-page copy
 		// has to start at the VBL to stay ahead of it - unsynced
 		// it loses intermittently and tears. This sync is not
 		// negotiable against frame pacing: skipping it when a
 		// scene runs late (tried Aug 2026) brought the tearing
-		// straight back.
+		// straight back. A cutscene push made of runs syncs once
+		// for all of them (ST_beamSync).
 		STDL_WaitVBL();
 	}
 	if (h >= 32 && gx1 - gx0 >= 8 && _srcW == kSTLayerW
@@ -313,7 +331,11 @@ void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int
 		STDL_UseBlitter(0);
 		info("BLiTTER disabled (blitter=false)");
 	}
-	_screen = STDL_SetVideoMode(320, 200, 4, 0);
+	_dblBuf = g_options.double_buffer;
+	_dmgLo = kMaxScreenRows;
+	_dmgHi = -1;
+	memset(_dmg, 0, sizeof(_dmg));
+	_screen = STDL_SetVideoMode(320, 200, 4, _dblBuf ? STDL_DOUBLEBUF : 0);
 	if (!_screen) {
 		error("STDL_SetVideoMode failed");
 	}
@@ -331,7 +353,7 @@ void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int
 	setScreenMode(g_options.screen);
 	setScreenSize(w, h);
 	// black screen until the first frame arrives
-	memset(_screen->pixels, 0, kScreenStride * _screen->h);
+	clearScreen();
 	writeHwPalette();
 	// Joystick and pad both drive the game as synthesised keypresses,
 	// so the input code below needs to know nothing about either.
@@ -391,7 +413,7 @@ void SystemStub_STDL::setScreenSize(int w, int h) {
 		_srcH = h;
 		_xOffset = ((320 - w) / 2) & ~15;
 		_shadowValid = false;
-		memset(_screen->pixels, 0, kScreenStride * _screen->h);
+		clearScreen();
 	}
 }
 
@@ -514,7 +536,7 @@ int SystemStub_STDL::setScreenMode(int mode) {
 	// The surface may have changed shape and the shadow no longer
 	// describes what is on it: black until the caller repaints.
 	_shadowValid = false;
-	memset(_screen->pixels, 0, kScreenStride * _screen->h);
+	clearScreen();
 	writeHwPalette();
 	_mode = mode;
 	return mode;
@@ -544,7 +566,7 @@ void SystemStub_STDL::applyFillTop(int top) {
 	if (_mode == kScreenFill) {
 		buildFillTable();
 		_shadowValid = false;
-		memset(_screen->pixels, 0, kScreenStride * _screen->h);
+		clearScreen();
 	}
 }
 
@@ -1432,10 +1454,13 @@ void SystemStub_STDL::buildRemap() {
 // the 16 hardware colours at the current fade level; _fade can
 // exceed 256 (brightening fades), so every channel is clamped
 void SystemStub_STDL::fadedColours(STDL_Colour *c) {
+	// 16-bit operands: an int product is a __mulsi3 call, 48 of them
+	// on every palette write - 2ms a cutscene frame on an 8MHz ST
+	const int16_t fade = (int16_t)_fade;
 	for (int i = 0; i < 16; ++i) {
-		int r = _hwPal[i].r * _fade >> 8;
-		int g = _hwPal[i].g * _fade >> 8;
-		int b = _hwPal[i].b * _fade >> 8;
+		int r = (int16_t)_hwPal[i].r * fade >> 8;
+		int g = (int16_t)_hwPal[i].g * fade >> 8;
+		int b = (int16_t)_hwPal[i].b * fade >> 8;
 		c[i].r = (uint8_t)(r > 255 ? 255 : r);
 		c[i].g = (uint8_t)(g > 255 ? 255 : g);
 		c[i].b = (uint8_t)(b > 255 ? 255 : b);
@@ -1468,6 +1493,9 @@ void SystemStub_STDL::convertRegion(int x, int y, int w, int h, const uint8_t *b
 		return;
 	}
 	const uint8_t *remap = _remap;
+	if (_dblBuf && h > 0) {
+		addDamage(_yMap[y], _yMap[y + h - 1], (x0 + _xOffset) >> 4, (x1 + _xOffset) >> 4);
+	}
 	for (int j = 0; j < h; ++j) {
 		const int sy = y + j;
 		if (_yDrop[sy]) {
@@ -1526,6 +1554,14 @@ void SystemStub_STDL::copyRect(int x, int y, int w, int h, const uint8_t *buf, i
 	}
 }
 
+// Start of a cutscene push with a border open: the runs of a push
+// can span most of the page, and race the beam like a full copy.
+void ST_beamSync() {
+	if (g_stub->_ovscOpen && !g_stub->_dblBuf) {
+		STDL_WaitVBL();
+	}
+}
+
 uint32_t ST_overscanMisses() {
 	return STDL_OverscanMisses();
 }
@@ -1537,6 +1573,82 @@ void SystemStub_STDL::updateScreen(int shakeOffset) {
 	if (_hwDirty) {
 		writeHwPalette();
 	}
+	if (_dblBuf) {
+		const uint8_t *shown = _screen->pixels;
+		STDL_Flip();
+		if (_screen->pixels != shown) {
+			syncPages(shown);
+		}
+	}
+}
+
+// groups [g0, g1) of rows [row0, row1] were written on the hidden page
+void SystemStub_STDL::addDamage(int row0, int row1, int g0, int g1) {
+	if (row0 < 0) {
+		row0 = 0;
+	}
+	if (row1 >= _screen->h) {
+		row1 = _screen->h - 1;
+	}
+	if (g1 > kScreenStride / 8) {
+		g1 = kScreenStride / 8;
+	}
+	if (row1 < row0 || g1 <= g0) {
+		return;
+	}
+	const uint32_t m = ((1UL << (g1 - g0)) - 1) << g0;
+	for (int r = row0; r <= row1; ++r) {
+		_dmg[r] |= m;
+	}
+	if (row0 < _dmgLo) {
+		_dmgLo = row0;
+	}
+	if (row1 > _dmgHi) {
+		_dmgHi = row1;
+	}
+}
+
+void SystemStub_STDL::clearScreen() {
+	memset(_screen->pixels, 0, kScreenStride * _screen->h);
+	if (_dblBuf) {
+		addDamage(0, _screen->h - 1, 0, kScreenStride / 8);
+	}
+}
+
+// Bring the new hidden page up to the one just shown: copy what the
+// last frame wrote, group runs at a time, whole rows through movem.
+void SystemStub_STDL::syncPages(const uint8_t *shown) {
+	const int hi = (_dmgHi < _screen->h) ? _dmgHi : _screen->h - 1;
+	const uint32_t kAll = (1UL << (kScreenStride / 8)) - 1;
+	for (int r = _dmgLo; r <= hi; ++r) {
+		uint32_t m = _dmg[r];
+		if (m == 0) {
+			continue;
+		}
+		_dmg[r] = 0;
+		const uint32_t *s = (const uint32_t *)(shown + r * kScreenStride);
+		uint32_t *d = (uint32_t *)(_screen->pixels + r * kScreenStride);
+		if (m == kAll) {
+			copyRow128(d, s);
+			d += kSTRowBytes / 4;
+			s += kSTRowBytes / 4;
+			for (int n = (kScreenStride - kSTRowBytes) / 4; --n >= 0; ) {
+				*d++ = *s++;
+			}
+			continue;
+		}
+		for (int g = 0; m != 0; ++g, m >>= 1) {
+			if (m & 1) {
+				d[g * 2] = s[g * 2];
+				d[g * 2 + 1] = s[g * 2 + 1];
+			}
+		}
+	}
+	for (int r = hi + 1; r < kMaxScreenRows && r <= _dmgHi; ++r) {
+		_dmg[r] = 0;
+	}
+	_dmgLo = kMaxScreenRows;
+	_dmgHi = -1;
 }
 
 // Hardware fade to black; the next updateScreen restores the palette
@@ -1556,7 +1668,7 @@ void SystemStub_STDL::fadeScreen() {
 		STDL_SetColours(_screen, c, 0, 16);
 		STDL_Delay(40);
 	}
-	memset(_screen->pixels, 0, kScreenStride * _screen->h);
+	clearScreen();
 	_shadowValid = false;
 	_hwDirty = true;
 }
