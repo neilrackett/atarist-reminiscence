@@ -37,6 +37,14 @@ static bool ATARIST_dmaSample() {
 	return available != 0;
 }
 
+// Can this machine play the sampled effects at all? A plain ST has
+// neither the voice device nor DMA sound, and ste_sound=false turns
+// both off; either way a level's effects are never heard, and they
+// are the biggest thing a level loads.
+bool ATARIST_samplesPlayable() {
+	return g_options.ste_sound && (STDL_VoicesOpen() || ATARIST_dmaSample());
+}
+
 // volume scaling as a table: the 68000 has no 32-bit multiply, so
 // scaling each of a sample's thousands of bytes cost a __mulsi3 call
 static const uint8_t *ATARIST_volumeTable(uint8_t volume) {
@@ -351,6 +359,10 @@ static bool isMusicSfx(int num) {
 
 void Mixer::playMusic(int num, int tempo) {
 	debug(DBG_SND, "Mixer::playMusic(%d, %d)", num, tempo);
+#ifndef ATARIST
+	// digital soundtracks (.ogg, CD-i .cpc): the ST has no software
+	// mixer to play them, and looking for them at every track change
+	// is file probing for nothing
 	int trackNum = -1;
 	if (num == 1) { // menu screen
 		trackNum = 2;
@@ -369,6 +381,7 @@ void Mixer::playMusic(int num, int tempo) {
 			return;
 		}
 	}
+#endif
 	if ((_musicType == MT_OGG || _musicType == MT_CPC) && isMusicSfx(num)) { // do not play level action music with background music
 		return;
 	}
@@ -385,6 +398,10 @@ void Mixer::playMusic(int num, int tempo) {
 			_musicType = MT_MOD;
 			return;
 		}
+		// No fallback to the players below: none of them can make a
+		// sound here, and a .mod left in DATA\ would be loaded - a
+		// hundred K or more - and never heard.
+		return;
 #endif
 		_mod.play(num, tempo);
 		if (_mod._playing) {

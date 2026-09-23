@@ -2279,6 +2279,11 @@ void Game::loadLevelData() {
 		{
 			char name[32];
 			snprintf(name, sizeof(name), "level%d", lvl->sound);
+#ifdef ATARIST
+			// up to 152K of samples a plain ST cannot play
+			extern bool ATARIST_samplesPlayable();
+			if (ATARIST_samplesPlayable())
+#endif
 			_res.load(name, Resource::OT_SPL);
 		}
 		if (_currentLevel == 0) {
@@ -2495,6 +2500,11 @@ drawCached:
 
 void Game::playSound(uint8_t num, uint8_t softVol) {
 	debug(DBG_GAME, "playSound num:%d volume:%d", num, softVol);
+#ifdef ATARIST
+	if (_res._numSfx == 0 && num < Resource::NUM_SFXS) {
+		return;   // no samples loaded: this machine cannot play them
+	}
+#endif
 	if (num < _res._numSfx) {
 		SoundFx *sfx = &_res._sfxList[num];
 		if (sfx->data) {
