@@ -1253,6 +1253,17 @@ void ST_flushSpriteCache() {
 	g_bakeHi = 0;
 }
 
+void ST_releaseSpriteCache() {
+	ST_flushSpriteCache();
+	for (int i = 0; i < kSprSlots; ++i) {
+		free(g_spr[i].block);
+		g_spr[i].block = 0;
+		g_spr[i].planes = 0;
+		g_spr[i].mask = 0;
+		g_spr[i].cap = 0;
+	}
+}
+
 // The planar cache keys on source pointers, and everything those
 // pointers reach through gets recycled under it: the decode caches
 // reuse their slabs, and the resource bank arena resets wholesale

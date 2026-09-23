@@ -211,6 +211,7 @@ struct Resource {
 	bool fileExists(const char *filename);
 
 	void clearLevelRes();
+	void freeLevelData();
 	void load_DEM(const char *filename);
 	void load_FIB(const char *fileName);
 	void load_SPL_demo();

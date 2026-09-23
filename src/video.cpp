@@ -879,6 +879,11 @@ static void ST_sgdRelease() {
 	ST_sgdForgetAll();
 }
 
+void Video::ST_releaseLevelCaches() {
+	ST_sgdRelease();
+	ST_releaseSpriteCache();
+}
+
 // the tile's cells, preparing them if they are not in the pool
 static const SgdSlot *ST_sgdTile(const uint8_t *data, int num, uint8_t *buf, int bufSize) {
 	SgdSlot *slot = &g_sgdSlots[num & (kSgdSlots - 1)];

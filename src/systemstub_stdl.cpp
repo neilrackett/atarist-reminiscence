@@ -27,6 +27,7 @@
 extern "C" {
 #include <stdl/stdl.h>
 }
+#include <osbind.h>
 
 #include "systemstub.h"
 #include "util.h"
@@ -1560,6 +1561,18 @@ void ST_beamSync() {
 	if (g_stub->_ovscOpen && !g_stub->_dblBuf) {
 		STDL_WaitVBL();
 	}
+}
+
+// What TOS could still hand the C library in one piece. A probe with
+// malloc would count the library's own free list as well, but it is
+// not free of side effects: the library keeps the big blocks it takes
+// from TOS, splits them later, and the probe alone was enough to stop
+// level 1 finding room for its tile pool on a 2MB machine.
+void ST_logFreeMemory(const char *where) {
+	if (!g_options.logging) {
+		return;
+	}
+	info("Memory at %s: largest free block %ldK", where, (long)Malloc(-1) >> 10);
 }
 
 uint32_t ST_overscanMisses() {

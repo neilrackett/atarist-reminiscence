@@ -147,6 +147,23 @@ void Resource::clearLevelRes() {
 	}
 }
 
+// Everything a level loads, for the way back to the title: the level
+// files clearLevelRes frees when the next level replaces them, plus
+// the sprite positions and the sound effects, which are the biggest
+// of them (up to 152K). The title does not need any of it, and on a
+// 2MB machine it could not find room for its picture with a large
+// level still loaded. The caller stops the effects playing first.
+void Resource::freeLevelData() {
+	clearLevelRes();
+	free(_spc); _spc = 0;
+	_numSpc = 0;
+	for (int i = 0; i < _numSfx; ++i) {
+		free(_sfxList[i].data);
+	}
+	free(_sfxList); _sfxList = 0;
+	_numSfx = 0;
+}
+
 void Resource::load_DEM(const char *filename) {
 	free(_dem); _dem = 0;
 	_demLen = 0;
@@ -784,6 +801,7 @@ void Resource::load(const char *objName, int objType, const char *ext) {
 					free(dat);
 					break;
 				case OT_SPC:
+					free(_spc);
 					_spc = dat;
 					_numSpc = READ_BE_UINT16(_spc) / 2;
 					break;
@@ -937,6 +955,7 @@ void Resource::load_RP(File *f) {
 void Resource::load_SPC(File *f) {
 	debug(DBG_RES, "Resource::load_SPC()");
 	const int len = f->size();
+	free(_spc);   // the previous level's, which leaked before
 	_spc = (uint8_t *)malloc(len);
 	if (!_spc) {
 		error("Unable to allocate SPC buffer");

@@ -192,6 +192,11 @@ void ST_drawSpriteCached(uint8_t *layer, const uint8_t *src, int pitch, int x, i
 
 // drop every cached planar frame (level data reloaded)
 void ST_flushSpriteCache();
+// as ST_flushSpriteCache, and give the bake buffers back too
+void ST_releaseSpriteCache();
+
+// with logging on, the largest block malloc can still hand out
+void ST_logFreeMemory(const char *where);
 
 // 8x8 glyph from a 16-byte-stride chunky source (AMIGA_decodeIcn
 // output): nonzero source pixels painted in colour8

@@ -22,6 +22,9 @@ So, just three decades after the original was released... **_Say hello to Flashb
 - Sound effects are STE-only.
 - Optional music works on any ST (see below).
 
+On a 2MB machine, keep desk accessories and resident programs to a minimum:
+with music and overscan on, the largest levels leave only around 100K free.
+
 ## Installing
 
 1. Copy `FLASHBAK.TOS` (and optionally `RS.CFG`) to your ST's hard disk.
@@ -126,34 +129,34 @@ with `#` or `;` are ignored, and the file is optional.
 The `RS.CFG` that ships with the build includes every option,
 with defaults named, so switching one is a matter of deleting a `#`.
 
-| Option                     | ST-specific | Effect                                                                                                             |
-| -------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------ |
-| `skip_intro`               | ✓           | Go straight to the title screen, skipping the intro sequence                                                       |
+| Option                     | ST-specific | Effect                                                                                                                                                                                                                         |
+| -------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `skip_intro`               | ✓           | Go straight to the title screen, skipping the intro sequence                                                                                                                                                                   |
 | `screen`                   | ✓           | How 224 lines meet the 200-line screen: `fit` drops a row in eleven (default), `fill` crops 18 off the top and 6 off the bottom in play (12 and 12 elsewhere), `top` opens the top border, `full` both. Also on the title menu |
-| `music`                    | ✓           | YM chip music, if the tracks have been built (see above)                                                           |
-| `music_volume`             | ✓           | Chip music level, 0-100 (default 70, which sits it level with the sampled effects)                                 |
-| `cheats`                   | ✓           | `true` for all of them, or bits added together: 1 monsters die in one hit, 2 Conrad is never hit, 4 his life never drops |
-| `ste_sound`                | ✓           | Open the STE sample device (**on** by default; `false` disables sampled sound entirely, chip music unaffected)     |
-| `megaste_speedup`          | ✓           | Switch a Mega STE to 16MHz with its cache (**on** by default; `false` keeps the speed set before the game ran)     |
-| `frame_skip`               | ✓           | Drop cutscene frames to hold the scripted pace (**on** by default; `frame_skip=false` draws every frame, slower)   |
-| `bypass_protection`        |             | Skip the copy-protection screen                                                                                    |
-| `enable_password_menu`     |             | Show the level password menu                                                                                       |
-| `fade_out_palette`         |             | Fade the palette out between screens                                                                               |
-| `use_text_cutscenes`       |             | Replace missing cutscenes with their text                                                                          |
-| `use_white_tshirt`         |             | Conrad's t-shirt is white in the intro                                                                             |
-| `play_asc_cutscene`        |             | Play the ASC cutscene (level 2 fuse)                                                                               |
-| `play_caillou_cutscene`    |             | Play the CAILLOU cutscene (save checkpoints)                                                                       |
-| `play_metro_cutscene`      |             | Play the METRO cutscene                                                                                            |
-| `play_serrure_cutscene`    |             | Play the SERRURE cutscene                                                                                          |
-| `play_carte_cutscene`      |             | Play the CARTE cutscene (keys)                                                                                     |
-| `restore_memo_cutscene`    |             | Draw the extra shapes in the MEMO cutscene                                                                         |
-| `order_inventory_original` |             | Order inventory items as the original did                                                                          |
-| &nbsp;                     |             |                                                                                                                    |
-| **Diagnostics**            |             |                                                                                                                    |
-| `blitter`                  | ✓           | Use the BLiTTER where the machine has one (**on** by default; `blitter=false` forces the CPU paths, for diagnosis) |
-| `logging`                  | ✓           | Write progress and warnings to `RS.LOG` (errors are always written)                                                |
-| `log_fps`                  | ✓           | Log the frame rate to `RS.LOG`, averaged over 64 frames                                                            |
-| `bench`                    | ✓           | Benchmark: time 512 gameplay frames, log the result, then **quit**                                                 |
+| `music`                    | ✓           | YM chip music, if the tracks have been built (see above)                                                                                                                                                                       |
+| `music_volume`             | ✓           | Chip music level, 0-100 (default 70, which sits it level with the sampled effects)                                                                                                                                             |
+| `cheats`                   | ✓           | `true` for all of them, or bits added together: 1 monsters die in one hit, 2 Conrad is never hit, 4 his life never drops                                                                                                       |
+| `ste_sound`                | ✓           | Open the STE sample device (**on** by default; `false` disables sampled sound entirely, chip music unaffected)                                                                                                                 |
+| `megaste_speedup`          | ✓           | Switch a Mega STE to 16MHz with its cache (**on** by default; `false` keeps the speed set before the game ran)                                                                                                                 |
+| `frame_skip`               | ✓           | Drop cutscene frames to hold the scripted pace (**on** by default; `frame_skip=false` draws every frame, slower)                                                                                                               |
+| `bypass_protection`        |             | Skip the copy-protection screen                                                                                                                                                                                                |
+| `enable_password_menu`     |             | Show the level password menu                                                                                                                                                                                                   |
+| `fade_out_palette`         |             | Fade the palette out between screens                                                                                                                                                                                           |
+| `use_text_cutscenes`       |             | Replace missing cutscenes with their text                                                                                                                                                                                      |
+| `use_white_tshirt`         |             | Conrad's t-shirt is white in the intro                                                                                                                                                                                         |
+| `play_asc_cutscene`        |             | Play the ASC cutscene (level 2 fuse)                                                                                                                                                                                           |
+| `play_caillou_cutscene`    |             | Play the CAILLOU cutscene (save checkpoints)                                                                                                                                                                                   |
+| `play_metro_cutscene`      |             | Play the METRO cutscene                                                                                                                                                                                                        |
+| `play_serrure_cutscene`    |             | Play the SERRURE cutscene                                                                                                                                                                                                      |
+| `play_carte_cutscene`      |             | Play the CARTE cutscene (keys)                                                                                                                                                                                                 |
+| `restore_memo_cutscene`    |             | Draw the extra shapes in the MEMO cutscene                                                                                                                                                                                     |
+| `order_inventory_original` |             | Order inventory items as the original did                                                                                                                                                                                      |
+| &nbsp;                     |             |                                                                                                                                                                                                                                |
+| **Diagnostics**            |             |                                                                                                                                                                                                                                |
+| `blitter`                  | ✓           | Use the BLiTTER where the machine has one (**on** by default; `blitter=false` forces the CPU paths, for diagnosis)                                                                                                             |
+| `logging`                  | ✓           | Write progress and warnings to `RS.LOG` (errors are always written)                                                                                                                                                            |
+| `log_fps`                  | ✓           | Log the frame rate to `RS.LOG`, averaged over 64 frames                                                                                                                                                                        |
+| `bench`                    | ✓           | Benchmark: time 512 gameplay frames, log the result, then **quit**                                                                                                                                                             |
 
 ## Work in progress
 

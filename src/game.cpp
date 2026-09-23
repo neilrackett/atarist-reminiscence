@@ -102,6 +102,18 @@ struct SpriteCache {
 		}
 		memset(hint, 0, sizeof(hint));
 	}
+	// flush, and give the slabs back
+	void release() {
+		for (int i = 0; i < N; ++i) {
+			if (buf[i]) {
+				ST_invalidateBakedRange(buf[i], (uint32_t)cap[i]);
+				::free(buf[i]);
+			}
+			buf[i] = 0;
+			cap[i] = 0;
+		}
+		flush();
+	}
 };
 static SpriteCache _spmCache;
 static SpriteCache _spcCache;
@@ -237,6 +249,9 @@ Game::Game(SystemStub *stub, FileSystem *fs, const char *savePath, int level, Re
 	_rewindPtr = -1;
 	_rewindLen = 0;
 	_cheats = cheats;
+#ifdef ATARIST
+	_stLogMemRoom = false;
+#endif
 }
 
 
@@ -441,6 +456,9 @@ void Game::run() {
 				}
 			}
 			_stub->setOverscanColor(0x00);
+#ifdef ATARIST
+			ST_unloadLevel();
+#endif
 			// flush inputs
 			_stub->_pi.dirMask = 0;
 			_stub->_pi.enter = false;
@@ -456,6 +474,9 @@ void Game::run() {
 
 void Game::displayTitleScreenAmiga() {
 	info("Title screen");
+#ifdef ATARIST
+	ST_logFreeMemory("title");
+#endif
 	_stub->useFillWindow(false);
 	static const char *FILENAME = "present.cmp";
 	_res.load_CMP_menu(FILENAME);
@@ -805,6 +826,12 @@ bool Game::stepLogic() {
 		} else {
 			_currentRoom = _pgeLive[0].room_location;
 			info("Room %d", _currentRoom);
+			if (_stLogMemRoom) {
+				// the first room of a level: its tile pool is in
+				// by now, so this is the level at its fullest
+				_stLogMemRoom = false;
+				ST_logFreeMemory("level loaded");
+			}
 			loadLevelRoom();
 			_loadMap = false;
 			_vid.fullRefresh();
@@ -2173,6 +2200,25 @@ void Game::loadLevelRoom() {
 	}
 }
 
+#ifdef ATARIST
+// Leaving a level for the title: nothing the level loaded is needed
+// until the next one loads it again, and the title needs a 70K block
+// for its picture - which a 2MB machine did not have with level 5 or
+// 7 still in memory and music or a border open. The effects are
+// stopped first: a sample still playing would be read from freed
+// memory.
+void Game::ST_unloadLevel() {
+	_mix.stopAll();
+	clearStateRewind();
+	_res.freeLevelData();
+	_spmCache.release();
+	_spcCache.release();
+	_icnCache.flush();
+	_vid.ST_releaseLevelCaches();
+	ST_logFreeMemory("level unloaded");
+}
+#endif
+
 void Game::loadLevelData() {
 #ifdef ATARIST
 	_spmCache.flush();
@@ -2181,6 +2227,9 @@ void Game::loadLevelData() {
 	ST_flushSpriteCache();
 #endif
 	info("Loading level %d", _currentLevel + 1);
+#ifdef ATARIST
+	_stLogMemRoom = true;
+#endif
 	_res.clearLevelRes();
 	const Level *lvl = &_gameLevels[_currentLevel];
 	switch (_res._type) {
