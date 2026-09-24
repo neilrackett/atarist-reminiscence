@@ -13,7 +13,6 @@ extern "C" {
 }
 
 #include "video_st.h"
-#include "util.h"
 
 // see ST_pageBandStart; the whole page when no band is in force
 static int16_t g_bandY0 = 0, g_bandY1 = kSTLayerH;
@@ -84,6 +83,10 @@ static inline TrkBox *trkBoxOf(const uint8_t *layer) {
 // inlined, as it runs once per shape and the call cost more than
 // the work
 static inline __attribute__((always_inline)) void pageTouch(const uint8_t *layer, int x0, int x1, int y0, int y1) {
+	// no scene in progress: the band is the whole page, nothing to do
+	if (!g_trk) {
+		return;
+	}
 	if (y0 < 0) {
 		y0 = 0;
 	}
@@ -94,9 +97,6 @@ static inline __attribute__((always_inline)) void pageTouch(const uint8_t *layer
 		return;
 	}
 	bandTouch(y0, y1);
-	if (!g_trk) {
-		return;
-	}
 	if (x0 < 0) {
 		x0 = 0;
 	}
@@ -2865,13 +2865,13 @@ void ST_copyLayer(uint8_t *dst, const uint8_t *src) {
 	copyBlock<kSTPlaneBytes + kSTPrioRowBytes * kSTLayerH>(dst, src);
 }
 
-// Cutscene page copy: the planes only. The scene's pages carry no
-// live priority plane (see prioMode) and the copy is a fifth shorter
-// without it - 51 of them in the first scene.
 // Copy a box, clipped to the band: whole rows through movem when
 // it covers most of the width - a row of clean groups costs less
 // than splitting the copy - and a group (two longs) at a time
 // otherwise.
+// A box this many groups wide (of 16) is copied as whole rows
+enum { kBoxWholeRows = 10 };
+
 static void copyBox(uint8_t *dst, const uint8_t *src, const TrkBox *b) {
 	int y0 = b->y0 < g_bandY0 ? g_bandY0 : b->y0;
 	int y1 = b->y1 > g_bandY1 ? g_bandY1 : b->y1;
@@ -2879,7 +2879,7 @@ static void copyBox(uint8_t *dst, const uint8_t *src, const TrkBox *b) {
 		return;
 	}
 	const int n = b->g1 - b->g0;
-	if (n >= 10) {
+	if (n >= kBoxWholeRows) {
 		const int off = y0 * kSTRowBytes;
 		copyBytes(dst + off, src + off, (y1 - y0) * kSTRowBytes);
 		return;
@@ -2901,6 +2901,11 @@ static void markBand(TrkBox *b) {
 	boxAdd(b, 0, 16, g_bandY0, g_bandY1);
 }
 
+// Cutscene page copy: the planes only. The scene's pages carry no
+// live priority plane (see prioMode) and the copy is a fifth shorter
+// without it. Inside a scene's band every copy is between tracked
+// pages and moves only a box (see ST_pageBandStart); outside one the
+// band is the whole page.
 void ST_copyPage(uint8_t *dst, const uint8_t *src) {
 	if (g_trk) {
 		TrkBox *bd = trkBoxOf(dst);
@@ -2930,12 +2935,7 @@ void ST_copyPage(uint8_t *dst, const uint8_t *src) {
 			return;
 		}
 	}
-	if (g_bandY0 == 0 && g_bandY1 == kSTLayerH) {
-		copyBlock<kSTPlaneBytes>(dst, src);
-		return;
-	}
-	const int off = g_bandY0 * kSTRowBytes;
-	copyBytes(dst + off, src + off, (g_bandY1 - g_bandY0) * kSTRowBytes);
+	copyBlock<kSTPlaneBytes>(dst, src);
 }
 
 void ST_pageBandStart(int y0, int y1, uint8_t colour8, uint8_t *front, uint8_t *back, uint8_t *aux) {
@@ -2960,12 +2960,11 @@ void ST_pageBandEnd() {
 }
 
 bool ST_pageShowRect(const uint8_t *page, bool full, int *x, int *y, int *w, int *h) {
+	// untracked (no band in force): the whole page, as a band would be
 	const TrkBox *bp = g_trk ? trkBoxOf(page) : 0;
 	TrkBox r;
-	if (full) {
+	if (full || !bp) {
 		r.g0 = 0; r.g1 = 16; r.y0 = 0; r.y1 = kSTLayerH;
-	} else if (!bp) {
-		r.g0 = 0; r.g1 = 16; r.y0 = g_bandY0; r.y1 = g_bandY1;
 	} else {
 		r = *bp;
 		boxUnion(&r, &g_scrBox);
@@ -2974,15 +2973,12 @@ bool ST_pageShowRect(const uint8_t *page, bool full, int *x, int *y, int *w, int
 	}
 	if (bp) {
 		g_scrBox = *bp;
-	} else {
-		boxClear(&g_scrBox);
-		markBand(&g_scrBox);
 	}
 	if (r.y0 >= r.y1 || r.g0 >= r.g1) {
 		return false;
 	}
 	// most of the width: whole rows, the copy's fast path
-	if (r.g1 - r.g0 >= 10) {
+	if (r.g1 - r.g0 >= kBoxWholeRows) {
 		r.g0 = 0;
 		r.g1 = 16;
 	}
@@ -2991,11 +2987,6 @@ bool ST_pageShowRect(const uint8_t *page, bool full, int *x, int *y, int *w, int
 	*y = r.y0;
 	*h = r.y1 - r.y0;
 	return true;
-}
-
-void ST_pageBand(int *y0, int *y1) {
-	*y0 = g_bandY0;
-	*y1 = g_bandY1;
 }
 
 void ST_clearLayer(uint8_t *layer, uint8_t colour8) {

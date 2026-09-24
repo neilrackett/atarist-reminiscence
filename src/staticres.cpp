@@ -6510,6 +6510,7 @@ const uint8_t Menu::_flagSp16x12[] = {
 };
 #endif
 
+#ifndef ATARIST
 const char *const PrfPlayer::_names[] = {
 	"introl3",
 	"option3",
@@ -6540,6 +6541,7 @@ const char *const PrfPlayer::_names[] = {
 };
 
 const int PrfPlayer::_namesCount = ARRAYSIZE(_names);
+#endif
 
 #ifndef ATARIST
 const ResourcePaqEntry ResourcePaq::_entries[] = {

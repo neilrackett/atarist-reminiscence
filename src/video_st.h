@@ -145,7 +145,6 @@ void ST_copyPage(uint8_t *dst, const uint8_t *src);
 // page as what the screen now shows.
 void ST_pageBandStart(int y0, int y1, uint8_t colour8, uint8_t *front, uint8_t *back, uint8_t *aux);
 void ST_pageBandEnd();
-void ST_pageBand(int *y0, int *y1);
 bool ST_pageShowRect(const uint8_t *page, bool full, int *x, int *y, int *w, int *h);
 
 // with a border open, wait for the VBL before a big screen update

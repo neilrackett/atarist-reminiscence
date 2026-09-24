@@ -826,13 +826,16 @@ bool Game::stepLogic() {
 		} else {
 			_currentRoom = _pgeLive[0].room_location;
 			info("Room %d", _currentRoom);
+			loadLevelRoom();
+#ifdef ATARIST
 			if (_stLogMemRoom) {
-				// the first room of a level: its tile pool is in
-				// by now, so this is the level at its fullest
+				// after the level's first room: decoding it is what
+				// allocates the tile pool, so this is the level at
+				// its fullest
 				_stLogMemRoom = false;
 				ST_logFreeMemory("level loaded");
 			}
-			loadLevelRoom();
+#endif
 			_loadMap = false;
 			_vid.fullRefresh();
 		}

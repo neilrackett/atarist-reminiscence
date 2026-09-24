@@ -81,6 +81,7 @@ struct SystemStub_STDL : SystemStub {
 	uint32_t _dmg[kMaxScreenRows];
 	int _dmgLo, _dmgHi;
 	void addDamage(int row0, int row1, int g0, int g1);
+	void damageSource(int y, int h, int g0, int g1);
 	void clearScreen();
 	void syncPages(const uint8_t *shown);
 	// key releases are applied at the start of the *next* poll so a
@@ -193,7 +194,7 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 	}
 	const int xOffBytes = (_xOffset >> 4) << 3;
 	if (_dblBuf) {
-		addDamage(_yMap[y], _yMap[y + h - 1], gx0 + (_xOffset >> 4), gx1 + (_xOffset >> 4));
+		damageSource(y, h, gx0 + (_xOffset >> 4), gx1 + (_xOffset >> 4));
 	}
 	// Large copies (full refreshes, room loads) go through
 	// STDL_BlitSurface so a BLiTTER can take the aligned runs (same
@@ -213,8 +214,8 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 		// it loses intermittently and tears. This sync is not
 		// negotiable against frame pacing: skipping it when a
 		// scene runs late (tried Aug 2026) brought the tearing
-		// straight back. A cutscene push made of runs syncs once
-		// for all of them (ST_beamSync).
+		// straight back. A cutscene's smaller pushes sync through
+		// ST_beamSync instead.
 		STDL_WaitVBL();
 	}
 	if (h >= 32 && gx1 - gx0 >= 8 && _srcW == kSTLayerW
@@ -1495,7 +1496,7 @@ void SystemStub_STDL::convertRegion(int x, int y, int w, int h, const uint8_t *b
 	}
 	const uint8_t *remap = _remap;
 	if (_dblBuf && h > 0) {
-		addDamage(_yMap[y], _yMap[y + h - 1], (x0 + _xOffset) >> 4, (x1 + _xOffset) >> 4);
+		damageSource(y, h, (x0 + _xOffset) >> 4, (x1 + _xOffset) >> 4);
 	}
 	for (int j = 0; j < h; ++j) {
 		const int sy = y + j;
@@ -1555,8 +1556,8 @@ void SystemStub_STDL::copyRect(int x, int y, int w, int h, const uint8_t *buf, i
 	}
 }
 
-// Start of a cutscene push with a border open: the runs of a push
-// can span most of the page, and race the beam like a full copy.
+// A cutscene push with a border open: a box over half the page races
+// the beam like a full copy. (A full one syncs in copyRectPlanar.)
 void ST_beamSync() {
 	if (g_stub->_ovscOpen && !g_stub->_dblBuf) {
 		STDL_WaitVBL();
@@ -1583,15 +1584,42 @@ void SystemStub_STDL::updateScreen(int shakeOffset) {
 	if (_palDirty) {
 		buildRemap();
 	}
-	if (_hwDirty) {
-		writeHwPalette();
-	}
 	if (_dblBuf) {
+		// the palette goes in after the flip, at the top of the
+		// frame it belongs to: written first, it would recolour the
+		// old picture until the VBL
 		const uint8_t *shown = _screen->pixels;
 		STDL_Flip();
+		if (_hwDirty) {
+			writeHwPalette();
+		}
 		if (_screen->pixels != shown) {
 			syncPages(shown);
 		}
+		return;
+	}
+	if (_hwDirty) {
+		writeHwPalette();
+	}
+}
+
+// Source rows [y, y + h) were copied to the hidden page: damage the
+// screen rows they landed on. Not simply _yMap[y].._yMap[y + h - 1]:
+// Fill maps the rows outside its window to row 0, so a copy running
+// past the window would come out as a backwards range and damage
+// nothing.
+void SystemStub_STDL::damageSource(int y, int h, int g0, int g1) {
+	int r0 = -1, r1 = -1;
+	for (int sy = y; sy < y + h && sy < kMaxSrcH; ++sy) {
+		if (!_yDrop[sy]) {
+			if (r0 < 0) {
+				r0 = _yMap[sy];
+			}
+			r1 = _yMap[sy];
+		}
+	}
+	if (r0 >= 0) {
+		addDamage(r0, r1, g0, g1);
 	}
 }
 

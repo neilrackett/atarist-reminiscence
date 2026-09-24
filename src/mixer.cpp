@@ -359,10 +359,10 @@ static bool isMusicSfx(int num) {
 
 void Mixer::playMusic(int num, int tempo) {
 	debug(DBG_SND, "Mixer::playMusic(%d, %d)", num, tempo);
-#ifndef ATARIST
 	// digital soundtracks (.ogg, CD-i .cpc): the ST has no software
 	// mixer to play them, and looking for them at every track change
 	// is file probing for nothing
+#ifndef ATARIST
 	int trackNum = -1;
 	if (num == 1) { // menu screen
 		trackNum = 2;
@@ -396,7 +396,6 @@ void Mixer::playMusic(int num, int tempo) {
 		// software mixer this port does not have
 		if (ATARIST_playMusic(num)) {
 			_musicType = MT_MOD;
-			return;
 		}
 		// No fallback to the players below: none of them can make a
 		// sound here, and a .mod left in DATA\ would be loaded - a

@@ -156,7 +156,8 @@ void Cutscene::updateScreen() {
 #ifdef ATARIST
 // A scripted scene on banded pages: all three pages and the screen
 // start cleared, so the band's outside is the same everywhere, and
-// from then on only the band moves (see ST_pageBandStart). The shapes
+// from then on only what changed inside it moves (see
+// ST_pageBandStart). The shapes
 // are clipped to the Graphics rect; the ellipse filler can reach one
 // row past it.
 void Cutscene::stBandedLoop(uint16_t num) {
@@ -175,7 +176,9 @@ void Cutscene::stBandedLoop(uint16_t num) {
 void Cutscene::stShow(const uint8_t *page) {
 	int x, y, w, h;
 	if (ST_pageShowRect(page, _stShowFull, &x, &y, &w, &h)) {
-		if (h >= 96) {
+		// one sync per push: copyRectPlanar makes its own for a
+		// whole page
+		if (h >= 96 && h < Video::GAMESCREEN_H - 8) {
 			ST_beamSync();
 		}
 		_stub->copyRectPlanar(x, y, w, h, page);

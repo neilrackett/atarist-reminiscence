@@ -22,8 +22,8 @@ So, just three decades after the original was released... **_Say hello to Flashb
 - Sound effects are STE-only.
 - Optional music works on any ST (see below).
 
-On a 2MB machine, keep desk accessories and resident programs to a minimum:
-with music and overscan on, the largest levels leave only around 100K free.
+On a 2MB machine it's a tight fit, especially with music and overscan on,
+so keep desk accessories and resident programs to a minimum.
 
 ## Installing
 
