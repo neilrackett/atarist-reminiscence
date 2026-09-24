@@ -112,9 +112,10 @@ static void initOptions() {
 	// effects gained about 6dB (walking peaks -26.0 -> -20.3 dBFS)
 	// and the music had to follow. Measured in Hatari on one binary:
 	// effects peak -20.3, music at 70 peaks -21.4, at 80 -17.9.
-	// Hardware may want a different figure, which is why it is an
-	// RS.CFG option.
-	g_options.music_volume = 70;
+	// On hardware 70 was still overwhelming, so the default is 50,
+	// the music a little under the effects; it stays an RS.CFG option
+	// for anyone who wants it louder.
+	g_options.music_volume = 50;
 	g_options.cheats = 0;
 	g_options.log_fps = false;
 	g_options.bench = false;

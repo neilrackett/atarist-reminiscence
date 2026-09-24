@@ -62,11 +62,11 @@
 # (default: false)
 #music=true
 
-# How loud the chip music plays, 0-100. The default sits it level
-# with the sampled effects, which come through the STE mixer well
+# How loud the chip music plays, 0-100. The default sits it a little
+# under the sampled effects, which come through the STE mixer well
 # below full scale - at 100 the music stood some 15dB above them.
 # The chip's own volume steps are coarse, about 3dB each, so a
-# change of a few points may do nothing. (default: 70)
+# change of a few points may do nothing. (default: 50)
 #music_volume=100
 
 # Use the .PRF music files rather than the .STM ones. (default: false)
