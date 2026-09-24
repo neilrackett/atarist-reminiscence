@@ -155,6 +155,10 @@ void ST_paletteForRoom(int level, int levNum, int room);
 // 0xFF for none): set with each room's palettes
 void ST_setAmigaColourMap(const uint8_t *map256);
 const char *ST_paletteDump(int level, int levNum, int room);
+// Ctrl+Shift+P: rescan PALETTE\ and read the room's file again on its
+// next load; and the file in use, "" for none
+bool ST_paletteReload();
+const char *ST_paletteInUse();
 
 // with a border open, wait for the VBL before a big screen update
 void ST_beamSync();

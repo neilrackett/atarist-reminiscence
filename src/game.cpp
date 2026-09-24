@@ -252,6 +252,7 @@ Game::Game(SystemStub *stub, FileSystem *fs, const char *savePath, int level, Re
 #ifdef ATARIST
 	_stLogMemRoom = false;
 	_stPaletteMsgCounter = 0;
+	_stPaletteReloaded = false;
 #endif
 }
 
@@ -838,6 +839,13 @@ bool Game::stepLogic() {
 			info("Room %d", _currentRoom);
 			loadLevelRoom();
 #ifdef ATARIST
+			if (_stPaletteReloaded) {
+				// Ctrl+Shift+P's confirmation, once the room is back
+				_stPaletteReloaded = false;
+				const char *name = ST_paletteInUse();
+				snprintf(_stPaletteMsg, sizeof(_stPaletteMsg), "PALETTE %s", name[0] ? name : "AUTOMATIC");
+				_stPaletteMsgCounter = 50;
+			}
 			if (_stLogMemRoom) {
 				// after the level's first room: decoding it is what
 				// allocates the tile pool, so this is the level at
@@ -1066,6 +1074,15 @@ void Game::inp_handleSpecialKeys() {
 	// Ctrl+Up / Ctrl+Down: in Fill, slide the 200-row window over the
 	// 224-row picture, to find where it best sits. Up shows more of the
 	// top, Down more of the bottom; the rows shown go to RS.LOG.
+	if (_stub->_pi.reloadPalette) {
+		// Ctrl+Shift+P: the room is loaded again, which picks up
+		// whatever PALETTE\ now holds for it
+		_stub->_pi.reloadPalette = false;
+		if (ST_paletteReload()) {
+			_stPaletteReloaded = true;
+			_loadMap = true;
+		}
+	}
 	if (_stub->_pi.panUp || _stub->_pi.panDown) {
 		const int top = _stub->panScreen(_stub->_pi.panUp ? -1 : 1);
 		_stub->_pi.panUp = _stub->_pi.panDown = false;

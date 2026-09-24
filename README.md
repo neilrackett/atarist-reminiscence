@@ -170,6 +170,11 @@ move numbers from line to line. Then move it into `PALETTE\`, as it is
 for that room or renamed to `L1.HEX` for the whole level. Cutscenes
 keep their own colours.
 
+Press **Ctrl+Shift+P** to reload: the game looks in `PALETTE\` again
+and redraws the room with whatever file now applies to it, so you can
+edit a palette and see the result without leaving the room. The file
+in use is shown on screen, or "automatic" when there isn't one.
+
 Without lists, each colour takes the nearest of your 16. The jungle's
 greens are muted olives, and with a palette whose only greens are
 bright - EGA's, say - nearest means grey. Listing them against a green

@@ -28,7 +28,8 @@
  * numbered in comments, and each of the 16 lines listing the ones it
  * is used for now. An author starts from what the game chose (or from
  * the custom palette in use), changes colours and moves numbers, and
- * puts the file in PALETTE\.
+ * puts the file in PALETTE\. Ctrl+Shift+P rescans the folder and
+ * redraws the room with whatever now applies, to see an edit at once.
  *
  * GEMDOS calls throughout: the C library's fopen converts the file's
  * date through mktime, over 100ms a call on a 68000, and that would
@@ -292,6 +293,26 @@ static char *put(char *q, const char *fmt, int a = 0, int b = 0, int c = 0, int 
 
 static int hex8(uint8_t v) {
 	return (v >> 4) * 17;                      // the STE's 4 bits as 8
+}
+
+// Ctrl+Shift+P: forget what was scanned and what is in use, so the
+// next room load - which the caller forces - reads PALETTE\ afresh:
+// new files are found and an edited one is read again. Returns false
+// when palette_custom is off.
+bool ST_paletteReload() {
+	if (!g_options.palette_custom) {
+		return false;
+	}
+	g_scanned = false;
+	g_levelFile = 0;
+	memset(g_roomFile, 0, sizeof(g_roomFile));
+	g_current[0] = 0;
+	return true;
+}
+
+// what ST_paletteForRoom chose last, "" for the automatic palette
+const char *ST_paletteInUse() {
+	return g_current;
 }
 
 // Ctrl+P: the room's current colours as a .hex in the game folder,

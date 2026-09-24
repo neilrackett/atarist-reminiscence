@@ -34,7 +34,8 @@
 # own. Each file is 16 lines of RRGGBB hex, as Lospec and Aseprite
 # export .hex palettes, each optionally listing which of the Amiga's
 # 32 colours it replaces. Ctrl+P in play writes the room's current
-# palette under the room's name to the game folder, to start from.
+# palette under the room's name to the game folder, to start from,
+# and Ctrl+Shift+P reloads the room's palette after an edit.
 # See the README. (default: false)
 #palette_custom=true
 

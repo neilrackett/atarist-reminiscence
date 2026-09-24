@@ -42,6 +42,7 @@ struct PlayerInput {
 	bool panDown;
 	bool rewind;
 	bool dumpPalette;   // ST port: Ctrl+P, see palette_custom
+	bool reloadPalette; // ST port: Ctrl+Shift+P
 
 	uint8_t dbgMask;
 	bool quit;

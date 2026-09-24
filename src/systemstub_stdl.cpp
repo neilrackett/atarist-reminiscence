@@ -1961,7 +1961,11 @@ void SystemStub_STDL::processEvents() {
 							_pi.quit = true;
 							break;
 						case STDLK_p:
-							_pi.dumpPalette = true;
+							if (mod & STDL_KMOD_SHIFT) {
+								_pi.reloadPalette = true;
+							} else {
+								_pi.dumpPalette = true;
+							}
 							break;
 						case STDLK_KP_PLUS:
 						case STDLK_EQUALS:
