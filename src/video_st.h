@@ -147,6 +147,12 @@ void ST_pageBandStart(int y0, int y1, uint8_t colour8, uint8_t *front, uint8_t *
 void ST_pageBandEnd();
 bool ST_pageShowRect(const uint8_t *page, bool full, int *x, int *y, int *w, int *h);
 
+// palette_custom (palette_st.cpp): pick the room's PALETTE\ file, if
+// any, before its palettes go in (level from 1; levNum the level file
+// in use; room < 0 for none), and Ctrl+P's dump of the current colours
+void ST_paletteForRoom(int level, int levNum, int room);
+const char *ST_paletteDump(int level, int levNum, int room);
+
 // with a border open, wait for the VBL before a big screen update
 void ST_beamSync();
 

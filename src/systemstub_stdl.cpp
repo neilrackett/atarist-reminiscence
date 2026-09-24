@@ -130,6 +130,11 @@ struct SystemStub_STDL : SystemStub {
 	virtual void unlockAudio() {}
 
 	void buildRemap();
+	void applyRemap(const uint8_t *newRemap);
+	// palette_custom: the room's own 16 colours, used in place of the
+	// quantiser's in game mode (see ST_setCustomPalette)
+	bool _customPal;
+	Color _customCols[16];
 	void fadedColours(STDL_Colour *c);
 	void writeHwPalette();
 	void convertRegion(int x, int y, int w, int h, const uint8_t *buf, int pitch, bool useShadow);
@@ -298,6 +303,7 @@ void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int
 	memset(&_pi, 0, sizeof(_pi));
 	_palLocked = false;
 	_remapStale = true;
+	_customPal = false;
 	_upDirMask = 0;
 	_upEnter = _upSpace = _upShift = false;
 	if (STDL_Init(0x20 | 0x200) != 0) { // VIDEO | JOYSTICK
@@ -1360,6 +1366,27 @@ void SystemStub_STDL::buildRemap() {
 	}
 	_fade = 256;
 
+	if (_customPal && !g_cutscenePal) {
+		// A custom palette is the 16 colours, as given: every entry
+		// takes its nearest. Cutscenes keep their own mapping.
+		memcpy(_hwPal, _customCols, sizeof(_hwPal));
+		uint8_t newRemap[256];
+		for (int i = 0; i < 256; ++i) {
+			long best = 0x7FFFFFFF;
+			int bs = 0;
+			for (int s = 0; s < 16; ++s) {
+				const long d = colDist(_pal[i], _hwPal[s]);
+				if (d < best) {
+					best = d;
+					bs = s;
+				}
+			}
+			newRemap[i] = (uint8_t)bs;
+		}
+		applyRemap(newRemap);
+		return;
+	}
+
 	// Gather distinct 4-bit colours with usage counts. Logical
 	// entries 0xC0-0xDF belong to cutscenes only (the game's slots
 	// are 0x0-0xB plus the text slots): in game mode they are
@@ -1438,6 +1465,13 @@ void SystemStub_STDL::buildRemap() {
 			repSet[slotOf[c]] = true;
 		}
 	}
+	applyRemap(newRemap);
+}
+
+// The end of every full rebuild, quantised or custom: the palette the
+// mapping now describes, and a new generation for anything holding
+// pixels baked with the old one.
+void SystemStub_STDL::applyRemap(const uint8_t *newRemap) {
 	memcpy(_basePal, _pal, sizeof(_pal));
 	_hwDirty = true;
 	_remapStale = false;
@@ -1451,6 +1485,22 @@ void SystemStub_STDL::buildRemap() {
 		// re-run the conversion from the shadow frame
 		reconvertFromShadow();
 	}
+}
+
+void ST_setCustomPalette(const Color *cols) {
+	SystemStub_STDL *s = g_stub;
+	s->_customPal = (cols != 0);
+	if (cols) {
+		memcpy(s->_customCols, cols, sizeof(s->_customCols));
+	}
+	// a full rebuild, not the few-entries patch: every entry moves
+	s->_remapStale = true;
+	s->_palDirty = true;
+}
+
+void ST_getHwColours(Color *cols) {
+	ST_getRemap();
+	memcpy(cols, g_stub->_hwPal, sizeof(g_stub->_hwPal));
 }
 
 // the 16 hardware colours at the current fade level; _fade can
@@ -1792,6 +1842,9 @@ void SystemStub_STDL::processEvents() {
 							break;
 						case STDLK_q:
 							_pi.quit = true;
+							break;
+						case STDLK_p:
+							_pi.dumpPalette = true;
 							break;
 						case STDLK_KP_PLUS:
 						case STDLK_EQUALS:

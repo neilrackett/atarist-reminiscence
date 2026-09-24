@@ -168,6 +168,7 @@ struct Options {
 	bool overscan_bottom;
 	bool megaste_speedup;  // ST port: 16MHz and cache on a Mega STE
 	bool double_buffer;    // ST port: draw on a hidden page, VBL-synced flip
+	bool palette_custom;   // ST port: PALETTE\ room palettes and Ctrl+P
 	bool ste_sound;        // ST port: open the STE sample device at all
 };
 

@@ -40,7 +40,8 @@ SRCS = collision.cpp cutscene.cpp file.cpp \
 	piege.cpp \
 	protection.cpp resource.cpp sfx_player.cpp \
 	staticres.cpp splash_data.cpp unpack.cpp util.cpp video.cpp \
-	main_atari.cpp systemstub_stdl.cpp video_st.cpp st_stubs.cpp
+	main_atari.cpp systemstub_stdl.cpp video_st.cpp st_stubs.cpp \
+	palette_st.cpp
 
 OBJS = $(SRCS:%.cpp=build/%.o)
 DEPS = $(OBJS:.o=.d)

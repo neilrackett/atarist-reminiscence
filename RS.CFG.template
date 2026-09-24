@@ -28,6 +28,15 @@
 # top, full and fill if an older RS.CFG has them. (default: fit)
 #screen=top
 
+# Room palettes from a PALETTE\ folder beside this file, in place of
+# the colours the game chooses itself: PALETTE\L1R45.HEX for level 1
+# room 45, or PALETTE\L1.HEX for every room of level 1 without its
+# own. Each file is 16 lines of RRGGBB hex, as Lospec and Aseprite
+# export .hex palettes. Ctrl+P in play writes the room's current
+# colours under the room's name to the game folder, to start from.
+# See the README. (default: false)
+#palette_custom=true
+
 # --- machine ------------------------------------------------------
 
 # Leave a Mega STE at the speed it was set to before the game ran

@@ -120,6 +120,33 @@ Without the `.STM` files the game plays as it always did: each
 missing track is noted once in `RS.LOG` (with `logging=true`) and the
 scene runs silent.
 
+## Custom palettes
+
+The ST shows 16 colours at a time, so for every room the game picks
+16 from the 50 or more the Amiga graphics use. With
+`palette_custom=true` you can supply your own instead: 16 colours in a
+`.hex` file in a `PALETTE\` folder next to `FLASHBAK.TOS`, one
+`RRGGBB` per line, as Lospec and Aseprite export palettes. Every
+colour in the room then uses the nearest of the 16.
+
+For each room the game looks for, in order:
+
+| File              | Used for                                    |
+| ----------------- | ------------------------------------------- |
+| `L1R45.HEX`       | level 1, room 45                            |
+| `L1.HEX`          | any room of level 1 without its own file    |
+
+Level 2 is stored as two parts whose room numbers overlap, so its rooms
+are named by part as well: `L2_1R17.HEX` and `L2_2R17.HEX` (`L2.HEX`
+still covers the whole level). With neither file, the room keeps the
+colours the game chose.
+
+To start from the game's own choice, press **Ctrl+P** in play: the
+room's current 16 colours are written to the program folder as that
+room's file (e.g. `L1R45.HEX`), and the name is shown on screen. Edit
+it, then move it into `PALETTE\`, as it is for that room or renamed
+to `L1.HEX` for the whole level. Cutscenes keep their own colours.
+
 ## Configuration
 
 Options go in `RS.CFG`, a plain text file next to `FLASHBAK.TOS`,
@@ -133,6 +160,7 @@ with defaults named, so switching one is a matter of deleting a `#`.
 | -------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `skip_intro`               | ✓           | Go straight to the title screen, skipping the intro sequence                                                                                                                                                                   |
 | `screen`                   | ✓           | How 224 lines meet the 200-line screen: `fit` drops a row in eleven (default), `fill` crops 18 off the top and 6 off the bottom in play (12 and 12 elsewhere), `top` opens the top border, `full` both. Also on the title menu |
+| `palette_custom`           | ✓           | Room palettes from a `PALETTE\` folder, and Ctrl+P to write the current one out (see [Custom palettes](#custom-palettes))                                                                                                        |
 | `music`                    | ✓           | YM chip music, if the tracks have been built (see above)                                                                                                                                                                       |
 | `music_volume`             | ✓           | Chip music level, 0-100 (default 70, which sits it level with the sampled effects)                                                                                                                                             |
 | `cheats`                   | ✓           | `true` for all of them, or bits added together: 1 monsters die in one hit, 2 Conrad is never hit, 4 his life never drops                                                                                                       |

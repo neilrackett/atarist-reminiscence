@@ -251,6 +251,7 @@ Game::Game(SystemStub *stub, FileSystem *fs, const char *savePath, int level, Re
 	_cheats = cheats;
 #ifdef ATARIST
 	_stLogMemRoom = false;
+	_stPaletteMsgCounter = 0;
 #endif
 }
 
@@ -476,6 +477,7 @@ void Game::displayTitleScreenAmiga() {
 	info("Title screen");
 #ifdef ATARIST
 	ST_logFreeMemory("title");
+	ST_paletteForRoom(0, 0, -1);        // the title chooses its own colours
 #endif
 	_stub->useFillWindow(false);
 	static const char *FILENAME = "present.cmp";
@@ -757,6 +759,14 @@ void Game::mainLoop() {
 	if (g_options.enable_password_menu) {
 		printLevelCode();
 	}
+#ifdef ATARIST
+	if (_stPaletteMsgCounter != 0) {
+		// Ctrl+P's confirmation, drawn a frame at a time for a
+		// couple of seconds like the level code
+		--_stPaletteMsgCounter;
+		_vid.drawString(_stPaletteMsg, (Video::GAMESCREEN_W - strlen(_stPaletteMsg) * Video::CHAR_W) / 2, TEXT_ROW(16), 0xE7);
+	}
+#endif
 	if (_blinkingConradCounter != 0) {
 		--_blinkingConradCounter;
 	}
@@ -1044,6 +1054,15 @@ void Game::inp_handleSpecialKeys() {
 		_stub->_pi.load = false;
 	}
 #ifdef ATARIST
+	// Ctrl+P (palette_custom): the room's colours out to a .hex
+	if (_stub->_pi.dumpPalette) {
+		_stub->_pi.dumpPalette = false;
+		const char *name = ST_paletteDump(_currentLevel + 1, _res._levNum, _currentRoom);
+		if (name) {
+			snprintf(_stPaletteMsg, sizeof(_stPaletteMsg), "SAVED %s", name);
+			_stPaletteMsgCounter = 50;
+		}
+	}
 	// Ctrl+Up / Ctrl+Down: in Fill, slide the 200-row window over the
 	// 224-row picture, to find where it best sits. Up shows more of the
 	// top, Down more of the bottom; the rows shown go to RS.LOG.

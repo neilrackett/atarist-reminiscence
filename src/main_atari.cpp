@@ -136,6 +136,9 @@ static void initOptions() {
 	// Draw each frame on a hidden page and flip to it at the VBL:
 	// no tearing, but every frame waits for the beam.
 	g_options.double_buffer = false;
+	// Room palettes from PALETTE\ and Ctrl+P to write the current
+	// one out (see palette_st.cpp).
+	g_options.palette_custom = false;
 	// The STE's sample device. Off, nothing opens the sound DMA at
 	// all: no sampled effects, and the chip music (music=true) is
 	// unaffected because that drives the YM instead. Exists because
@@ -174,6 +177,7 @@ static void initOptions() {
 		{ "overscan_bottom", &g_options.overscan_bottom },
 		{ "megaste_speedup", &g_options.megaste_speedup },
 		{ "double_buffer", &g_options.double_buffer },
+		{ "palette_custom", &g_options.palette_custom },
 		{ "ste_sound", &g_options.ste_sound },
 		{ 0, 0 }
 	};

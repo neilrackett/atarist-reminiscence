@@ -1275,6 +1275,7 @@ void Video::AMIGA_decodeLev(int level, int room) {
 	// The ST draws the room straight into the planar layer with the
 	// colour remap applied, so the palettes (and therefore the
 	// remap) have to be known before the first tile is drawn.
+	ST_paletteForRoom(level + 1, _res->_levNum, room);
 	AMIGA_setLevelPalettes(level, tmp);
 	ST_getRemap();                      // the remap is lazy: build it now, so the
 	                                    // generation the caches key on is current
