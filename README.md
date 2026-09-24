@@ -123,7 +123,9 @@ scene runs silent.
 ## Custom palettes
 
 The ST shows 16 colours at a time, so for every room the game picks
-16 from the 50 or more the Amiga graphics use. With
+16 from the 50 or more the Amiga graphics use, favouring the colours
+that cover most of the level's rooms and the ones Conrad and the
+enemies are drawn in. With
 `palette_custom=true` you can supply your own instead: 16 colours in a
 `.hex` file in a `PALETTE\` folder next to `FLASHBAK.TOS`, one
 `RRGGBB` per line, as Lospec and Aseprite export palettes. Every
@@ -269,7 +271,7 @@ including:
 
 - Simplified, non-STE sound effects using YM
 - We're using the Amiga menu (level selector), let's see if we can implement features from the DOS menu, including difficulty selection and save/load functionality
-- We've got ~25fps on an 8MHz machine, can we hit 30 (the maximum the game supports)?
+- Play holds ~28fps on an 8MHz ST, even in a busy room, the same as a Mega STE: the rest of the way to 30 (the game's maximum) is lost to the 200Hz timer rounding each frame's pause. Can we pace it more finely?
 - Can we achieve smooth cutscenes playback without dropping frames?
 
 ## Building
