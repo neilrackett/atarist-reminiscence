@@ -22,6 +22,7 @@
 #ifdef ATARIST
 
 #include "intern.h"
+#include <string.h>
 
 enum {
 	kSTLayerW = 256,
@@ -31,6 +32,28 @@ enum {
 	kSTPlaneBytes = kSTRowBytes * kSTLayerH,
 	kSTLayerSize = kSTPlaneBytes + kSTPrioRowBytes * kSTLayerH,
 };
+
+// One row of N longs (a dirty run of 2-5 groups) as a movem pair,
+// where a word loop runs ~50 cycles a group. One group is better as
+// two moves (movem's fixed cost eats the gain), and wider runs are
+// rarer and at the register limit, so callers keep loops for those.
+template <int N> static inline void copyRowN(uint32_t *dst, const uint32_t *src);
+#ifdef __m68k__
+#define COPY_ROW_N(N, REGS, ...) \
+	template <> inline void copyRowN<N>(uint32_t *dst, const uint32_t *src) { \
+		__asm__ volatile("movem.l (%1)," REGS "\n\tmovem.l " REGS ",(%0)" \
+			: : "a"(dst), "a"(src) : "memory", __VA_ARGS__); \
+	}
+COPY_ROW_N(4, "%%d0-%%d3", "d0","d1","d2","d3")
+COPY_ROW_N(6, "%%d0-%%d5", "d0","d1","d2","d3","d4","d5")
+COPY_ROW_N(8, "%%d0-%%d7", "d0","d1","d2","d3","d4","d5","d6","d7")
+COPY_ROW_N(10, "%%d0-%%d7/%%a2-%%a3", "d0","d1","d2","d3","d4","d5","d6","d7","a2","a3")
+#undef COPY_ROW_N
+#else
+template <int N> static inline void copyRowN(uint32_t *dst, const uint32_t *src) {
+	memcpy(dst, src, N * 4);
+}
+#endif
 
 // sprite draw flags (replacing Video::drawSpriteSub1..6)
 enum {
@@ -121,6 +144,13 @@ enum { kSTConradJacketEntry = 0x17 };
 void ST_prioTouchedRect(int x, int y, int w, int h);
 void ST_prioTouched();
 bool ST_takePrioRect(int *x0, int *y0, int *x1, int *y1);
+
+// the two 16-pixel groups from x (a multiple of 8) and h rows from y,
+// planes and priority plane, to and from a buffer of ST_kRectBytes(h)
+inline int ST_kRectBytes(int h) { return h * (16 + 4); }
+void ST_layerSaveRect(const uint8_t *layer, int x, int y, int h, uint8_t *out);
+void ST_layerLoadRect(uint8_t *layer, int x, int y, int h, const uint8_t *in);
+void ST_layerCopyRect(uint8_t *dst, const uint8_t *src, int x, int y, int h);
 
 // whole-layer copy (planes via the BLiTTER where present)
 void ST_copyLayer(uint8_t *dst, const uint8_t *src);

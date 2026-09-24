@@ -1467,7 +1467,40 @@ static bool buildShifted(SprEntry *e, int phase) {
 	return true;
 }
 
+// Is any priority bit set under groups [g0, g1] of rows [y0, y1)? A
+// sprite drawn "under" the foreground only differs from a plain draw
+// where there is foreground, and most of the time there is none under
+// Conrad or an enemy: the check is a few hundred word reads, where the
+// UNDER blit is STDL's per-pixel CPU route - 4.9ms a character on an
+// STE, measured, against the BLiTTER or the aligned copy without it.
+static bool prioUnder(const uint8_t *layer, int g0, int g1, int y0, int y1) {
+	if (y0 < 0) y0 = 0;
+	if (y1 > kSTLayerH) y1 = kSTLayerH;
+	if (g0 < 0) g0 = 0;
+	if (g1 > kSTLayerW / 16 - 1) g1 = kSTLayerW / 16 - 1;
+	if (y0 >= y1 || g0 > g1) {
+		return false;
+	}
+	const uint16_t *row = (const uint16_t *)(layer + kSTPlaneBytes + y0 * kSTPrioRowBytes) + g0;
+	const int n = g1 - g0 + 1;
+	uint16_t any = 0;
+	for (int y = y1 - y0; --y >= 0; row += kSTPrioRowBytes / 2) {
+		for (int i = 0; i < n; ++i) {
+			any |= row[i];
+		}
+		if (any) {
+			return true;
+		}
+	}
+	return false;
+}
+
 static void blitBaked(uint8_t *layer, SprEntry *e, int x, int y, bool respectPrio, bool setPrio) {
+	if (respectPrio && !setPrio) {
+		const int dx0 = x + e->offG * 16;
+		const int y0 = y + e->offY;
+		respectPrio = prioUnder(layer, dx0 >> 4, (dx0 + e->useG * 16) >> 4, y0, y0 + e->useH);
+	}
 	// A draw that neither reads nor sets the priority plane goes to
 	// the maskless view: on the masked one STDL's default upkeep
 	// cleared the plane's bits under every opaque pixel, and nothing
@@ -2858,6 +2891,32 @@ static void fillBytes(uint8_t *dst, int bytes, uint32_t a, uint32_t b) {
 		*d32++ = b;
 	}
 #endif
+}
+
+void ST_layerSaveRect(const uint8_t *layer, int x, int y, int h, uint8_t *out) {
+	const int g = x >> 4;
+	for (int j = 0; j < h; ++j, out += 20) {
+		memcpy(out, layer + (y + j) * kSTRowBytes + g * 8, 16);
+		memcpy(out + 16, layer + kSTPlaneBytes + (y + j) * kSTPrioRowBytes + g * 2, 4);
+	}
+}
+
+void ST_layerLoadRect(uint8_t *layer, int x, int y, int h, const uint8_t *in) {
+	const int g = x >> 4;
+	ST_prioTouchedRect(g * 16, y, 32, h);
+	for (int j = 0; j < h; ++j, in += 20) {
+		memcpy(layer + (y + j) * kSTRowBytes + g * 8, in, 16);
+		memcpy(layer + kSTPlaneBytes + (y + j) * kSTPrioRowBytes + g * 2, in + 16, 4);
+	}
+}
+
+void ST_layerCopyRect(uint8_t *dst, const uint8_t *src, int x, int y, int h) {
+	const int g = x >> 4;
+	ST_prioTouchedRect(g * 16, y, 32, h);
+	for (int j = 0; j < h; ++j) {
+		memcpy(dst + (y + j) * kSTRowBytes + g * 8, src + (y + j) * kSTRowBytes + g * 8, 16);
+		memcpy(dst + kSTPlaneBytes + (y + j) * kSTPrioRowBytes + g * 2, src + kSTPlaneBytes + (y + j) * kSTPrioRowBytes + g * 2, 4);
+	}
 }
 
 void ST_copyLayer(uint8_t *dst, const uint8_t *src) {

@@ -22,11 +22,13 @@ uint32_t g_debugMask;
 // GEMDOS console output lands in screen RAM, so route diagnostics to
 // a log file instead of scribbling over the game. Each line is an
 // open/append/close of RS.LOG, so info and warnings are only
-// written with logging=true in RS.CFG; errors always are.
+// written with logging=true in RS.CFG; errors always are. Binary mode
+// with an explicit CRLF: a text-mode write makes the library emulate
+// fstat, whose date conversion costs ~130ms a line on an 8MHz ST.
 static void logLine(const char *tag, const char *buf) {
-	FILE *fp = fopen("RS.LOG", "a");
+	FILE *fp = fopen("RS.LOG", "ab");
 	if (fp) {
-		fprintf(fp, "%s%s\n", tag, buf);
+		fprintf(fp, "%s%s\r\n", tag, buf);
 		fclose(fp);
 	}
 }

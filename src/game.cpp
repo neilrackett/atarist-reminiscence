@@ -253,6 +253,10 @@ Game::Game(SystemStub *stub, FileSystem *fs, const char *savePath, int level, Re
 	_stLogMemRoom = false;
 	_stPaletteMsgCounter = 0;
 	_stPaletteReloaded = false;
+	_stIconShown = -1;
+	_stIconY = 0;
+	_stIconGen = 0xFFFF;
+	_stIconPatchSaved = false;
 #endif
 }
 
@@ -1117,20 +1121,53 @@ void Game::inp_handleSpecialKeys() {
 
 void Game::drawCurrentInventoryItem() {
 	uint16_t src = _pgeLive[0].current_inventory_PGE;
+#ifdef ATARIST
+	// Placed for the mode. Fit drops rows 12 and 23, and at the
+	// engine's y=8 the icon's bottom row was 23 - a flat base; from 7 it
+	// spans 7-22 and loses only row 12, in the middle, where a missing
+	// line hides in the shading. Fill in play starts at row 18, so there
+	// it sits just under that edge.
+	const int iconY = (g_options.screen == kScreenFill) ? 19 : 7;
+	const int want = (src != 0xFF) ? _res._pgeInit[src].icon_num : -1;
+	if (want >= 0) {
+		_currentIcon = want;
+	}
+	// The icon goes into the room's background layer too, and only when
+	// it changes: from there every restore puts it back, so a sprite
+	// passing under it needs nothing more, and a frame where nothing
+	// changed costs nothing. Drawn afresh every frame it cost ~3ms on an
+	// STE - a priority-marking blit takes STDL's CPU route - plus the
+	// restore and the copy of its blocks. A new room rebuilds the
+	// background without it; the patch under it is kept so that a
+	// change of item, or none, puts the scenery back.
+	if (_vid._stBackGen != _stIconGen) {
+		_stIconGen = _vid._stBackGen;
+		_stIconShown = -1;
+		_stIconPatchSaved = false;
+	}
+	if (want == _stIconShown && iconY == _stIconY) {
+		return;
+	}
+	if (_stIconPatchSaved) {
+		ST_layerLoadRect(_vid._backLayer, 232, _stIconY, 16, _stIconPatch);
+		ST_layerCopyRect(_vid._frontLayer, _vid._backLayer, 232, _stIconY, 16);
+		_vid.markBlockAsDirty(232, _stIconY, 16, 16, _vid._layerScale);
+		_stIconPatchSaved = false;
+	}
+	if (want >= 0) {
+		ST_layerSaveRect(_vid._backLayer, 232, iconY, 16, _stIconPatch);
+		_stIconPatchSaved = true;
+		drawIcon(want, 232, iconY, 0xA, _vid._backLayer);
+		drawIcon(want, 232, iconY, 0xA);
+	}
+	_stIconShown = want;
+	_stIconY = iconY;
+#else
 	if (src != 0xFF) {
 		_currentIcon = _res._pgeInit[src].icon_num;
-#ifdef ATARIST
-		// Placed for the mode. Fit drops rows 12 and 23, and at the
-		// engine's y=8 the icon's bottom row was 23 - a flat base; from
-		// 7 it spans 7-22 and loses only row 12, in the middle, where a
-		// missing line hides in the shading. Fill in play starts at row
-		// 18, so there it sits just under that edge.
-		const int iconY = (g_options.screen == kScreenFill) ? 19 : 7;
-		drawIcon(_currentIcon, 232, iconY, 0xA);
-#else
 		drawIcon(_currentIcon, 232, 8, 0xA);
-#endif
 	}
+#endif
 }
 
 void Game::showFinalScore() {
@@ -2458,7 +2495,7 @@ void Game::loadLevelData() {
 	}
 }
 
-void Game::drawIcon(uint8_t iconNum, int16_t x, int16_t y, uint8_t colMask) {
+void Game::drawIcon(uint8_t iconNum, int16_t x, int16_t y, uint8_t colMask, uint8_t *layer) {
 	uint8_t scratch[16 * 16];
 	uint8_t *buf = scratch;
 #ifdef ATARIST
@@ -2531,7 +2568,10 @@ void Game::drawIcon(uint8_t iconNum, int16_t x, int16_t y, uint8_t colMask) {
 drawCached:
 #endif
 #ifdef ATARIST
-	ST_drawSpriteCached(_vid._frontLayer, buf, 16, x, y, 16, 16, colMask << 4, 0, (colMask & 8) != 0);
+	ST_drawSpriteCached(layer ? layer : _vid._frontLayer, buf, 16, x, y, 16, 16, colMask << 4, 0, (colMask & 8) != 0);
+	if (layer) {
+		return;                        // not the visible layer
+	}
 #else
 	_vid.drawSpriteSub1(buf, _vid._frontLayer + x + y * _vid._w, 16, 16, 16, colMask << 4);
 #endif

@@ -30,6 +30,9 @@ Video::Video(Resource *res, SystemStub *stub, WidescreenMode widescreenMode)
 	_backLayer = (uint8_t *)calloc(1,_layerSize);
 	_tempLayer = (uint8_t *)calloc(1, _layerSize);
 	_tempLayer2 = (uint8_t *)calloc(1, _layerSize);
+#ifdef ATARIST
+	_stBackGen = 0;
+#endif
 #ifndef ATARIST
 	// the ST tracks block state in _blkDirty/_blkShown/_blkOwed instead
 	_screenBlocks = (uint8_t *)calloc(1, (_w / SCREENBLOCK_W) * (_h / SCREENBLOCK_H));
@@ -105,6 +108,14 @@ static const uint16_t kColsTo[16] = {
 // out of registers in the walk below and spilled the loop counters
 // to the frame, so every iteration of these was three memory
 // read-modify-writes before it moved a byte.
+template <int N> static void restoreRows(uint32_t *d, const uint32_t *s, int lines) {
+	for (int line = lines; --line >= 0; ) {
+		copyRowN<N>(d, s);
+		s += kSTRowBytes / 4;
+		d += kSTRowBytes / 4;
+	}
+}
+
 static void restorePlanes(uint8_t *dst, const uint8_t *src, int groups, int lines) {
 	uint32_t *d = (uint32_t *)dst;
 	const uint32_t *s = (const uint32_t *)src;
@@ -116,6 +127,12 @@ static void restorePlanes(uint8_t *dst, const uint8_t *src, int groups, int line
 			d += kSTRowBytes / 4;
 		}
 		return;
+	}
+	switch (groups) {
+	case 2: restoreRows<4>(d, s, lines); return;
+	case 3: restoreRows<6>(d, s, lines); return;
+	case 4: restoreRows<8>(d, s, lines); return;
+	case 5: restoreRows<10>(d, s, lines); return;
 	}
 	const int skip = (kSTRowBytes >> 2) - groups * 2;
 	for (int line = lines; --line >= 0; ) {
@@ -1317,6 +1334,7 @@ void Video::AMIGA_decodeLev(int level, int room) {
 	free(buf);
 #ifdef ATARIST
 	ST_copyLayer(_backLayer, _frontLayer);
+	++_stBackGen;
 #else
 	memcpy(_backLayer, _frontLayer, _layerSize);
 	AMIGA_setLevelPalettes(level, tmp);

@@ -70,6 +70,8 @@ struct SystemStub_STDL : SystemStub {
 	uint8_t *_shadow;       // last converted chunky frame
 	bool _shadowValid;
 	uint8_t _yMap[kMaxSrcH];   // source line -> screen line
+	uint16_t _yOff[kMaxSrcH];  // _yMap * the screen stride, see rowOffsets
+	void rowOffsets();
 	uint8_t _yDrop[kMaxSrcH];  // 1 = line not displayed
 	bool _ovscOpen;            // top border open: display starts line 34
 	bool _yLinear;             // no line dropped: rows step by a constant
@@ -190,6 +192,24 @@ static inline void copyRow128(uint32_t *dst, const uint32_t *src) {
 #endif
 }
 
+// Rows of one fixed width; yOff 0 means every line shown, a constant
+// screen stride apart (the common case, no table reads).
+template <int N> static void copyRows(uint8_t *d, const uint8_t *s, int y, int h, const uint16_t *yOff, const uint8_t *yDrop, uint8_t *screen) {
+	if (!yOff) {
+		for (int j = h; --j >= 0; ) {
+			copyRowN<N>((uint32_t *)d, (const uint32_t *)s);
+			s += kSTRowBytes;
+			d += kScreenStride;
+		}
+		return;
+	}
+	for (int j = y; j < y + h; ++j, s += kSTRowBytes) {
+		if (!yDrop[j]) {
+			copyRowN<N>((uint32_t *)(screen + yOff[j]), (const uint32_t *)s);
+		}
+	}
+}
+
 // Copy a planar layer region to the screen: pure word moves with the
 // 224->200 line squash and horizontal centring. x/w widen to 16px.
 void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *layer) {
@@ -264,6 +284,24 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 		}
 	}
 	const int n32 = bytes >> 3;
+	if (n32 >= 2 && n32 <= 5) {
+		const uint8_t *s = layer + y * kSTRowBytes + (gx0 << 3);
+		uint8_t *d = 0;
+		const uint16_t *yOff = 0;
+		if (_yLinear) {
+			d = _screen->pixels + _yMap[y] * kScreenStride + xOffBytes + (gx0 << 3);
+		} else {
+			yOff = _yOff;
+		}
+		uint8_t *base = _screen->pixels + xOffBytes + (gx0 << 3);
+		switch (n32) {
+		case 2: copyRows<4>(d, s, y, h, yOff, _yDrop, base); break;
+		case 3: copyRows<6>(d, s, y, h, yOff, _yDrop, base); break;
+		case 4: copyRows<8>(d, s, y, h, yOff, _yDrop, base); break;
+		default: copyRows<10>(d, s, y, h, yOff, _yDrop, base); break;
+		}
+		return;
+	}
 	// With every line displayed the destination row is a constant
 	// step from the last, so the per-row address arithmetic - two
 	// table reads and two products - is hoisted out of the loop.
@@ -298,7 +336,7 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 			continue;
 		}
 		const uint32_t *src = (const uint32_t *)(layer + sy * kSTRowBytes + (gx0 << 3));
-		uint32_t *dst = (uint32_t *)(_screen->pixels + _yMap[sy] * kScreenStride + xOffBytes + (gx0 << 3));
+		uint32_t *dst = (uint32_t *)(_screen->pixels + _yOff[sy] + xOffBytes + (gx0 << 3));
 		if (bytes == kSTRowBytes) {
 			copyRow128(dst, src);       // whole row: the cutscene page flip
 			continue;
@@ -557,11 +595,21 @@ int SystemStub_STDL::setScreenMode(int mode) {
 	}
 	// The surface may have changed shape and the shadow no longer
 	// describes what is on it: black until the caller repaints.
+	rowOffsets();
 	_shadowValid = false;
 	clearScreen();
 	writeHwPalette();
 	_mode = mode;
 	return mode;
+}
+
+// Each source row's byte offset on the screen, kept with _yMap: the
+// copies below read it once a row where they multiplied the mapped
+// row by the stride, most of a sprite-sized copy's per-row overhead.
+void SystemStub_STDL::rowOffsets() {
+	for (int y = 0; y < kMaxSrcH; ++y) {
+		_yOff[y] = (uint16_t)(_yMap[y] * kScreenStride);
+	}
 }
 
 // Fill shows 200 of the 224 rows, from _fillTop down - and where that
@@ -578,6 +626,7 @@ void SystemStub_STDL::buildFillTable() {
 		_yDrop[y] = off ? 1 : 0;
 		_yMap[y] = off ? 0 : (uint8_t)(y - _fillTop);
 	}
+	rowOffsets();
 }
 
 void SystemStub_STDL::applyFillTop(int top) {
@@ -1755,7 +1804,7 @@ void SystemStub_STDL::convertRegion(int x, int y, int w, int h, const uint8_t *b
 		}
 		const uint8_t *src = buf + sy * pitch + x0;
 		uint32_t *sh = (uint32_t *)(_shadow + sy * kMaxSrcW + x0);
-		uint16_t *dst = (uint16_t *)(_screen->pixels + _yMap[sy] * kScreenStride + ((x0 + _xOffset) >> 4) * 8);
+		uint16_t *dst = (uint16_t *)(_screen->pixels + _yOff[sy] + ((x0 + _xOffset) >> 4) * 8);
 		for (int g = 0; g < groups; ++g) {
 			const uint32_t *s32 = (const uint32_t *)src;
 			if (useShadow) {

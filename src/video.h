@@ -68,6 +68,9 @@ struct Video {
 	uint16_t _blkOwed[kBlockRows];
 	// put the room back in the front layer after a cutscene
 	void ST_rebakeRoom();
+	// bumped whenever the background layer is rebuilt (a room decode):
+	// anything drawn into it since is gone
+	uint16_t _stBackGen;
 	// give back the level's tile pool and sprite bakes
 	void ST_releaseLevelCaches();
 	// restore only recently drawn blocks from the back layer

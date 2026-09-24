@@ -136,8 +136,14 @@ struct Game {
 	char _stPaletteMsg[24];
 	uint8_t _stPaletteMsgCounter;
 	bool _stPaletteReloaded;
+	// the inventory icon as drawn into the background layer (see
+	// drawCurrentInventoryItem): which, where, and what it covers
+	int16_t _stIconShown, _stIconY;
+	uint16_t _stIconGen;
+	bool _stIconPatchSaved;
+	uint8_t _stIconPatch[16 * 20];
 #endif
-	void drawIcon(uint8_t iconNum, int16_t x, int16_t y, uint8_t colMask);
+	void drawIcon(uint8_t iconNum, int16_t x, int16_t y, uint8_t colMask, uint8_t *layer = 0);
 	void drawCurrentInventoryItem();
 	void printLevelCode();
 	void showFinalScore();
