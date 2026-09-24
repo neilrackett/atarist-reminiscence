@@ -33,11 +33,15 @@ enum {
 	kSTLayerSize = kSTPlaneBytes + kSTPrioRowBytes * kSTLayerH,
 };
 
-// One row of N longs (a dirty run of 2-5 groups) as a movem pair,
-// where a word loop runs ~50 cycles a group. One group is better as
-// two moves (movem's fixed cost eats the gain), and wider runs are
-// rarer and at the register limit, so callers keep loops for those.
+// One row of N longs: a group (two longs) as two moves, 2-5 groups -
+// a sprite's dirty run - as one movem pair where a word loop runs ~50
+// cycles a group, and a whole 128-byte layer row as three, at movem's
+// 4.5 cycles a byte against the loop's 5+ (the cutscene page flip).
 template <int N> static inline void copyRowN(uint32_t *dst, const uint32_t *src);
+template <> inline void copyRowN<2>(uint32_t *dst, const uint32_t *src) {
+	dst[0] = src[0];
+	dst[1] = src[1];
+}
 #ifdef __m68k__
 #define COPY_ROW_N(N, REGS, ...) \
 	template <> inline void copyRowN<N>(uint32_t *dst, const uint32_t *src) { \
@@ -49,11 +53,47 @@ COPY_ROW_N(6, "%%d0-%%d5", "d0","d1","d2","d3","d4","d5")
 COPY_ROW_N(8, "%%d0-%%d7", "d0","d1","d2","d3","d4","d5","d6","d7")
 COPY_ROW_N(10, "%%d0-%%d7/%%a2-%%a3", "d0","d1","d2","d3","d4","d5","d6","d7","a2","a3")
 #undef COPY_ROW_N
+template <> inline void copyRowN<32>(uint32_t *dst, const uint32_t *src) {
+	__asm__ volatile(
+		"movem.l (%1)+,%%d0-%%d7/%%a2-%%a4\n\t"
+		"movem.l %%d0-%%d7/%%a2-%%a4,(%0)\n\t"
+		"movem.l (%1)+,%%d0-%%d7/%%a2-%%a4\n\t"
+		"movem.l %%d0-%%d7/%%a2-%%a4,44(%0)\n\t"
+		"movem.l (%1)+,%%d0-%%d7/%%a2-%%a3\n\t"
+		"movem.l %%d0-%%d7/%%a2-%%a3,88(%0)"
+		: "+a"(dst), "+a"(src)
+		:
+		: "d0","d1","d2","d3","d4","d5","d6","d7","a2","a3","a4","memory");
+}
 #else
 template <int N> static inline void copyRowN(uint32_t *dst, const uint32_t *src) {
 	memcpy(dst, src, N * 4);
 }
 #endif
+
+// h rows of N longs, each side a fixed stride apart
+template <int N> static inline void copyRowsN(uint8_t *d, int dStride, const uint8_t *s, int sStride, int h) {
+	for (int j = h; --j >= 0; ) {
+		copyRowN<N>((uint32_t *)d, (const uint32_t *)s);
+		s += sStride;
+		d += dStride;
+	}
+}
+
+// h rows of a run of whole groups, through copyRowN where it has the
+// width - 1-5 groups or a whole layer row; false for any other, which
+// the caller copies its own way
+static inline bool ST_copyGroupRows(uint8_t *d, int dStride, const uint8_t *s, int sStride, int groups, int h) {
+	switch (groups) {
+	case 1: copyRowsN<2>(d, dStride, s, sStride, h); return true;
+	case 2: copyRowsN<4>(d, dStride, s, sStride, h); return true;
+	case 3: copyRowsN<6>(d, dStride, s, sStride, h); return true;
+	case 4: copyRowsN<8>(d, dStride, s, sStride, h); return true;
+	case 5: copyRowsN<10>(d, dStride, s, sStride, h); return true;
+	case 16: copyRowsN<32>(d, dStride, s, sStride, h); return true;
+	}
+	return false;
+}
 
 // sprite draw flags (replacing Video::drawSpriteSub1..6)
 enum {
@@ -133,11 +173,6 @@ void ST_fillArea(uint8_t *layer, const int16_t *pts, int crx, int cry,
 bool ST_drawPolygonFast(uint8_t *layer, const void *pts, int n,
 		uint8_t colour8, int crx, int cry, int crw, int crh);
 
-// Conrad's jacket: logical entry 7 of the Amiga sprite palette
-// (bank 1). The quantiser pins this entry's cluster so a screenful
-// of scenery can never vote the jacket into another colour's slot.
-enum { kSTConradJacketEntry = 0x17 };
-
 // The priority plane changes only where something marks or clears
 // it; the rest of a frame need not have it restored. Writers report
 // what they touched, and the restore asks once a frame.
@@ -145,11 +180,10 @@ void ST_prioTouchedRect(int x, int y, int w, int h);
 void ST_prioTouched();
 bool ST_takePrioRect(int *x0, int *y0, int *x1, int *y1);
 
-// the two 16-pixel groups from x (a multiple of 8) and h rows from y,
-// planes and priority plane, to and from a buffer of ST_kRectBytes(h)
-inline int ST_kRectBytes(int h) { return h * (16 + 4); }
-void ST_layerSaveRect(const uint8_t *layer, int x, int y, int h, uint8_t *out);
-void ST_layerLoadRect(uint8_t *layer, int x, int y, int h, const uint8_t *in);
+// the two 16-pixel groups from the one holding x, h rows from y,
+// planes and priority plane, to and from a buffer of 5 longs a row
+void ST_layerSaveRect(const uint8_t *layer, int x, int y, int h, uint32_t *out);
+void ST_layerLoadRect(uint8_t *layer, int x, int y, int h, const uint32_t *in);
 void ST_layerCopyRect(uint8_t *dst, const uint8_t *src, int x, int y, int h);
 
 // whole-layer copy (planes via the BLiTTER where present)
@@ -188,6 +222,9 @@ void ST_setAmigaColourMap(const uint8_t *map256);
 // (see Video::AMIGA_setLevelPalettes); null for none - the title, and
 // cutscenes, which have their own mapping - so every entry counts once
 void ST_setColourWeights(const uint16_t *weights256);
+// the halves of the object palette a level's enemies are drawn with,
+// from its monster list: bit 0 entries 0-7, bit 1 entries 8-15
+uint8_t ST_enemyHalves(int level);
 const char *ST_paletteDump(int level, int levNum, int room);
 // Ctrl+Shift+P: rescan PALETTE\ and read the room's file again on its
 // next load; and the file in use, "" for none

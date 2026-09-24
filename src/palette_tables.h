@@ -579,8 +579,4 @@ static const uint16_t kSTColourUse[7][6][16] = {
 	},
 };
 
-// per level, the halves of the object palette its enemies are drawn
-// with: bit 0 entries 0-7, bit 1 entries 8-15
-static const uint8_t kSTEnemyHalves[7] = { 1, 3, 1, 3, 3, 2, 2 };
-
 #endif

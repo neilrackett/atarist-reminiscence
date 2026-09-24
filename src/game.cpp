@@ -155,6 +155,17 @@ struct IconCache {
 };
 static IconCache _icnCache;
 
+// On the Amiga data a monster has no palette of its own: its slot is
+// loaded with half of the object palette, entries (monster & 1) * 8
+// on (loadMonsterSprites).
+uint8_t ST_enemyHalves(int level) {
+	uint8_t halves = 0;
+	for (const uint8_t *m = Game::_monsterListLevels[level]; *m != 0xFF; m += 2) {
+		halves |= 1 << (m[1] & 1);
+	}
+	return halves;
+}
+
 // Presentation splash: black screen, credit lines centred, shown as
 // soon as the game font is loaded and held while the rest of the
 // startup work happens behind it. Line one is drawn double-height
@@ -256,7 +267,6 @@ Game::Game(SystemStub *stub, FileSystem *fs, const char *savePath, int level, Re
 	_stIconShown = -1;
 	_stIconY = 0;
 	_stIconGen = 0xFFFF;
-	_stIconPatchSaved = false;
 #endif
 }
 
@@ -759,6 +769,9 @@ void Game::mainLoop() {
 		pge_updateZoom();
 	}
 	prepareAnims();
+#ifdef ATARIST
+	ST_placeIcon();
+#endif
 	drawAnims();
 	drawCurrentInventoryItem();
 	drawLevelTexts();
@@ -1119,50 +1132,63 @@ void Game::inp_handleSpecialKeys() {
 	}
 }
 
-void Game::drawCurrentInventoryItem() {
-	uint16_t src = _pgeLive[0].current_inventory_PGE;
 #ifdef ATARIST
+// The inventory icon lives in the room's background layer, put there
+// only when it changes: from there every restore puts it back, and a
+// frame where nothing changed costs nothing. Drawn afresh every frame
+// it cost ~3ms on an STE - a priority-marking blit takes STDL's CPU
+// route - plus the restore and the copy of its blocks. A new room
+// rebuilds the background without it; the patch under it is kept so
+// that a change of item, or none, puts the scenery back. This runs
+// before the sprites, so copying the change onto the visible layer
+// cannot wipe one.
+void Game::ST_placeIcon() {
 	// Placed for the mode. Fit drops rows 12 and 23, and at the
 	// engine's y=8 the icon's bottom row was 23 - a flat base; from 7 it
 	// spans 7-22 and loses only row 12, in the middle, where a missing
 	// line hides in the shading. Fill in play starts at row 18, so there
 	// it sits just under that edge.
 	const int iconY = (g_options.screen == kScreenFill) ? 19 : 7;
+	const uint16_t src = _pgeLive[0].current_inventory_PGE;
 	const int want = (src != 0xFF) ? _res._pgeInit[src].icon_num : -1;
-	if (want >= 0) {
-		_currentIcon = want;
-	}
-	// The icon goes into the room's background layer too, and only when
-	// it changes: from there every restore puts it back, so a sprite
-	// passing under it needs nothing more, and a frame where nothing
-	// changed costs nothing. Drawn afresh every frame it cost ~3ms on an
-	// STE - a priority-marking blit takes STDL's CPU route - plus the
-	// restore and the copy of its blocks. A new room rebuilds the
-	// background without it; the patch under it is kept so that a
-	// change of item, or none, puts the scenery back.
 	if (_vid._stBackGen != _stIconGen) {
 		_stIconGen = _vid._stBackGen;
 		_stIconShown = -1;
-		_stIconPatchSaved = false;
 	}
 	if (want == _stIconShown && iconY == _stIconY) {
 		return;
 	}
-	if (_stIconPatchSaved) {
-		ST_layerLoadRect(_vid._backLayer, 232, _stIconY, 16, _stIconPatch);
-		ST_layerCopyRect(_vid._frontLayer, _vid._backLayer, 232, _stIconY, 16);
-		_vid.markBlockAsDirty(232, _stIconY, 16, 16, _vid._layerScale);
-		_stIconPatchSaved = false;
+	const int oldY = (_stIconShown >= 0) ? _stIconY : -1;
+	if (oldY >= 0) {
+		ST_layerLoadRect(_vid._backLayer, 232, oldY, 16, _stIconPatch);
 	}
 	if (want >= 0) {
 		ST_layerSaveRect(_vid._backLayer, 232, iconY, 16, _stIconPatch);
-		_stIconPatchSaved = true;
 		drawIcon(want, 232, iconY, 0xA, _vid._backLayer);
-		drawIcon(want, 232, iconY, 0xA);
+	}
+	if (oldY >= 0) {
+		ST_layerCopyRect(_vid._frontLayer, _vid._backLayer, 232, oldY, 16);
+		_vid.markBlockAsDirty(232, oldY, 16, 16, _vid._layerScale);
+	}
+	if (want >= 0 && iconY != oldY) {
+		ST_layerCopyRect(_vid._frontLayer, _vid._backLayer, 232, iconY, 16);
+		_vid.markBlockAsDirty(232, iconY, 16, 16, _vid._layerScale);
 	}
 	_stIconShown = want;
 	_stIconY = iconY;
+}
+#endif
+
+void Game::drawCurrentInventoryItem() {
+#ifdef ATARIST
+	// The icon is already in place (ST_placeIcon). The engine draws it
+	// over everything, so it goes back on top only where a sprite was
+	// drawn across it this frame.
+	if (_stIconShown >= 0 && _vid.ST_blocksDirty(232, _stIconY, 16, 16)) {
+		drawIcon(_stIconShown, 232, _stIconY, 0xA);
+	}
 #else
+	uint16_t src = _pgeLive[0].current_inventory_PGE;
 	if (src != 0xFF) {
 		_currentIcon = _res._pgeInit[src].icon_num;
 		drawIcon(_currentIcon, 232, 8, 0xA);
@@ -2568,8 +2594,12 @@ void Game::drawIcon(uint8_t iconNum, int16_t x, int16_t y, uint8_t colMask, uint
 drawCached:
 #endif
 #ifdef ATARIST
-	ST_drawSpriteCached(layer ? layer : _vid._frontLayer, buf, 16, x, y, 16, 16, colMask << 4, 0, (colMask & 8) != 0);
-	if (layer) {
+	// Into another layer - the icon's place in the background - it
+	// leaves the priority plane alone, so sprites crossing it keep the
+	// fast path; drawCurrentInventoryItem puts it back on top of them.
+	const bool front = !layer || layer == _vid._frontLayer;
+	ST_drawSpriteCached(front ? _vid._frontLayer : layer, buf, 16, x, y, 16, 16, colMask << 4, 0, front && (colMask & 8) != 0);
+	if (!front) {
 		return;                        // not the visible layer
 	}
 #else

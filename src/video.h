@@ -68,13 +68,19 @@ struct Video {
 	uint16_t _blkOwed[kBlockRows];
 	// put the room back in the front layer after a cutscene
 	void ST_rebakeRoom();
-	// bumped whenever the background layer is rebuilt (a room decode):
-	// anything drawn into it since is gone
+	// bumped whenever the background layer is rebuilt: anything drawn
+	// into it since is gone. In play the room decode is its only
+	// writer (the title's copies happen with no level running, and a
+	// level always starts with a decode); anything else that writes it
+	// mid-level must bump this too, or the inventory icon's saved patch
+	// goes back onto the wrong scenery.
 	uint16_t _stBackGen;
 	// give back the level's tile pool and sprite bakes
 	void ST_releaseLevelCaches();
 	// restore only recently drawn blocks from the back layer
 	void ST_restoreDirty();
+	// has anything been drawn in these blocks since the last update?
+	bool ST_blocksDirty(int x, int y, int w, int h) const;
 #endif
 	uint8_t _unkPalSlot1, _unkPalSlot2;
 	uint8_t _mapPalSlot1, _mapPalSlot2, _mapPalSlot3, _mapPalSlot4;

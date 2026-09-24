@@ -134,12 +134,5 @@ for L in range(7):
     out.append('\t},')
 out.append('};')
 out.append('')
-# Game::_monsterListLevels: (sprite, monster) pairs; on the Amiga a monster
-# is drawn with half of the object palette, entries (monster & 1) * 8 on
-monsters = [[0, 0], [0, 0, 0, 1, 1, 2], [2], [1, 2], [2, 2, 3], [3, 3], [3, 3, 3]]
-out.append('// per level, the halves of the object palette its enemies are drawn')
-out.append('// with: bit 0 entries 0-7, bit 1 entries 8-15')
-out.append('static const uint8_t kSTEnemyHalves[7] = { ' + ', '.join('%d' % (int(any(m & 1 == 0 for m in ms)) | (int(any(m & 1 for m in ms)) << 1)) for ms in monsters) + ' };')
-out.append('')
 out.append('#endif')
 print('\n'.join(out))

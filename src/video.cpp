@@ -108,32 +108,12 @@ static const uint16_t kColsTo[16] = {
 // out of registers in the walk below and spilled the loop counters
 // to the frame, so every iteration of these was three memory
 // read-modify-writes before it moved a byte.
-template <int N> static void restoreRows(uint32_t *d, const uint32_t *s, int lines) {
-	for (int line = lines; --line >= 0; ) {
-		copyRowN<N>(d, s);
-		s += kSTRowBytes / 4;
-		d += kSTRowBytes / 4;
-	}
-}
-
 static void restorePlanes(uint8_t *dst, const uint8_t *src, int groups, int lines) {
-	uint32_t *d = (uint32_t *)dst;
-	const uint32_t *s = (const uint32_t *)src;
-	if (groups == 1) {   // one 16-pixel group is the common case
-		for (int line = lines; --line >= 0; ) {
-			d[0] = s[0];
-			d[1] = s[1];
-			s += kSTRowBytes / 4;
-			d += kSTRowBytes / 4;
-		}
+	if (ST_copyGroupRows(dst, kSTRowBytes, src, kSTRowBytes, groups, lines)) {
 		return;
 	}
-	switch (groups) {
-	case 2: restoreRows<4>(d, s, lines); return;
-	case 3: restoreRows<6>(d, s, lines); return;
-	case 4: restoreRows<8>(d, s, lines); return;
-	case 5: restoreRows<10>(d, s, lines); return;
-	}
+	uint32_t *d = (uint32_t *)dst;
+	const uint32_t *s = (const uint32_t *)src;
 	const int skip = (kSTRowBytes >> 2) - groups * 2;
 	for (int line = lines; --line >= 0; ) {
 		for (int n = groups; --n >= 0; ) {
@@ -174,7 +154,7 @@ void Video::ST_restoreDirty() {
 	const int rows = _h / SCREENBLOCK_H;
 	// The priority plane is only worth putting back where something
 	// wrote it: sprites mostly read it, and an ordinary frame leaves
-	// all of it but the inventory icon as the room decoded it.
+	// all of it as the room decoded it.
 	int px0, py0, px1, py1;
 	const bool prioAny = ST_takePrioRect(&px0, &py0, &px1, &py1);
 	const int pbx0 = prioAny ? (px0 / SCREENBLOCK_W) : 0;
@@ -233,6 +213,18 @@ void Video::ST_restoreDirty() {
 		_blkOwed[j] |= _blkShown[j];
 		_blkShown[j] = 0;
 	}
+}
+#endif
+
+#ifdef ATARIST
+bool Video::ST_blocksDirty(int x, int y, int w, int h) const {
+	const uint16_t m = (uint16_t)(kColsFrom[x / SCREENBLOCK_W] & kColsTo[(x + w - 1) / SCREENBLOCK_W]);
+	for (int j = y / SCREENBLOCK_H; j <= (y + h - 1) / SCREENBLOCK_H; ++j) {
+		if (_blkDirty[j] & m) {
+			return true;
+		}
+	}
+	return false;
 }
 #endif
 
@@ -1397,10 +1389,14 @@ void Video::AMIGA_setLevelPalettes(int level, const uint8_t *tmp) {
 		// Conrad, the enemies and the items are drawn in, which cover
 		// few pixels but are what the player watches. Conrad's own
 		// colours and the level's enemy half count most. Tenths of a
-		// percent of the screen.
-		uint16_t weight[256];
-		memset(weight, 0, sizeof(weight));
-		if (level >= 0 && level < 7) {
+		// percent of the screen, given to every slot the palette is
+		// loaded into - equal colours add up, so the object palette's
+		// share counts five times over and the background's two or
+		// three; the importance values were tuned with that, on the
+		// measured renders of every level.
+		if (level >= 0 && level < 7 && !_res->_isDemo) {   // measured on the full game's levels
+			uint16_t weight[256];
+			memset(weight, 0, sizeof(weight));
 			for (int s = 0; s < 16; ++s) {
 				if (slotPal[s] >= 0 && slotPal[s] < 6) {
 					for (int k = 0; k < 16; ++k) {
@@ -1409,17 +1405,20 @@ void Video::AMIGA_setLevelPalettes(int level, const uint8_t *tmp) {
 				}
 			}
 			static const uint8_t kConrad[] = { 1, 3, 4, 5, 6, 7 };
+			const uint8_t enemyHalves = ST_enemyHalves(level);
 			for (int k = 0; k < 16; ++k) {
 				weight[0x40 + k] += 30;                  // objects
-				if (kSTEnemyHalves[level] & (1 << (k >> 3))) {
+				if (enemyHalves & (1 << (k >> 3))) {
 					weight[0x40 + k] += 120;             // enemies
 				}
 			}
 			for (unsigned i = 0; i < sizeof(kConrad); ++i) {
 				weight[0x40 + kConrad[i]] += 120;        // Conrad
 			}
+			ST_setColourWeights(weight);
+		} else {
+			ST_setColourWeights(0);
 		}
-		ST_setColourWeights((level >= 0 && level < 7) ? weight : 0);
 	}
 #endif
 }

@@ -133,8 +133,8 @@ static inline __attribute__((always_inline)) void pageTouch(const uint8_t *layer
 // What has written a priority plane since the last frame's restore,
 // as one bounding box. The plane changes only where something marks
 // or clears it - the fills, and the few sprites drawn with priority,
-// which in an ordinary frame is the inventory icon in the corner -
-// so the per-block restore of it (measured at 2.1ms a frame on an
+// which in an ordinary frame is none, or the inventory icon when a
+// sprite crossed it - so the per-block restore of it (measured at 2.1ms a frame on an
 // 8MHz ST) is skipped everywhere the box does not reach. Writers
 // report their own rectangle; the ones that cover a layer say so
 // with ST_prioTouched.
@@ -1467,6 +1467,21 @@ static bool buildShifted(SprEntry *e, int phase) {
 	return true;
 }
 
+// OR of N priority words a row over h rows, unrolled: the looped
+// form spent more on its counters than on the reads
+template <int N> static uint16_t orPrio(const uint16_t *row, int h) {
+	uint16_t any = 0;
+	for (int y = h; --y >= 0; row += kSTPrioRowBytes / 2) {
+		any |= row[0];
+		if (N > 1) any |= row[1];
+		if (N > 2) any |= row[2];
+		if (N > 3) any |= row[3];
+		if (N > 4) any |= row[4];
+		if (N > 5) any |= row[5];
+	}
+	return any;
+}
+
 // Is any priority bit set under groups [g0, g1] of rows [y0, y1)? A
 // sprite drawn "under" the foreground only differs from a plain draw
 // where there is foreground, and most of the time there is none under
@@ -1483,23 +1498,42 @@ static bool prioUnder(const uint8_t *layer, int g0, int g1, int y0, int y1) {
 	}
 	const uint16_t *row = (const uint16_t *)(layer + kSTPlaneBytes + y0 * kSTPrioRowBytes) + g0;
 	const int n = g1 - g0 + 1;
-	uint16_t any = 0;
-	for (int y = y1 - y0; --y >= 0; row += kSTPrioRowBytes / 2) {
-		for (int i = 0; i < n; ++i) {
-			any |= row[i];
+	if (n <= 6) {
+		// eight rows at a time: foreground under a sprite's head
+		// need not wait for a scan of its feet
+		for (int y = y0; y < y1; y += 8, row += 8 * kSTPrioRowBytes / 2) {
+			const int h = (y1 - y < 8) ? y1 - y : 8;
+			uint16_t any;
+			switch (n) {
+			case 1: any = orPrio<1>(row, h); break;
+			case 2: any = orPrio<2>(row, h); break;
+			case 3: any = orPrio<3>(row, h); break;
+			case 4: any = orPrio<4>(row, h); break;
+			case 5: any = orPrio<5>(row, h); break;
+			default: any = orPrio<6>(row, h); break;
+			}
+			if (any) {
+				return true;
+			}
 		}
-		if (any) {
-			return true;
+		return false;
+	}
+	const int h = y1 - y0;
+	for (int y = h; --y >= 0; row += kSTPrioRowBytes / 2) {
+		for (int i = 0; i < n; ++i) {
+			if (row[i]) {
+				return true;
+			}
 		}
 	}
 	return false;
 }
 
 static void blitBaked(uint8_t *layer, SprEntry *e, int x, int y, bool respectPrio, bool setPrio) {
+	const int dx = x + e->offG * 16;
+	const int dy = y + e->offY;
 	if (respectPrio && !setPrio) {
-		const int dx0 = x + e->offG * 16;
-		const int y0 = y + e->offY;
-		respectPrio = prioUnder(layer, dx0 >> 4, (dx0 + e->useG * 16) >> 4, y0, y0 + e->useH);
+		respectPrio = prioUnder(layer, dx >> 4, (dx + e->useG * 16 - 1) >> 4, dy, dy + e->useH);
 	}
 	// A draw that neither reads nor sets the priority plane goes to
 	// the maskless view: on the masked one STDL's default upkeep
@@ -1530,7 +1564,6 @@ static void blitBaked(uint8_t *layer, SprEntry *e, int x, int y, bool respectPri
 	// the stride still steps whole bake rows. Where a pre-shifted
 	// copy is held for this phase the blit runs from that instead,
 	// landing on a group boundary: the same pixels, no shift chain.
-	const int dx = x + e->offG * 16;
 	const int phase = dx & 15;
 	int useW, stride, maskStride, dstX;
 	const uint16_t *planes, *mask;
@@ -1562,14 +1595,14 @@ static void blitBaked(uint8_t *layer, SprEntry *e, int x, int y, bool respectPri
 	// by the blit, not read from it. Ten stores a sprite, all dead.
 	STDL_Rect dr;
 	dr.x = (int16_t)dstX;
-	dr.y = (int16_t)(y + e->offY);
+	dr.y = (int16_t)dy;
 	unsigned f = 0;
 	if (respectPrio) {
 		f |= STDL_BLIT_UNDER;
 	}
 	if (setPrio) {
 		f |= STDL_BLIT_MARK;
-		ST_prioTouchedRect(dstX, y + e->offY, useW, e->useH);
+		ST_prioTouchedRect(dstX, dy, useW, e->useH);
 	}
 	STDL_BlitSurfaceEx(view, NULL, dst, &dr, f);
 }
@@ -2893,29 +2926,28 @@ static void fillBytes(uint8_t *dst, int bytes, uint32_t a, uint32_t b) {
 #endif
 }
 
-void ST_layerSaveRect(const uint8_t *layer, int x, int y, int h, uint8_t *out) {
-	const int g = x >> 4;
-	for (int j = 0; j < h; ++j, out += 20) {
-		memcpy(out, layer + (y + j) * kSTRowBytes + g * 8, 16);
-		memcpy(out + 16, layer + kSTPlaneBytes + (y + j) * kSTPrioRowBytes + g * 2, 4);
+void ST_layerSaveRect(const uint8_t *layer, int x, int y, int h, uint32_t *out) {
+	uint8_t *l = (uint8_t *)layer;
+	for (int j = y; j < y + h; ++j, out += 5) {
+		copyRowN<4>(out, (const uint32_t *)groupPtr(l, x, j));
+		out[4] = *(const uint32_t *)prioPtr(l, x, j);
 	}
 }
 
-void ST_layerLoadRect(uint8_t *layer, int x, int y, int h, const uint8_t *in) {
-	const int g = x >> 4;
-	ST_prioTouchedRect(g * 16, y, 32, h);
-	for (int j = 0; j < h; ++j, in += 20) {
-		memcpy(layer + (y + j) * kSTRowBytes + g * 8, in, 16);
-		memcpy(layer + kSTPlaneBytes + (y + j) * kSTPrioRowBytes + g * 2, in + 16, 4);
+void ST_layerLoadRect(uint8_t *layer, int x, int y, int h, const uint32_t *in) {
+	ST_prioTouchedRect(x & ~15, y, 32, h);
+	for (int j = y; j < y + h; ++j, in += 5) {
+		copyRowN<4>((uint32_t *)groupPtr(layer, x, j), in);
+		*(uint32_t *)prioPtr(layer, x, j) = in[4];
 	}
 }
 
 void ST_layerCopyRect(uint8_t *dst, const uint8_t *src, int x, int y, int h) {
-	const int g = x >> 4;
-	ST_prioTouchedRect(g * 16, y, 32, h);
-	for (int j = 0; j < h; ++j) {
-		memcpy(dst + (y + j) * kSTRowBytes + g * 8, src + (y + j) * kSTRowBytes + g * 8, 16);
-		memcpy(dst + kSTPlaneBytes + (y + j) * kSTPrioRowBytes + g * 2, src + kSTPlaneBytes + (y + j) * kSTPrioRowBytes + g * 2, 4);
+	uint8_t *s = (uint8_t *)src;
+	ST_prioTouchedRect(x & ~15, y, 32, h);
+	ST_copyGroupRows((uint8_t *)groupPtr(dst, x, y), kSTRowBytes, (const uint8_t *)groupPtr(s, x, y), kSTRowBytes, 2, h);
+	for (int j = y; j < y + h; ++j) {
+		*(uint32_t *)prioPtr(dst, x, j) = *(const uint32_t *)prioPtr(s, x, j);
 	}
 }
 

@@ -179,8 +179,10 @@ palette:
   over every room of the level. The quantiser weighs colours by it, so
   a colour covering a quarter of the screen is not traded away for one
   that covers a handful of pixels.
-- **`kSTEnemyHalves`**: which half of the object palette each level's
-  enemies are drawn with, so those colours count like Conrad's.
+
+(Which half of the object palette a level's enemies are drawn with is
+worked out in the game from its monster list, so those colours count
+like Conrad's.)
 
 The header is committed and only needs regenerating if the weighting
 is changed. The pixel counts come from rooms rendered by the desktop

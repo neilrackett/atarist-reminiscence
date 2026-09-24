@@ -62,7 +62,7 @@ struct SystemStub_STDL : SystemStub {
 	// (for the shadow-effect hw->hw lookup)
 	uint8_t _cutsceneRep[16];
 	bool _palLocked;        // fixed cutscene mapping, see video_st.h
-	void quantiseClusters(uint16_t *col, uint16_t *cnt, int n, uint8_t *alias, uint8_t *slotOf, int pinned, bool perceptual);
+	void quantiseClusters(uint16_t *col, uint16_t *cnt, int n, uint8_t *alias, uint8_t *slotOf, bool perceptual);
 	bool _hwDirty;          // hardware registers need reprogramming
 	int _fade;              // 256 = full brightness (uniform scale)
 	int _srcW, _srcH;
@@ -170,42 +170,12 @@ const uint8_t *ST_getRemap() {
 	return g_stub->_remap;
 }
 
-// One full 128-byte layer row to the screen through movem: the word
-// loop below spent as long per frame on a cutscene page flip as the
-// scene's own drawing, at 5+ cycles a byte against movem's 4.5.
-static inline void copyRow128(uint32_t *dst, const uint32_t *src) {
-#ifdef __m68k__
-	register uint32_t *d __asm__("a0") = dst;
-	register const uint32_t *s __asm__("a1") = src;
-	__asm__ volatile(
-		"movem.l (%1)+,%%d0-%%d7/%%a2-%%a4\n\t"
-		"movem.l %%d0-%%d7/%%a2-%%a4,(%0)\n\t"
-		"movem.l (%1)+,%%d0-%%d7/%%a2-%%a4\n\t"
-		"movem.l %%d0-%%d7/%%a2-%%a4,44(%0)\n\t"
-		"movem.l (%1)+,%%d0-%%d7/%%a2-%%a3\n\t"
-		"movem.l %%d0-%%d7/%%a2-%%a3,88(%0)"
-		: "+a"(d), "+a"(s)
-		:
-		: "d0","d1","d2","d3","d4","d5","d6","d7","a2","a3","a4","memory");
-#else
-	memcpy(dst, src, kSTRowBytes);
-#endif
-}
-
-// Rows of one fixed width; yOff 0 means every line shown, a constant
-// screen stride apart (the common case, no table reads).
-template <int N> static void copyRows(uint8_t *d, const uint8_t *s, int y, int h, const uint16_t *yOff, const uint8_t *yDrop, uint8_t *screen) {
-	if (!yOff) {
-		for (int j = h; --j >= 0; ) {
-			copyRowN<N>((uint32_t *)d, (const uint32_t *)s);
-			s += kSTRowBytes;
-			d += kScreenStride;
-		}
-		return;
-	}
+// Layer rows onto a squashed screen: each line's screen offset from
+// the table, and the lines the squash drops skipped.
+template <int N> static void copyMappedRows(uint8_t *base, const uint8_t *s, int y, int h, const uint16_t *yOff, const uint8_t *yDrop) {
 	for (int j = y; j < y + h; ++j, s += kSTRowBytes) {
 		if (!yDrop[j]) {
-			copyRowN<N>((uint32_t *)(screen + yOff[j]), (const uint32_t *)s);
+			copyRowN<N>((uint32_t *)(base + yOff[j]), (const uint32_t *)s);
 		}
 	}
 }
@@ -224,8 +194,8 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 	if (y + h > kSTLayerH) {
 		h = kSTLayerH - y;
 	}
-	const int bytes = (gx1 - gx0) << 3;
-	if (bytes <= 0) {
+	const int groups = gx1 - gx0;
+	if (groups <= 0) {
 		return;
 	}
 	const int xOffBytes = (_xOffset >> 4) << 3;
@@ -254,7 +224,7 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 		// ST_beamSync instead.
 		STDL_WaitVBL();
 	}
-	if (h >= 32 && gx1 - gx0 >= 8 && _srcW == kSTLayerW
+	if (h >= 32 && groups >= 8 && _srcW == kSTLayerW
 	    && STDL_GetMachineInfo()->has_blitter) {
 		STDL_Surface *bare = ST_layerSurfaceBare((uint8_t *)layer);
 		if (bare) {
@@ -271,7 +241,7 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 				STDL_Rect sr, dr;
 				sr.x = (int16_t)(gx0 << 4);
 				sr.y = (int16_t)(y + j);
-				sr.w = (uint16_t)((gx1 - gx0) << 4);
+				sr.w = (uint16_t)(groups << 4);
 				sr.h = (uint16_t)(j2 - j);
 				dr.x = (int16_t)((gx0 << 4) + _xOffset);
 				dr.y = _yMap[y + j];
@@ -283,45 +253,22 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 			return;
 		}
 	}
-	const int n32 = bytes >> 3;
-	if (n32 >= 2 && n32 <= 5) {
-		const uint8_t *s = layer + y * kSTRowBytes + (gx0 << 3);
-		uint8_t *d = 0;
-		const uint16_t *yOff = 0;
-		if (_yLinear) {
-			d = _screen->pixels + _yMap[y] * kScreenStride + xOffBytes + (gx0 << 3);
-		} else {
-			yOff = _yOff;
-		}
-		uint8_t *base = _screen->pixels + xOffBytes + (gx0 << 3);
-		switch (n32) {
-		case 2: copyRows<4>(d, s, y, h, yOff, _yDrop, base); break;
-		case 3: copyRows<6>(d, s, y, h, yOff, _yDrop, base); break;
-		case 4: copyRows<8>(d, s, y, h, yOff, _yDrop, base); break;
-		default: copyRows<10>(d, s, y, h, yOff, _yDrop, base); break;
-		}
-		return;
-	}
+	const uint8_t *s = layer + y * kSTRowBytes + (gx0 << 3);
+	uint8_t *base = _screen->pixels + xOffBytes + (gx0 << 3);
 	// With every line displayed the destination row is a constant
-	// step from the last, so the per-row address arithmetic - two
-	// table reads and two products - is hoisted out of the loop.
-	// These runs are small (a sprite's worth of blocks) and were
-	// spending more time finding their rows than copying them.
+	// step from the last, so the per-row address arithmetic is
+	// hoisted out of the loop. These runs are small (a sprite's worth
+	// of blocks) and were spending more time finding their rows than
+	// copying them.
 	if (_yLinear) {
-		const uint8_t *s = layer + y * kSTRowBytes + (gx0 << 3);
-		uint8_t *d = _screen->pixels + _yMap[y] * kScreenStride + xOffBytes + (gx0 << 3);
-		if (bytes == kSTRowBytes) {
-			for (int j = h; --j >= 0; ) {
-				copyRow128((uint32_t *)d, (const uint32_t *)s);
-				s += kSTRowBytes;
-				d += kScreenStride;
-			}
+		uint8_t *d = base + _yOff[y];
+		if (ST_copyGroupRows(d, kScreenStride, s, kSTRowBytes, groups, h)) {
 			return;
 		}
 		for (int j = h; --j >= 0; ) {
 			const uint32_t *src = (const uint32_t *)s;
 			uint32_t *dst = (uint32_t *)d;
-			for (int n = n32; --n >= 0; ) {
+			for (int n = groups; --n >= 0; ) {
 				*dst++ = *src++;
 				*dst++ = *src++;
 			}
@@ -330,18 +277,21 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 		}
 		return;
 	}
-	for (int j = 0; j < h; ++j) {
-		const int sy = y + j;
-		if (_yDrop[sy]) {
+	switch (groups) {                   // the widths ST_copyGroupRows takes
+	case 1: copyMappedRows<2>(base, s, y, h, _yOff, _yDrop); return;
+	case 2: copyMappedRows<4>(base, s, y, h, _yOff, _yDrop); return;
+	case 3: copyMappedRows<6>(base, s, y, h, _yOff, _yDrop); return;
+	case 4: copyMappedRows<8>(base, s, y, h, _yOff, _yDrop); return;
+	case 5: copyMappedRows<10>(base, s, y, h, _yOff, _yDrop); return;
+	case 16: copyMappedRows<32>(base, s, y, h, _yOff, _yDrop); return;   // the cutscene page flip
+	}
+	for (int j = y; j < y + h; ++j, s += kSTRowBytes) {
+		if (_yDrop[j]) {
 			continue;
 		}
-		const uint32_t *src = (const uint32_t *)(layer + sy * kSTRowBytes + (gx0 << 3));
-		uint32_t *dst = (uint32_t *)(_screen->pixels + _yOff[sy] + xOffBytes + (gx0 << 3));
-		if (bytes == kSTRowBytes) {
-			copyRow128(dst, src);       // whole row: the cutscene page flip
-			continue;
-		}
-		for (int n = n32; --n >= 0; ) {
+		const uint32_t *src = (const uint32_t *)s;
+		uint32_t *dst = (uint32_t *)(base + _yOff[j]);
+		for (int n = groups; --n >= 0; ) {
 			*dst++ = *src++;
 			*dst++ = *src++;
 		}
@@ -626,7 +576,6 @@ void SystemStub_STDL::buildFillTable() {
 		_yDrop[y] = off ? 1 : 0;
 		_yMap[y] = off ? 0 : (uint8_t)(y - _fillTop);
 	}
-	rowOffsets();
 }
 
 void SystemStub_STDL::applyFillTop(int top) {
@@ -636,6 +585,7 @@ void SystemStub_STDL::applyFillTop(int top) {
 	_fillTop = top;
 	if (_mode == kScreenFill) {
 		buildFillTable();
+		rowOffsets();
 		_shadowValid = false;
 		clearScreen();
 	}
@@ -820,6 +770,16 @@ static inline int colDist(const Color &a, const Color &b) {
 	return dr + 2 * dg + db;
 }
 
+// the same as the quantiser in play judges it: Manhattan in CIELAB
+static inline int labDist(const Color &a, const Color &b) {
+	const uint8_t *la = kSTLab[((a.r >> 4) << 8) | ((a.g >> 4) << 4) | (a.b >> 4)];
+	const uint8_t *lb = kSTLab[((b.r >> 4) << 8) | ((b.g >> 4) << 4) | (b.b >> 4)];
+	int dl = la[0] - lb[0]; if (dl < 0) dl = -dl;
+	int da = la[1] - lb[1]; if (da < 0) da = -da;
+	int db = la[2] - lb[2]; if (db < 0) db = -db;
+	return dl + da + db;
+}
+
 // distance of two packed 4-bit colours: Manhattan, green-weighted
 static inline int dist4(uint16_t a, uint16_t b) {
 	int dr = ((a >> 8) & 15) - ((b >> 8) & 15); if (dr < 0) dr = -dr;
@@ -847,27 +807,27 @@ static inline int dist4(uint16_t a, uint16_t b) {
 // purple; weighted, the rooms match the Amiga to within a barely
 // visible difference.
 struct MergeCols {
-	uint8_t r[256], g[256], b[256];      // components of col[]
+	uint8_t r[256], g[256], b[256];      // components of col[], RGB only
 	uint8_t rh[256], gh[256], bh[256];   // the same, times 16
 	uint8_t L[256], A[256], B[256];      // CIELAB, perceptual only
 	uint16_t w[256];                     // 1 + MIN(cnt, 63), or cnt
-	uint8_t absd[256];                   // |a - b| at a * 16 + b
+	uint8_t absd[256];                   // |a - b| at a * 16 + b, built once
 	bool perceptual;
 	void set(int i, uint16_t c, uint16_t cnt) {
+		if (perceptual) {
+			L[i] = kSTLab[c & 0xFFF][0];
+			A[i] = kSTLab[c & 0xFFF][1];
+			B[i] = kSTLab[c & 0xFFF][2];
+			w[i] = cnt;
+			return;
+		}
 		r[i] = (c >> 8) & 15;
 		g[i] = (c >> 4) & 15;
 		b[i] = c & 15;
 		rh[i] = r[i] << 4;
 		gh[i] = g[i] << 4;
 		bh[i] = b[i] << 4;
-		if (perceptual) {
-			L[i] = kSTLab[c & 0xFFF][0];
-			A[i] = kSTLab[c & 0xFFF][1];
-			B[i] = kSTLab[c & 0xFFF][2];
-			w[i] = cnt;
-		} else {
-			w[i] = (uint16_t)(1 + MIN(cnt, (uint16_t)63));
-		}
+		w[i] = (uint16_t)(1 + MIN(cnt, (uint16_t)63));
 	}
 	uint32_t dist(int i, int j) const {
 		const uint16_t wt = MIN(w[i], w[j]);
@@ -911,10 +871,9 @@ static void nearestPartner(const MergeCols &mc, const uint32_t *dm, int n,
 // that outlives a palette change only stays correct if unchanged
 // colours keep their slots. Fills alias[] (cluster union-find) and
 // slotOf[] (cluster -> slot), and updates _hwPal.
-void SystemStub_STDL::quantiseClusters(uint16_t *col, uint16_t *cnt, int n, uint8_t *alias, uint8_t *slotOf, int pinned, bool perceptual) {
+void SystemStub_STDL::quantiseClusters(uint16_t *col, uint16_t *cnt, int n, uint8_t *alias, uint8_t *slotOf, bool perceptual) {
 	// Greedy merge to 16 clusters, closest pair first (lowest
-	// indices on ties); a pinned cluster never merges, so its
-	// colour stays exact and it holds a slot of its own. Scanning
+	// indices on ties). Scanning
 	// every pair for each merge is n cubed, seconds on an 8MHz
 	// 68000 for a level's fifty-odd colours, so the merge distances
 	// are tabled and each colour remembers its nearest partner: a
@@ -939,19 +898,19 @@ void SystemStub_STDL::quantiseClusters(uint16_t *col, uint16_t *cnt, int n, uint
 	for (int i = 0; i < n; ++i) {
 		repW[i] = cnt[i];
 	}
-	for (int a = 0; a < 16; ++a) {
-		for (int b = 0; b < 16; ++b) {
-			mc.absd[a * 16 + b] = (uint8_t)(a > b ? a - b : b - a);
+	if (mc.absd[1] == 0) {           // not yet built (|0 - 1| is 1)
+		for (int a = 0; a < 16; ++a) {
+			for (int b = 0; b < 16; ++b) {
+				mc.absd[a * 16 + b] = (uint8_t)(a > b ? a - b : b - a);
+			}
 		}
 	}
-	// the candidates, every colour but the pinned one, in index order
+	// the candidates, the clusters still live, in index order
 	uint8_t cand[256];
 	int m = 0;
 	for (int i = 0; i < n; ++i) {
 		mc.set(i, col[i], cnt[i]);
-		if (i != pinned) {
-			cand[m++] = i;
-		}
+		cand[m++] = i;
 	}
 	uint32_t *dm = (uint32_t *)malloc((long)n * n * 4);
 	if (dm) {
@@ -1012,13 +971,13 @@ void SystemStub_STDL::quantiseClusters(uint16_t *col, uint16_t *cnt, int n, uint
 		memmove(cand + a, cand + a + 1, m - a);
 		// the survivor moved: its distances, its partner, and the
 		// partner of anyone who was pointing at either half
+		uint32_t *biRow = dm ? dm + (uint16_t)bi * (uint16_t)n : 0;
 		if (dm) {
-			uint32_t *row = dm + (uint16_t)bi * (uint16_t)n;
 			uint32_t *mirror = dm + bi;
 			for (int a = 0; a < m; ++a) {
 				const int j = cand[a];
 				if (j != bi) {
-					row[j] = mirror[(uint16_t)j * (uint16_t)n] = mc.dist(bi, j);
+					biRow[j] = mirror[(uint16_t)j * (uint16_t)n] = mc.dist(bi, j);
 				}
 			}
 		}
@@ -1035,14 +994,14 @@ void SystemStub_STDL::quantiseClusters(uint16_t *col, uint16_t *cnt, int n, uint
 			// them, as the old path does, made the perceptual merge
 			// twice as slow: pixel weights point most colours at the
 			// same few heavy ones.
-			if (nnj[k] == bj || (nnj[k] == bi && (moved || !perceptual || cnt[k] > oldW))) {
+			if (nnj[k] == bj || (nnj[k] == bi && (moved || cnt[k] > oldW))) {
 				nearestPartner(mc, dm, n, cand, m, k, nnd, nnj);
 				continue;
 			}
 			if (nnj[k] == bi) {
 				continue;
 			}
-			const uint32_t d = dm ? dm[(uint16_t)k * (uint16_t)n + bi] : mc.dist(k, bi);
+			const uint32_t d = biRow ? biRow[k] : mc.dist(k, bi);   // symmetric
 			if (d < nnd[k] || (d == nnd[k] && bi < nnj[k])) {
 				nnd[k] = d;
 				nnj[k] = (uint8_t)bi;
@@ -1537,19 +1496,40 @@ void SystemStub_STDL::buildRemap() {
 			}
 		}
 		if (nchg <= 16) {
+			bool isChg[256];
+			memset(isChg, 0, sizeof(isChg));
+			for (int c = 0; c < nchg; ++c) {
+				isChg[changed[c]] = true;
+			}
+			const bool perceptual = _haveColW && !g_cutscenePal;
 			for (int c = 0; c < nchg; ++c) {
 				const int i = changed[c];
 				if (_customPal && !g_cutscenePal) {
 					_remap[i] = (uint8_t)customSlotFor(i);
 					continue;
 				}
-				long best = 0x7FFFFFFF;
-				int bs = 0;
-				for (int s = 0; s < 16; ++s) {
-					const long d = colDist(_pal[i], _hwPal[s]);
-					if (d < best) {
-						best = d;
-						bs = s;
+				// In play a changed entry is usually a copy - an enemy's
+				// half of the object palette - so where an unchanged entry
+				// has the same colour, share its slot: the copy draws as
+				// the original does, whichever cluster that went to.
+				int bs = -1;
+				if (perceptual) {
+					for (int j = 0; j < 256; ++j) {
+						if (!isChg[j] && !excludedEntry(j) && _pal[j].r == _pal[i].r
+						    && _pal[j].g == _pal[i].g && _pal[j].b == _pal[i].b) {
+							bs = _remap[j];
+							break;
+						}
+					}
+				}
+				if (bs < 0) {
+					long best = 0x7FFFFFFF;
+					for (int s = 0; s < 16; ++s) {
+						const long d = perceptual ? labDist(_pal[i], _hwPal[s]) : colDist(_pal[i], _hwPal[s]);
+						if (d < best) {
+							best = d;
+							bs = s;
+						}
 					}
 				}
 				_remap[i] = (uint8_t)bs;
@@ -1619,16 +1599,12 @@ void SystemStub_STDL::buildRemap() {
 
 	uint8_t alias[256];
 	uint8_t slotOf[256];
-	// Conrad's jacket (logical entry 0x17 in the sprite bank) is a
-	// brown a screenful of jungle otherwise outvotes into the green
-	// cluster. Pin its cluster: the jacket keeps its exact colour
-	// and one slot, matching the cutscene close-ups. In cutscene
-	// mode the entry is excluded above, so the pin is a no-op there.
-	// (perceptual: Conrad's weight does this, and a pin would cost a
-	// slot the scenery needs)
-	const int pinned = (!perceptual && entryCluster[kSTConradJacketEntry] != 0xFF)
-		? entryCluster[kSTConradJacketEntry] : -1;
-	quantiseClusters(col, cnt, n, alias, slotOf, pinned, perceptual);
+	// (Conrad's jacket was once pinned to a slot of its own here. In
+	// play his weight keeps it now, and on the title - the only place
+	// left without weights - entry 0x17 is a title colour, which the
+	// pin held exact at the cost of the flare's highlights: measured,
+	// the title comes out nearer the original without it.)
+	quantiseClusters(col, cnt, n, alias, slotOf, perceptual);
 	uint8_t newRemap[256];
 	memset(_cutsceneRep, 0xC0, sizeof(_cutsceneRep));
 	bool repSet[16];
@@ -1734,16 +1710,19 @@ void ST_getAmigaColours(Color *cols, uint8_t *slots, bool *have) {
 }
 
 void ST_setColourWeights(const uint16_t *w) {
+	// Turning weights on or off (play against the title) rebuilds; new
+	// weights alone do not, they steer the next rebuild the colours
+	// call for. A room that loads a slot with another palette number,
+	// or the same colours under one, would otherwise pause ~620ms on
+	// its way in rather than take the patch path.
 	SystemStub_STDL *s = g_stub;
-	const bool had = s->_haveColW;
+	if ((w != 0) != s->_haveColW) {
+		s->_remapStale = true;
+		s->_palDirty = true;
+	}
 	s->_haveColW = (w != 0);
-	if (w && (!had || memcmp(s->_colW, w, sizeof(s->_colW)) != 0)) {
+	if (w) {
 		memcpy(s->_colW, w, sizeof(s->_colW));
-		s->_remapStale = true;
-		s->_palDirty = true;
-	} else if (!w && had) {
-		s->_remapStale = true;
-		s->_palDirty = true;
 	}
 }
 
@@ -1969,7 +1948,7 @@ void SystemStub_STDL::syncPages(const uint8_t *shown) {
 		const uint32_t *s = (const uint32_t *)(shown + r * kScreenStride);
 		uint32_t *d = (uint32_t *)(_screen->pixels + r * kScreenStride);
 		if (m == kAll) {
-			copyRow128(d, s);
+			copyRowN<32>(d, s);
 			d += kSTRowBytes / 4;
 			s += kSTRowBytes / 4;
 			for (int n = (kScreenStride - kSTRowBytes) / 4; --n >= 0; ) {
