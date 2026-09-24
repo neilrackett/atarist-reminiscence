@@ -1267,6 +1267,48 @@ void ST_cutscenePalUnlock() {
 	g_stub->_palDirty = true;
 }
 
+// Closeness for a custom palette with palette_hue=true. The automatic
+// palette is built from
+// the room's own colours, so a plain RGB distance finds a near twin
+// for every entry; a hand-picked 16 usually has no twin, and plain RGB
+// then sends the jungle's muted olives to grey, which is nearer in
+// brightness than any saturated green. Here the hue counts for as
+// much as the saturation both colours share - a grey has no hue to
+// match - then saturation, then brightness. HSV in 0..255 steps,
+// hue as 0..1535 around the wheel; 16-bit products throughout.
+struct HueColour {
+	int16_t h, s, v;
+	HueColour() {}
+	explicit HueColour(const Color &c) {
+		const int r = c.r >> 4, g = c.g >> 4, b = c.b >> 4;
+		const int mx = MAX(r, MAX(g, b)), mn = MIN(r, MIN(g, b));
+		v = (int16_t)(mx * 17);
+		const int d = mx - mn;
+		s = (int16_t)(mx ? d * 255 / mx : 0);
+		if (d == 0) {
+			h = 0;
+		} else if (mx == r) {
+			h = (int16_t)(((g - b) * 256 / d + 1536) % 1536);
+		} else if (mx == g) {
+			h = (int16_t)((b - r) * 256 / d + 512);
+		} else {
+			h = (int16_t)((r - g) * 256 / d + 1024);
+		}
+	}
+	int dist(const HueColour &o) const {
+		int dh = h - o.h;
+		if (dh < 0) dh = -dh;
+		if (dh > 768) dh = 1536 - dh;          // 0..768, the short way
+		const int dh255 = dh / 3;              // 0..256
+		const int16_t w = MIN(s, o.s);
+		const int ds = s > o.s ? s - o.s : o.s - s;
+		const int dv = v > o.v ? v - o.v : o.v - v;
+		return (int)((int16_t)w * (int16_t)dh255 / 64)            // 4 w dh
+			+ (int)((int16_t)ds * (int16_t)MAX(s, o.s) * 3 / 510)  // 1.5 ds s
+			+ dv;
+	}
+};
+
 // Quantise the 256-entry logical palette to 16 hardware colours.
 // Colours are reduced to STE 4-bit per channel first (the hardware
 // cannot do better), deduplicated, then greedily merged by nearest
@@ -1368,17 +1410,35 @@ void SystemStub_STDL::buildRemap() {
 
 	if (_customPal && !g_cutscenePal) {
 		// A custom palette is the 16 colours, as given: every entry
-		// takes its nearest. Cutscenes keep their own mapping.
+		// takes the nearest, or with palette_hue the closest by hue
+		// (see HueColour). Cutscenes keep their own mapping.
 		memcpy(_hwPal, _customCols, sizeof(_hwPal));
+		HueColour hw[16];
+		if (g_options.palette_hue) {
+			for (int s = 0; s < 16; ++s) {
+				hw[s] = HueColour(_hwPal[s]);
+			}
+		}
 		uint8_t newRemap[256];
 		for (int i = 0; i < 256; ++i) {
 			long best = 0x7FFFFFFF;
 			int bs = 0;
-			for (int s = 0; s < 16; ++s) {
-				const long d = colDist(_pal[i], _hwPal[s]);
-				if (d < best) {
-					best = d;
-					bs = s;
+			if (g_options.palette_hue) {
+				const HueColour c(_pal[i]);
+				for (int s = 0; s < 16; ++s) {
+					const long d = c.dist(hw[s]);
+					if (d < best) {
+						best = d;
+						bs = s;
+					}
+				}
+			} else {
+				for (int s = 0; s < 16; ++s) {
+					const long d = colDist(_pal[i], _hwPal[s]);
+					if (d < best) {
+						best = d;
+						bs = s;
+					}
 				}
 			}
 			newRemap[i] = (uint8_t)bs;

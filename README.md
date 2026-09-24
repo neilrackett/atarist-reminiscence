@@ -147,6 +147,12 @@ room's file (e.g. `L1R45.HEX`), and the name is shown on screen. Edit
 it, then move it into `PALETTE\`, as it is for that room or renamed
 to `L1.HEX` for the whole level. Cutscenes keep their own colours.
 
+Each colour in the room normally takes the nearest of your 16. The
+jungle's greens are muted olives, and with a palette whose only greens
+are bright - EGA's, say - nearest means grey. `palette_hue=true`
+matches by hue instead, so they stay green, though greys and pale
+colours tend to come out noisier. Try both.
+
 ## Configuration
 
 Options go in `RS.CFG`, a plain text file next to `FLASHBAK.TOS`,
@@ -161,6 +167,7 @@ with defaults named, so switching one is a matter of deleting a `#`.
 | `skip_intro`               | ✓           | Go straight to the title screen, skipping the intro sequence                                                                                                                                                                   |
 | `screen`                   | ✓           | How 224 lines meet the 200-line screen: `fit` drops a row in eleven (default), `fill` crops 18 off the top and 6 off the bottom in play (12 and 12 elsewhere), `top` opens the top border, `full` both. Also on the title menu |
 | `palette_custom`           | ✓           | Room palettes from a `PALETTE\` folder, and Ctrl+P to write the current one out (see [Custom palettes](#custom-palettes))                                                                                                        |
+| `palette_hue`              | ✓           | Match colours to a custom palette by hue rather than nearest colour (see [Custom palettes](#custom-palettes))                                                                                                                  |
 | `music`                    | ✓           | YM chip music, if the tracks have been built (see above)                                                                                                                                                                       |
 | `music_volume`             | ✓           | Chip music level, 0-100 (default 70, which sits it level with the sampled effects)                                                                                                                                             |
 | `cheats`                   | ✓           | `true` for all of them, or bits added together: 1 monsters die in one hit, 2 Conrad is never hit, 4 his life never drops                                                                                                       |

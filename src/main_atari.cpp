@@ -139,6 +139,8 @@ static void initOptions() {
 	// Room palettes from PALETTE\ and Ctrl+P to write the current
 	// one out (see palette_st.cpp).
 	g_options.palette_custom = false;
+	// Match a custom palette by hue rather than nearest colour.
+	g_options.palette_hue = false;
 	// The STE's sample device. Off, nothing opens the sound DMA at
 	// all: no sampled effects, and the chip music (music=true) is
 	// unaffected because that drives the YM instead. Exists because
@@ -178,6 +180,7 @@ static void initOptions() {
 		{ "megaste_speedup", &g_options.megaste_speedup },
 		{ "double_buffer", &g_options.double_buffer },
 		{ "palette_custom", &g_options.palette_custom },
+		{ "palette_hue", &g_options.palette_hue },
 		{ "ste_sound", &g_options.ste_sound },
 		{ 0, 0 }
 	};

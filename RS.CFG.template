@@ -37,6 +37,12 @@
 # See the README. (default: false)
 #palette_custom=true
 
+# With palette_custom, match each colour to the custom palette by hue
+# rather than by nearest colour: muted greens then pick a green over
+# a grey, at the cost of greys and pale colours looking noisier.
+# (default: false, nearest colour)
+#palette_hue=true
+
 # --- machine ------------------------------------------------------
 
 # Leave a Mega STE at the speed it was set to before the game ran
