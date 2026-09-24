@@ -154,6 +154,10 @@ void ST_paletteForRoom(int level, int levNum, int room);
 // for each logical entry, which of the Amiga's 32 colours it is (0-31,
 // 0xFF for none): set with each room's palettes
 void ST_setAmigaColourMap(const uint8_t *map256);
+// what each logical entry is worth to the automatic palette in play
+// (see Video::AMIGA_setLevelPalettes); null for none - the title, and
+// cutscenes, which have their own mapping - so every entry counts once
+void ST_setColourWeights(const uint16_t *weights256);
 const char *ST_paletteDump(int level, int levNum, int room);
 // Ctrl+Shift+P: rescan PALETTE\ and read the room's file again on its
 // next load; and the file in use, "" for none

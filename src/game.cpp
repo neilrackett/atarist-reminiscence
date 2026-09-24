@@ -479,6 +479,7 @@ void Game::displayTitleScreenAmiga() {
 #ifdef ATARIST
 	ST_logFreeMemory("title");
 	ST_paletteForRoom(0, 0, -1);        // the title chooses its own colours
+	ST_setColourWeights(0);
 #endif
 	_stub->useFillWindow(false);
 	static const char *FILENAME = "present.cmp";

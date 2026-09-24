@@ -165,3 +165,35 @@ Two details worth knowing if it ever needs changing:
   position and lets the player repeat the track. Following the jump
   instead rendered three cues as 22-minute files, which overflowed the
   STM header's 16-bit frame count.
+
+## gen-palette-tables.py
+
+Writes `src/palette_tables.h`, the data behind the ST's automatic room
+palette:
+
+- **`kSTLab`**: CIELAB for each of the STE's 4096 colours, so the
+  quantiser can compare colours the way the eye does without floating
+  point.
+- **`kSTColourUse`**: for each level, palette number and colour index,
+  the average share of the room pixels drawn in that colour, measured
+  over every room of the level. The quantiser weighs colours by it, so
+  a colour covering a quarter of the screen is not traded away for one
+  that covers a handful of pixels.
+- **`kSTEnemyHalves`**: which half of the object palette each level's
+  enemies are drawn with, so those colours count like Conrad's.
+
+The header is committed and only needs regenerating if the weighting
+is changed. The pixel counts come from rooms rendered by the desktop
+(SDL) build with upstream's disabled room dump turned on: the `if (0)`
+block in `Game::loadLevelData` writes `DUMP/level<L>_room<NN>.bmp` for
+every room of a level. In a copy of the sources, make that block run
+when an environment variable is set, exit once it has, name the files
+`level<L>_part<P>_room<NN>.bmp` (`<P>` is `_res._levNum`, 0 outside
+level 2), and for level 2 dump each of its two level files in turn.
+Then:
+
+```sh
+tools/gen-palette-tables.py path/to/DUMP dist/DATA > src/palette_tables.h
+```
+
+Needs Python 3 with Pillow.

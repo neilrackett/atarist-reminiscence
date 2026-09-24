@@ -159,6 +159,29 @@ outside the 32. In a level file (`L1.HEX`) a number means that position
 in whichever room is showing, which on most levels is the same colour
 throughout.
 
+### What the 32 colours are
+
+The colours themselves change from level to level, but their roles
+mostly don't:
+
+```
+0-15  = the room's background scenery, back layer and foreground
+16    = black
+17    = Conrad's highlights
+18    = objects
+19    = Conrad's trousers, darker shade
+20    = Conrad's skin
+21    = Conrad's grey
+22    = Conrad's trousers
+23    = Conrad's jacket
+24-31 = items and effects
+```
+
+Enemies are drawn with half of 16-31: 16-23 or 24-31, depending on the
+enemy, so on some levels they share Conrad's colours. The background's
+roles are whatever the room's artist chose; press Ctrl+P to see a
+room's actual colours.
+
 ### Making one
 
 To start from the game's own choice, press **Ctrl+P** in play: the

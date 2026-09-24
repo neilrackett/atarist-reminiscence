@@ -32,6 +32,8 @@ extern "C" {
 #include "systemstub.h"
 #include "util.h"
 #include "video_st.h"
+#include "palette_tables.h"
+
 
 static const int kMaxSrcW = 320;
 static const int kMaxSrcH = 224;
@@ -60,7 +62,7 @@ struct SystemStub_STDL : SystemStub {
 	// (for the shadow-effect hw->hw lookup)
 	uint8_t _cutsceneRep[16];
 	bool _palLocked;        // fixed cutscene mapping, see video_st.h
-	void quantiseClusters(uint16_t *col, uint16_t *cnt, int n, uint8_t *alias, uint8_t *slotOf, int pinned);
+	void quantiseClusters(uint16_t *col, uint16_t *cnt, int n, uint8_t *alias, uint8_t *slotOf, int pinned, bool perceptual);
 	bool _hwDirty;          // hardware registers need reprogramming
 	int _fade;              // 256 = full brightness (uniform scale)
 	int _srcW, _srcH;
@@ -140,6 +142,10 @@ struct SystemStub_STDL : SystemStub {
 	// none; and which Amiga colour each logical entry is, per room
 	uint8_t _customMap[32];
 	uint8_t _amigaIdx[256];
+	// what each entry is worth to the automatic palette in play (see
+	// ST_setColourWeights); without them every entry counts once
+	uint16_t _colW[256];
+	bool _haveColW;
 	void fadedColours(STDL_Colour *c);
 	void writeHwPalette();
 	void convertRegion(int x, int y, int w, int h, const uint8_t *buf, int pitch, bool useShadow);
@@ -311,6 +317,7 @@ void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int
 	_customPal = false;
 	memset(_customMap, 0xFF, sizeof(_customMap));
 	memset(_amigaIdx, 0xFF, sizeof(_amigaIdx));
+	_haveColW = false;
 	_upDirMask = 0;
 	_upEnter = _upSpace = _upShift = false;
 	if (STDL_Init(0x20 | 0x200) != 0) { // VIDEO | JOYSTICK
@@ -779,11 +786,24 @@ static inline int dist4(uint16_t a, uint16_t b) {
 // three lookups in a 16x16 table of absolute differences; the
 // weight is a 16-bit multiply (a mulu.w, not a __mulsi3 library
 // call).
+//
+// In play (perceptual), the colours are compared as the eye sees them
+// - Manhattan in CIELAB, from a table of all 4096 - and cnt is not a
+// count of entries but each colour's weight: how much of the level's
+// rooms it covers, plus the importance of the sprite colours (see
+// Video::AMIGA_setLevelPalettes). Measured over every room of every
+// level against the original (tools/gen-palette-tables.py), entry
+// counts and RGB distance put the jungle's quarter-screen teal in the
+// same slot as a grey and Conrad's trousers, and the room came out
+// purple; weighted, the rooms match the Amiga to within a barely
+// visible difference.
 struct MergeCols {
 	uint8_t r[256], g[256], b[256];      // components of col[]
 	uint8_t rh[256], gh[256], bh[256];   // the same, times 16
-	uint8_t w[256];                      // 1 + MIN(cnt, 63)
+	uint8_t L[256], A[256], B[256];      // CIELAB, perceptual only
+	uint16_t w[256];                     // 1 + MIN(cnt, 63), or cnt
 	uint8_t absd[256];                   // |a - b| at a * 16 + b
+	bool perceptual;
 	void set(int i, uint16_t c, uint16_t cnt) {
 		r[i] = (c >> 8) & 15;
 		g[i] = (c >> 4) & 15;
@@ -791,29 +811,42 @@ struct MergeCols {
 		rh[i] = r[i] << 4;
 		gh[i] = g[i] << 4;
 		bh[i] = b[i] << 4;
-		w[i] = (uint8_t)(1 + MIN(cnt, (uint16_t)63));
+		if (perceptual) {
+			L[i] = kSTLab[c & 0xFFF][0];
+			A[i] = kSTLab[c & 0xFFF][1];
+			B[i] = kSTLab[c & 0xFFF][2];
+			w[i] = cnt;
+		} else {
+			w[i] = (uint16_t)(1 + MIN(cnt, (uint16_t)63));
+		}
 	}
-	uint16_t dist(int i, int j) const {
-		const int d = absd[rh[i] | r[j]] + 2 * absd[gh[i] | g[j]] + absd[bh[i] | b[j]];
+	uint32_t dist(int i, int j) const {
 		const uint16_t wt = MIN(w[i], w[j]);
-		return (uint16_t)((uint16_t)d * wt);
+		if (perceptual) {
+			int dl = L[i] - L[j]; if (dl < 0) dl = -dl;
+			int da = A[i] - A[j]; if (da < 0) da = -da;
+			int db = B[i] - B[j]; if (db < 0) db = -db;
+			return (uint32_t)(uint16_t)(dl + da + db) * wt;
+		}
+		const int d = absd[rh[i] | r[j]] + 2 * absd[gh[i] | g[j]] + absd[bh[i] | b[j]];
+		return (uint32_t)(uint16_t)d * wt;
 	}
 };
 
 // nearest partner of k among the m candidates, the lowest index on
 // ties; dm is the tabled merge distances (n a row), or null to
 // compute them
-static void nearestPartner(const MergeCols &mc, const uint16_t *dm, int n,
-		const uint8_t *cand, int m, int k, uint16_t *nnd, uint8_t *nnj) {
-	uint16_t best = 0xFFFF;
+static void nearestPartner(const MergeCols &mc, const uint32_t *dm, int n,
+		const uint8_t *cand, int m, int k, uint32_t *nnd, uint8_t *nnj) {
+	uint32_t best = 0xFFFFFFFF;
 	int bj = 0xFF;
-	const uint16_t *row = dm ? dm + (uint16_t)k * (uint16_t)n : 0;
+	const uint32_t *row = dm ? dm + (uint16_t)k * (uint16_t)n : 0;
 	for (int a = 0; a < m; ++a) {
 		const int j = cand[a];
 		if (j == k) {
 			continue;
 		}
-		const uint16_t d = row ? row[j] : mc.dist(k, j);
+		const uint32_t d = row ? row[j] : mc.dist(k, j);
 		if (d < best) {
 			best = d;
 			bj = j;
@@ -829,7 +862,7 @@ static void nearestPartner(const MergeCols &mc, const uint16_t *dm, int n,
 // that outlives a palette change only stays correct if unchanged
 // colours keep their slots. Fills alias[] (cluster union-find) and
 // slotOf[] (cluster -> slot), and updates _hwPal.
-void SystemStub_STDL::quantiseClusters(uint16_t *col, uint16_t *cnt, int n, uint8_t *alias, uint8_t *slotOf, int pinned) {
+void SystemStub_STDL::quantiseClusters(uint16_t *col, uint16_t *cnt, int n, uint8_t *alias, uint8_t *slotOf, int pinned, bool perceptual) {
 	// Greedy merge to 16 clusters, closest pair first (lowest
 	// indices on ties); a pinned cluster never merges, so its
 	// colour stays exact and it holds a slot of its own. Scanning
@@ -848,6 +881,15 @@ void SystemStub_STDL::quantiseClusters(uint16_t *col, uint16_t *cnt, int n, uint
 	}
 	{
 	static MergeCols mc;
+	mc.perceptual = perceptual;
+	// perceptual: each cluster stays at its heaviest colour (repW its
+	// weight) rather than drifting to an average - measured, an
+	// average smears the few colours that matter most, Conrad's, into
+	// the scenery, and the heaviest member is exact
+	uint16_t repW[256];
+	for (int i = 0; i < n; ++i) {
+		repW[i] = cnt[i];
+	}
 	for (int a = 0; a < 16; ++a) {
 		for (int b = 0; b < 16; ++b) {
 			mc.absd[a * 16 + b] = (uint8_t)(a > b ? a - b : b - a);
@@ -862,26 +904,26 @@ void SystemStub_STDL::quantiseClusters(uint16_t *col, uint16_t *cnt, int n, uint
 			cand[m++] = i;
 		}
 	}
-	uint16_t *dm = (uint16_t *)malloc((long)n * n * 2);
+	uint32_t *dm = (uint32_t *)malloc((long)n * n * 4);
 	if (dm) {
 		for (int a = 0; a < m; ++a) {
 			const int i = cand[a];
-			uint16_t *row = dm + (uint16_t)i * (uint16_t)n;
-			uint16_t *mirror = dm + i;
+			uint32_t *row = dm + (uint16_t)i * (uint16_t)n;
+			uint32_t *mirror = dm + i;
 			for (int b = a + 1; b < m; ++b) {
 				const int j = cand[b];
 				row[j] = mirror[(uint16_t)j * (uint16_t)n] = mc.dist(i, j);
 			}
 		}
 	}
-	uint16_t nnd[256];
+	uint32_t nnd[256];
 	uint8_t nnj[256];
 	for (int a = 0; a < m; ++a) {
 		nearestPartner(mc, dm, n, cand, m, cand[a], nnd, nnj);
 	}
 	while (live > 16 && m >= 2) {
 		int bi = -1;
-		uint16_t best = 0xFFFF;
+		uint32_t best = 0xFFFFFFFF;
 		for (int a = 0; a < m; ++a) {
 			const int i = cand[a];
 			if (nnd[i] < best) {
@@ -893,12 +935,22 @@ void SystemStub_STDL::quantiseClusters(uint16_t *col, uint16_t *cnt, int n, uint
 			break;
 		}
 		const int bj = nnj[bi];
-		// merge bj into bi, weighted average
-		const long w1 = cnt[bi], w2 = cnt[bj];
-		const int r = (((col[bi] >> 8) & 15) * w1 + ((col[bj] >> 8) & 15) * w2) / (w1 + w2);
-		const int g = (((col[bi] >> 4) & 15) * w1 + ((col[bj] >> 4) & 15) * w2) / (w1 + w2);
-		const int b = ((col[bi] & 15) * w1 + (col[bj] & 15) * w2) / (w1 + w2);
-		col[bi] = (r << 8) | (g << 4) | b;
+		// merge bj into bi: the heavier colour, or the weighted average
+		const uint16_t oldW = cnt[bi];
+		bool moved = true;              // the survivor's colour changed
+		if (perceptual) {
+			moved = repW[bj] > repW[bi];
+			if (moved) {
+				col[bi] = col[bj];
+				repW[bi] = repW[bj];
+			}
+		} else {
+			const long w1 = cnt[bi], w2 = cnt[bj];
+			const int r = (((col[bi] >> 8) & 15) * w1 + ((col[bj] >> 8) & 15) * w2) / (w1 + w2);
+			const int g = (((col[bi] >> 4) & 15) * w1 + ((col[bj] >> 4) & 15) * w2) / (w1 + w2);
+			const int b = ((col[bi] & 15) * w1 + (col[bj] & 15) * w2) / (w1 + w2);
+			col[bi] = (r << 8) | (g << 4) | b;
+		}
 		cnt[bi] += cnt[bj];
 		alias[bj] = bi;
 		--live;
@@ -912,8 +964,8 @@ void SystemStub_STDL::quantiseClusters(uint16_t *col, uint16_t *cnt, int n, uint
 		// the survivor moved: its distances, its partner, and the
 		// partner of anyone who was pointing at either half
 		if (dm) {
-			uint16_t *row = dm + (uint16_t)bi * (uint16_t)n;
-			uint16_t *mirror = dm + bi;
+			uint32_t *row = dm + (uint16_t)bi * (uint16_t)n;
+			uint32_t *mirror = dm + bi;
 			for (int a = 0; a < m; ++a) {
 				const int j = cand[a];
 				if (j != bi) {
@@ -927,11 +979,21 @@ void SystemStub_STDL::quantiseClusters(uint16_t *col, uint16_t *cnt, int n, uint
 			if (k == bi) {
 				continue;
 			}
-			if (nnj[k] == bi || nnj[k] == bj) {
+			// Pointing at the survivor: its distance to k is only
+			// different if its colour moved, or if k is heavier than
+			// the survivor was (the smaller weight is what counts, so
+			// a lighter k sees the same distance). Recomputing all of
+			// them, as the old path does, made the perceptual merge
+			// twice as slow: pixel weights point most colours at the
+			// same few heavy ones.
+			if (nnj[k] == bj || (nnj[k] == bi && (moved || !perceptual || cnt[k] > oldW))) {
 				nearestPartner(mc, dm, n, cand, m, k, nnd, nnj);
 				continue;
 			}
-			const uint16_t d = dm ? dm[(uint16_t)k * (uint16_t)n + bi] : mc.dist(k, bi);
+			if (nnj[k] == bi) {
+				continue;
+			}
+			const uint32_t d = dm ? dm[(uint16_t)k * (uint16_t)n + bi] : mc.dist(k, bi);
 			if (d < nnd[k] || (d == nnd[k] && bi < nnj[k])) {
 				nnd[k] = d;
 				nnj[k] = (uint8_t)bi;
@@ -1476,6 +1538,8 @@ void SystemStub_STDL::buildRemap() {
 	// the text slot (scenes use up to 32 colours - DEBUT draws
 	// Conrad from the upper bank). Excluded entries are mapped to
 	// the nearest surviving colour below.
+	// in play, colours are weighed by what they cover (see MergeCols)
+	const bool perceptual = _haveColW && !g_cutscenePal;
 	uint16_t col[256];
 	uint16_t cnt[256];
 	uint8_t entryCluster[256];
@@ -1497,7 +1561,10 @@ void SystemStub_STDL::buildRemap() {
 			cnt[n] = 0;
 			++n;
 		}
-		++cnt[j];
+		// perceptual: at least 1, or a colour no room shows (the text
+		// colours, say) would merge at no cost with the first colour in
+		// the list rather than the nearest
+		cnt[j] += perceptual ? (_colW[i] ? _colW[i] : 1) : 1;
 		entryCluster[i] = j;
 	}
 
@@ -1508,9 +1575,11 @@ void SystemStub_STDL::buildRemap() {
 	// cluster. Pin its cluster: the jacket keeps its exact colour
 	// and one slot, matching the cutscene close-ups. In cutscene
 	// mode the entry is excluded above, so the pin is a no-op there.
-	const int pinned = (entryCluster[kSTConradJacketEntry] != 0xFF)
+	// (perceptual: Conrad's weight does this, and a pin would cost a
+	// slot the scenery needs)
+	const int pinned = (!perceptual && entryCluster[kSTConradJacketEntry] != 0xFF)
 		? entryCluster[kSTConradJacketEntry] : -1;
-	quantiseClusters(col, cnt, n, alias, slotOf, pinned);
+	quantiseClusters(col, cnt, n, alias, slotOf, pinned, perceptual);
 	uint8_t newRemap[256];
 	memset(_cutsceneRep, 0xC0, sizeof(_cutsceneRep));
 	bool repSet[16];
@@ -1612,6 +1681,20 @@ void ST_getAmigaColours(Color *cols, uint8_t *slots, bool *have) {
 				break;
 			}
 		}
+	}
+}
+
+void ST_setColourWeights(const uint16_t *w) {
+	SystemStub_STDL *s = g_stub;
+	const bool had = s->_haveColW;
+	s->_haveColW = (w != 0);
+	if (w && (!had || memcmp(s->_colW, w, sizeof(s->_colW)) != 0)) {
+		memcpy(s->_colW, w, sizeof(s->_colW));
+		s->_remapStale = true;
+		s->_palDirty = true;
+	} else if (!w && had) {
+		s->_remapStale = true;
+		s->_palDirty = true;
 	}
 }
 

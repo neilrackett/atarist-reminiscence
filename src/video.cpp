@@ -11,6 +11,9 @@
 #include "unpack.h"
 #include "util.h"
 #include "video.h"
+#ifdef ATARIST
+#include "palette_tables.h"
+#endif
 #include "video_st.h"
 
 Video::Video(Resource *res, SystemStub *stub, WidescreenMode widescreenMode)
@@ -1368,6 +1371,37 @@ void Video::AMIGA_setLevelPalettes(int level, const uint8_t *tmp) {
 			}
 		}
 		ST_setAmigaColourMap(amiga);
+
+		// What each colour is worth to the automatic palette: how
+		// much of the level's rooms it covers on average (measured
+		// from every room, see tools/gen-palette-tables.py), and for
+		// the object palette a fixed importance on top - it is what
+		// Conrad, the enemies and the items are drawn in, which cover
+		// few pixels but are what the player watches. Conrad's own
+		// colours and the level's enemy half count most. Tenths of a
+		// percent of the screen.
+		uint16_t weight[256];
+		memset(weight, 0, sizeof(weight));
+		if (level >= 0 && level < 7) {
+			for (int s = 0; s < 16; ++s) {
+				if (slotPal[s] >= 0 && slotPal[s] < 6) {
+					for (int k = 0; k < 16; ++k) {
+						weight[s * 16 + k] = kSTColourUse[level][slotPal[s]][k];
+					}
+				}
+			}
+			static const uint8_t kConrad[] = { 1, 3, 4, 5, 6, 7 };
+			for (int k = 0; k < 16; ++k) {
+				weight[0x40 + k] += 30;                  // objects
+				if (kSTEnemyHalves[level] & (1 << (k >> 3))) {
+					weight[0x40 + k] += 120;             // enemies
+				}
+			}
+			for (unsigned i = 0; i < sizeof(kConrad); ++i) {
+				weight[0x40 + kConrad[i]] += 120;        // Conrad
+			}
+		}
+		ST_setColourWeights((level >= 0 && level < 7) ? weight : 0);
 	}
 #endif
 }
