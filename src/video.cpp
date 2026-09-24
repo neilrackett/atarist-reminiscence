@@ -1345,6 +1345,31 @@ void Video::AMIGA_setLevelPalettes(int level, const uint8_t *tmp) {
 	setPaletteSlotBE(0x9, (level == 0) ? _mapPalSlot1 : _mapPalSlot3);
 	// inventory
 	setPaletteSlotBE(0xA, _mapPalSlot3);
+#ifdef ATARIST
+	// Which logical entries are the Amiga's 32 colours: the background
+	// palette is colours 0-15 wherever it is loaded, the object palette
+	// (Conrad, items, the inventory) 16-31. Level 2's extra object
+	// palette is neither, and custom palettes match it by colour.
+	{
+		const int slotPal[16] = {
+			_mapPalSlot1, (level == 0) ? _mapPalSlot3 : _mapPalSlot2, _mapPalSlot3, _mapPalSlot3,
+			_mapPalSlot3, -1, -1, -1,
+			_mapPalSlot1, (level == 0) ? _mapPalSlot1 : _mapPalSlot3, _mapPalSlot3, -1,
+			-1, -1, -1, -1
+		};
+		uint8_t amiga[256];
+		memset(amiga, 0xFF, sizeof(amiga));
+		for (int s = 0; s < 16; ++s) {
+			const int base = (slotPal[s] == _mapPalSlot1) ? 0 : (slotPal[s] == _mapPalSlot3) ? 16 : -1;
+			if (slotPal[s] >= 0 && base >= 0) {
+				for (int k = 0; k < 16; ++k) {
+					amiga[s * 16 + k] = (uint8_t)(base + k);
+				}
+			}
+		}
+		ST_setAmigaColourMap(amiga);
+	}
+#endif
 }
 
 void Video::AMIGA_decodeSpm(const uint8_t *src, uint8_t *dst) {

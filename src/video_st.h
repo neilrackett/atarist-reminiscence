@@ -151,6 +151,9 @@ bool ST_pageShowRect(const uint8_t *page, bool full, int *x, int *y, int *w, int
 // any, before its palettes go in (level from 1; levNum the level file
 // in use; room < 0 for none), and Ctrl+P's dump of the current colours
 void ST_paletteForRoom(int level, int levNum, int room);
+// for each logical entry, which of the Amiga's 32 colours it is (0-31,
+// 0xFF for none): set with each room's palettes
+void ST_setAmigaColourMap(const uint8_t *map256);
 const char *ST_paletteDump(int level, int levNum, int room);
 
 // with a border open, wait for the VBL before a big screen update

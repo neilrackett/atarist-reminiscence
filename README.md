@@ -141,17 +141,41 @@ are named by part as well: `L2_1R17.HEX` and `L2_2R17.HEX` (`L2.HEX`
 still covers the whole level). With neither file, the room keeps the
 colours the game chose.
 
-To start from the game's own choice, press **Ctrl+P** in play: the
-room's current 16 colours are written to the program folder as that
-room's file (e.g. `L1R45.HEX`), and the name is shown on screen. Edit
-it, then move it into `PALETTE\`, as it is for that room or renamed
-to `L1.HEX` for the whole level. Cutscenes keep their own colours.
+### Choosing which colour goes where (optional)
 
-Each colour in the room normally takes the nearest of your 16. The
-jungle's greens are muted olives, and with a palette whose only greens
-are bright - EGA's, say - nearest means grey. `palette_hue=true`
-matches by hue instead, so they stay green, though greys and pale
-colours tend to come out noisier. Try both.
+On the Amiga, a room is drawn in 32 colours: 0-15 for the background
+and 16-31 for Conrad, objects and items. After any of your 16 colours
+you can list which of those 32 it replaces:
+
+```
+000000 = 1,7,16
+00aa00 = 2,3,4,13
+00aaaa = 0,14
+```
+
+The lists are optional. An Amiga colour that isn't listed uses
+whichever of your 16 is nearest, and so do enemies and the few colours
+outside the 32. In a level file (`L1.HEX`) a number means that position
+in whichever room is showing, which on most levels is the same colour
+throughout.
+
+### Making one
+
+To start from the game's own choice, press **Ctrl+P** in play: the
+room's palette is written to the program folder as that room's file
+(e.g. `L1R45.HEX`), and the name is shown on screen. The file lists the
+room's 32 Amiga colours by number in comments, and each of the 16 lines
+already names the ones it's used for, so you can change colours and
+move numbers from line to line. Then move it into `PALETTE\`, as it is
+for that room or renamed to `L1.HEX` for the whole level. Cutscenes
+keep their own colours.
+
+Without lists, each colour takes the nearest of your 16. The jungle's
+greens are muted olives, and with a palette whose only greens are
+bright - EGA's, say - nearest means grey. Listing them against a green
+fixes that exactly; `palette_hue=true` is the quick alternative, which
+matches by hue instead, though greys and pale colours tend to come out
+noisier.
 
 ## Configuration
 

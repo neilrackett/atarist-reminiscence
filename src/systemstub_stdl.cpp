@@ -131,10 +131,15 @@ struct SystemStub_STDL : SystemStub {
 
 	void buildRemap();
 	void applyRemap(const uint8_t *newRemap);
+	int customSlotFor(int i);
 	// palette_custom: the room's own 16 colours, used in place of the
 	// quantiser's in game mode (see ST_setCustomPalette)
 	bool _customPal;
 	Color _customCols[16];
+	// the file's "= n,n" lists: Amiga colour 0-31 -> slot, 0xFF for
+	// none; and which Amiga colour each logical entry is, per room
+	uint8_t _customMap[32];
+	uint8_t _amigaIdx[256];
 	void fadedColours(STDL_Colour *c);
 	void writeHwPalette();
 	void convertRegion(int x, int y, int w, int h, const uint8_t *buf, int pitch, bool useShadow);
@@ -304,6 +309,8 @@ void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int
 	_palLocked = false;
 	_remapStale = true;
 	_customPal = false;
+	memset(_customMap, 0xFF, sizeof(_customMap));
+	memset(_amigaIdx, 0xFF, sizeof(_amigaIdx));
 	_upDirMask = 0;
 	_upEnter = _upSpace = _upShift = false;
 	if (STDL_Init(0x20 | 0x200) != 0) { // VIDEO | JOYSTICK
@@ -1309,6 +1316,41 @@ struct HueColour {
 	}
 };
 
+// the custom colours as HueColour, worked out once when they are set:
+// a divide or two each, too many to repeat for every entry
+static HueColour g_customHue[16];
+
+// Where logical entry i goes in a custom palette: the slot the file
+// lists for its Amiga colour, else the nearest of the 16 - by hue with
+// palette_hue, by colour otherwise.
+int SystemStub_STDL::customSlotFor(int i) {
+	const uint8_t a = _amigaIdx[i];
+	if (a < 32 && _customMap[a] < 16) {
+		return _customMap[a];
+	}
+	long best = 0x7FFFFFFF;
+	int bs = 0;
+	if (g_options.palette_hue) {
+		const HueColour c(_pal[i]);
+		for (int s = 0; s < 16; ++s) {
+			const long d = c.dist(g_customHue[s]);
+			if (d < best) {
+				best = d;
+				bs = s;
+			}
+		}
+	} else {
+		for (int s = 0; s < 16; ++s) {
+			const long d = colDist(_pal[i], _customCols[s]);
+			if (d < best) {
+				best = d;
+				bs = s;
+			}
+		}
+	}
+	return bs;
+}
+
 // Quantise the 256-entry logical palette to 16 hardware colours.
 // Colours are reduced to STE 4-bit per channel first (the hardware
 // cannot do better), deduplicated, then greedily merged by nearest
@@ -1386,6 +1428,10 @@ void SystemStub_STDL::buildRemap() {
 		if (nchg <= 16) {
 			for (int c = 0; c < nchg; ++c) {
 				const int i = changed[c];
+				if (_customPal && !g_cutscenePal) {
+					_remap[i] = (uint8_t)customSlotFor(i);
+					continue;
+				}
 				long best = 0x7FFFFFFF;
 				int bs = 0;
 				for (int s = 0; s < 16; ++s) {
@@ -1410,38 +1456,12 @@ void SystemStub_STDL::buildRemap() {
 
 	if (_customPal && !g_cutscenePal) {
 		// A custom palette is the 16 colours, as given: every entry
-		// takes the nearest, or with palette_hue the closest by hue
-		// (see HueColour). Cutscenes keep their own mapping.
+		// takes the slot its file lists for it, or the nearest (see
+		// customSlotFor). Cutscenes keep their own mapping.
 		memcpy(_hwPal, _customCols, sizeof(_hwPal));
-		HueColour hw[16];
-		if (g_options.palette_hue) {
-			for (int s = 0; s < 16; ++s) {
-				hw[s] = HueColour(_hwPal[s]);
-			}
-		}
 		uint8_t newRemap[256];
 		for (int i = 0; i < 256; ++i) {
-			long best = 0x7FFFFFFF;
-			int bs = 0;
-			if (g_options.palette_hue) {
-				const HueColour c(_pal[i]);
-				for (int s = 0; s < 16; ++s) {
-					const long d = c.dist(hw[s]);
-					if (d < best) {
-						best = d;
-						bs = s;
-					}
-				}
-			} else {
-				for (int s = 0; s < 16; ++s) {
-					const long d = colDist(_pal[i], _hwPal[s]);
-					if (d < best) {
-						best = d;
-						bs = s;
-					}
-				}
-			}
-			newRemap[i] = (uint8_t)bs;
+			newRemap[i] = (uint8_t)customSlotFor(i);
 		}
 		applyRemap(newRemap);
 		return;
@@ -1547,15 +1567,52 @@ void SystemStub_STDL::applyRemap(const uint8_t *newRemap) {
 	}
 }
 
-void ST_setCustomPalette(const Color *cols) {
+void ST_setCustomPalette(const Color *cols, const uint8_t *map32) {
 	SystemStub_STDL *s = g_stub;
 	s->_customPal = (cols != 0);
 	if (cols) {
 		memcpy(s->_customCols, cols, sizeof(s->_customCols));
+		for (int i = 0; i < 16; ++i) {
+			g_customHue[i] = HueColour(cols[i]);
+		}
+	}
+	if (map32) {
+		memcpy(s->_customMap, map32, sizeof(s->_customMap));
+	} else {
+		memset(s->_customMap, 0xFF, sizeof(s->_customMap));
 	}
 	// a full rebuild, not the few-entries patch: every entry moves
 	s->_remapStale = true;
 	s->_palDirty = true;
+}
+
+void ST_setAmigaColourMap(const uint8_t *map256) {
+	SystemStub_STDL *s = g_stub;
+	if (memcmp(s->_amigaIdx, map256, sizeof(s->_amigaIdx)) != 0) {
+		memcpy(s->_amigaIdx, map256, sizeof(s->_amigaIdx));
+		if (s->_customPal) {
+			s->_remapStale = true;
+			s->_palDirty = true;
+		}
+	}
+}
+
+// For Ctrl+P: the room's Amiga colours 0-31 and the slot each is drawn
+// with now; have[n] is false for one the room does not load.
+void ST_getAmigaColours(Color *cols, uint8_t *slots, bool *have) {
+	ST_getRemap();
+	SystemStub_STDL *s = g_stub;
+	for (int n = 0; n < 32; ++n) {
+		have[n] = false;
+		for (int i = 0; i < 256; ++i) {
+			if (s->_amigaIdx[i] == n) {
+				cols[n] = s->_pal[i];
+				slots[n] = s->_remap[i];
+				have[n] = true;
+				break;
+			}
+		}
+	}
 }
 
 void ST_getHwColours(Color *cols) {
