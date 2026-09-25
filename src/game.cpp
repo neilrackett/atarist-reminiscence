@@ -540,10 +540,11 @@ void Game::displayTitleScreenAmiga() {
 	// settings under Options. The rows are chosen so the menu is whole
 	// in every mode it can select. Fill hides rows 0-11, so the list
 	// starts below them. Fit keeps rows in runs of ten from row 10,
-	// dropping every eleventh, so an 11-pixel pitch from row 12 puts
-	// each 8-pixel line inside one run and none of them loses a row.
-	// Eleven lines end at 129, clear of the FLASHBACK logo; a twelfth
-	// would not, which is why the settings have a page of their own.
+	// dropping every eleventh, so an 11-pixel pitch from row 21 puts
+	// each line inside one run with its shadow - eight rows of glyph
+	// and one below - and none of them loses a row. Ten lines end at
+	// 128, clear of the FLASHBACK logo; one more would not, which is
+	// why the settings have a page of their own.
 	// _currentLevel only ever holds a real level.
 	enum { kPageMain, kPageOptions };
 	enum {
@@ -562,9 +563,10 @@ void Game::displayTitleScreenAmiga() {
 	optItems[optCount++] = kHzOpt;
 #endif
 	optItems[optCount++] = kBackOpt;
-	static const int kTextY = 12;
+	static const int kTextY = 21;
 	static const int kTextPitch = 11;
-	static const int kBand = kW * Video::CHAR_H;
+	static const int kLineH = Video::CHAR_H + 1;   // the glyphs and their shadow
+	static const int kBand = kW * kLineH;
 	static const char *const kScreenNames[kScreenModes] = { "Fit", "Fill", "Overscan Top", "Overscan Full" };
 	static const char *const kSkillNames[3] = { "Easy", "Normal", "Expert" };
 	// Lines change length as they cycle, and a change of page replaces
@@ -659,6 +661,13 @@ void Game::displayTitleScreenAmiga() {
 					// below: its ink starts at x=13, and the font
 					// carries two blank columns before a glyph
 					const int x = 11;
+					// A one-pixel black shadow down and to the right, as
+					// the Amiga and Archimedes menus draw theirs (entry 0
+					// is the title palette's black). Every shadow goes
+					// first, so none lands on a neighbouring letter's ink.
+					for (int j = 0; str[j]; ++j) {
+						_vid.AMIGA_drawStringChar(buf, kW, x + 1 + j * Video::CHAR_W, y + 1, _res._fnt, 0, str[j]);
+					}
 					for (int j = 0; str[j]; ++j) {
 						_vid.AMIGA_drawStringChar(buf, kW, x + j * Video::CHAR_W, y, _res._fnt, color, str[j]);
 					}
@@ -666,11 +675,11 @@ void Game::displayTitleScreenAmiga() {
 				// the picture behind the names is untouched, so blit
 				// the lines that changed rather than the screen
 				if (shown < 0) {
-					_stub->copyRect(0, kTextY, kW, (kLines - 1) * kTextPitch + Video::CHAR_H, buf, kW);
+					_stub->copyRect(0, kTextY, kW, (kLines - 1) * kTextPitch + kLineH, buf, kW);
 				} else {
 					for (int i = 0; i < kLines; ++i) {
 						if (lines & (1 << i)) {
-							_stub->copyRect(0, kTextY + i * kTextPitch, kW, Video::CHAR_H, buf, kW);
+							_stub->copyRect(0, kTextY + i * kTextPitch, kW, kLineH, buf, kW);
 						}
 					}
 				}
