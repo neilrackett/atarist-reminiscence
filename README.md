@@ -18,12 +18,12 @@ So, just three decades after the original was released... **_Say hello to Flashb
 
 ## Requirements
 
-- Works on any ST with at least 2MB RAM (4MB recommended) and 3MB of hard disk space.
+- Needs an ST with at least 2.5MB RAM (4MB recommended).
+- 3MB of hard disk space.
 - Sound effects are STE-only.
 - Optional music works on any ST (see below).
 
-On a 2MB machine it's a tight fit, especially with music and overscan on,
-so keep desk accessories and resident programs to a minimum.
+Sorry, 2MB isn't enough: with a hard disk driver loaded, the larger levels run out of memory.
 
 ## Installing
 
@@ -142,10 +142,10 @@ colour in the room then uses the nearest of the 16.
 
 For each room the game looks for, in order:
 
-| File              | Used for                                    |
-| ----------------- | ------------------------------------------- |
-| `L1R45.HEX`       | level 1, room 45                            |
-| `L1.HEX`          | any room of level 1 without its own file    |
+| File        | Used for                                 |
+| ----------- | ---------------------------------------- |
+| `L1R45.HEX` | level 1, room 45                         |
+| `L1.HEX`    | any room of level 1 without its own file |
 
 Level 2 is stored as two parts whose room numbers overlap, so its rooms
 are named by part as well: `L2_1R17.HEX` and `L2_2R17.HEX` (`L2.HEX`
