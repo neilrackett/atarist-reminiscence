@@ -360,6 +360,15 @@ void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int
 	_shadowValid = false;
 	_fillTop = kFillScreensTop;
 	_fillTopGame = kFillGameTop;
+	// refresh_rate: 50 or 60, or else whatever the machine booted at,
+	// which is then what the title's Options shows. Asked for before
+	// any border opens; an open one holds 50Hz and the rate asked for
+	// comes in when it closes.
+	if (g_options.refresh_rate == 50 || g_options.refresh_rate == 60) {
+		STDL_SetRefresh(g_options.refresh_rate);
+	} else {
+		g_options.refresh_rate = STDL_SetRefresh(-1);
+	}
 	setScreenMode(g_options.screen);
 	setScreenSize(w, h);
 	// black screen until the first frame arrives

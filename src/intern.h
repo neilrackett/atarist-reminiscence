@@ -171,6 +171,7 @@ struct Options {
 	bool palette_custom;   // ST port: PALETTE\ room palettes and Ctrl+P
 	bool palette_hue;      // ST port: match custom palettes by hue
 	bool ste_sound;        // ST port: open the STE sample device at all
+	int refresh_rate;      // ST port: 50 or 60Hz; the machine's own if neither
 };
 
 // ST port: the four screen modes, in the order the menu cycles them

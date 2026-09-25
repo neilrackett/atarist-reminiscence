@@ -536,31 +536,54 @@ void Game::displayTitleScreenAmiga() {
 	_stub->updateScreen(0);
 	_vid.AMIGA_decodeCmp(_res._scratchBuffer + 6, buf);
 	int h = 0;
-	int shownLevel = -1;   // which selection the screen is showing
-	// Below the levels sit the skill, the screen mode and Quit. The
-	// rows are chosen so the menu is whole in every mode it can
-	// select. Fill hides rows 0-11, so the list starts below them. Fit
-	// keeps rows in runs of ten from row 2, dropping every eleventh,
-	// so an 11-pixel pitch from row 13 puts each 8-pixel line inside
-	// one run and none of them loses a row. Eleven lines then end at
-	// 130, clear of the FLASHBACK logo. _currentLevel only ever holds
-	// a real level.
+	// Two pages: the levels with Options and Quit below them, and the
+	// settings under Options. The rows are chosen so the menu is whole
+	// in every mode it can select. Fill hides rows 0-11, so the list
+	// starts below them. Fit keeps rows in runs of ten from row 2,
+	// dropping every eleventh, so an 11-pixel pitch from row 13 puts
+	// each 8-pixel line inside one run and none of them loses a row.
+	// Eleven lines end at 130, clear of the FLASHBACK logo; a twelfth
+	// would not, which is why the settings have a page of their own.
+	// _currentLevel only ever holds a real level.
+	enum { kPageMain, kPageOptions };
 	enum {
-		kSkillItem = Menu::LEVELS_COUNT,
-		kScreenItem = Menu::LEVELS_COUNT + 1,
-		kQuitItem = Menu::LEVELS_COUNT + 2
+		kOptionsItem = Menu::LEVELS_COUNT,
+		kQuitItem = Menu::LEVELS_COUNT + 1,
+		kLines = Menu::LEVELS_COUNT + 2     // the longer page
 	};
+	enum { kSkillOpt, kScreenOpt, kMusicOpt, kVolumeOpt, kHzOpt, kBackOpt };
+	int optItems[6];
+	int optCount = 0;
+	optItems[optCount++] = kSkillOpt;
+	optItems[optCount++] = kScreenOpt;
+#ifdef ATARIST
+	optItems[optCount++] = kMusicOpt;
+	optItems[optCount++] = kVolumeOpt;
+	optItems[optCount++] = kHzOpt;
+#endif
+	optItems[optCount++] = kBackOpt;
 	static const int kTextY = 13;
 	static const int kTextPitch = 11;
+	static const int kBand = kW * Video::CHAR_H;
 	static const char *const kScreenNames[kScreenModes] = { "Fit", "Fill", "Overscan Top", "Overscan Full" };
 	static const char *const kSkillNames[3] = { "Easy", "Normal", "Expert" };
-	// Two lines change length as they cycle, so the strip of picture
-	// under each is kept and put back before every redraw.
-	uint8_t skillBand[kW * Video::CHAR_H];
-	uint8_t screenBand[kW * Video::CHAR_H];
-	memcpy(skillBand, buf + (kTextY + kSkillItem * kTextPitch) * kW, sizeof(skillBand));
-	memcpy(screenBand, buf + (kTextY + kScreenItem * kTextPitch) * kW, sizeof(screenBand));
+	// Lines change length as they cycle, and a change of page replaces
+	// every one, so the strip of picture under each line is kept and
+	// put back before the line is drawn again.
+	uint8_t *bands = (uint8_t *)malloc(kLines * kBand);
+	if (!bands) {
+		error("Failed to allocate the title menu's text bands");
+	}
+	for (int i = 0; i < kLines; ++i) {
+		memcpy(bands + i * kBand, buf + (kTextY + i * kTextPitch) * kW, kBand);
+	}
+#ifdef ATARIST
+	const bool musicInstalled = Mixer::ST_musicInstalled();
+#endif
+	int page = kPageMain;
 	int selected = _currentLevel;
+	int shown = -1;           // the selection on screen; -1 to draw every line
+	uint16_t changed = 0;     // lines whose text changed
 	bool quitSelected = false;
 	MenuConfirm confirm;
 	while (1) {
@@ -570,59 +593,90 @@ void Game::displayTitleScreenAmiga() {
 			_stub->updateScreen(0);
 			h += 2;
 		} else {
-			// Only the highlighted line changes here, and a full
-			// 320x224 chunky-to-planar conversion costs 100ms on a
-			// Mega STE and three times that on a plain ST. Redrawing
-			// every pass left the loop polling input once per frame,
-			// which is long enough to miss a joystick tap or a short
-			// keypress outright: several presses could go by before
-			// one happened to straddle a poll. Draw when the
-			// selection moves and spend the rest of the time
-			// listening.
-			if (shownLevel != selected) {
+			// Only the lines that change are drawn, and only when they
+			// do: a full 320x224 chunky-to-planar conversion costs
+			// 100ms on a Mega STE and three times that on a plain ST.
+			// Redrawing every pass left the loop polling input once
+			// per frame, which is long enough to miss a joystick tap
+			// or a short keypress outright: several presses could go
+			// by before one happened to straddle a poll. Draw when
+			// something moves and spend the rest of the time listening.
+			const int count = (page == kPageMain) ? (int)kLines : optCount;
+			if (shown != selected || changed != 0) {
 				static const uint8_t selectedColor = 0xE4;
 				static const uint8_t defaultColor = 0xE8;
-				for (int i = 0; i <= kQuitItem; ++i) {
-					// after the first pass only two lines change colour
-					if (shownLevel >= 0 && i != shownLevel && i != selected) {
+				uint16_t lines = changed;
+				if (shown < 0) {
+					lines = (1 << kLines) - 1;
+				} else if (shown != selected) {
+					lines |= (1 << shown) | (1 << selected);
+				}
+				for (int i = 0; i < kLines; ++i) {
+					if (!(lines & (1 << i))) {
 						continue;
 					}
-					char screenLabel[40];
-					snprintf(screenLabel, sizeof(screenLabel), "Screen: %s", kScreenNames[g_options.screen]);
-					char skillLabel[24];
-					snprintf(skillLabel, sizeof(skillLabel), "Skill: %s", kSkillNames[_menu._skill]);
-					// "Quit Game" rather than the engine's "QUIT": every other
-					// line on this screen is in title case.
-					const char *str = (i == kQuitItem)
-						? "Quit Game"
-						: (i == kScreenItem) ? screenLabel
-						: (i == kSkillItem) ? skillLabel : Menu::_levelNames[i];
+					const int y = kTextY + i * kTextPitch;
+					memcpy(buf + y * kW, bands + i * kBand, kBand);
+					if (i >= count) {
+						continue;                   // the longer page's line: picture only
+					}
+					char label[40];
+					const char *str = label;
+					if (page == kPageMain) {
+						// QUIT as the DOS menu has it, in the data's
+						// language (QUITTER, END, SALIR, ESCI)
+						str = (i == kQuitItem) ? _res.getMenuString(LocaleData::LI_11_QUIT)
+							: (i == kOptionsItem) ? "Options" : Menu::_levelNames[i];
+					} else {
+						switch (optItems[i]) {
+						case kSkillOpt:
+							snprintf(label, sizeof(label), "Skill: %s", kSkillNames[_menu._skill]);
+							break;
+						case kScreenOpt:
+							snprintf(label, sizeof(label), "Screen: %s", kScreenNames[g_options.screen]);
+							break;
+#ifdef ATARIST
+						case kMusicOpt:
+							str = !musicInstalled ? "Music: Not Installed" : g_options.music ? "Music: On" : "Music: Off";
+							break;
+						case kVolumeOpt:
+							snprintf(label, sizeof(label), "Music Volume: %d%%", g_options.music_volume);
+							break;
+						case kHzOpt:
+							// the rate asked for: an open border holds the
+							// display at 50Hz regardless, and this comes in
+							// when it closes
+							snprintf(label, sizeof(label), "Refresh: %dHz", g_options.refresh_rate);
+							break;
+#endif
+						default:
+							str = "Back";
+							break;
+						}
+					}
 					const uint8_t color = (selected == i) ? selectedColor : defaultColor;
 					// left-aligned with the F of the FLASHBACK logo
 					// below: its ink starts at x=13, and the font
 					// carries two blank columns before a glyph
 					const int x = 11;
-					const int y = kTextY + i * kTextPitch;
-					if (i == kScreenItem) {
-						memcpy(buf + y * kW, screenBand, sizeof(screenBand));
-					} else if (i == kSkillItem) {
-						memcpy(buf + y * kW, skillBand, sizeof(skillBand));
-					}
 					for (int j = 0; str[j]; ++j) {
 						_vid.AMIGA_drawStringChar(buf, kW, x + j * Video::CHAR_W, y, _res._fnt, color, str[j]);
 					}
 				}
 				// the picture behind the names is untouched, so blit
-				// the lines that swapped colour rather than the screen
-				if (shownLevel < 0) {
-					const int textH = kQuitItem * kTextPitch + Video::CHAR_H;
-					_stub->copyRect(0, kTextY, kW, textH, buf, kW);
+				// the lines that changed rather than the screen
+				if (shown < 0) {
+					_stub->copyRect(0, kTextY, kW, (kLines - 1) * kTextPitch + Video::CHAR_H, buf, kW);
 				} else {
-					_stub->copyRect(0, kTextY + shownLevel * kTextPitch, kW, Video::CHAR_H, buf, kW);
-					_stub->copyRect(0, kTextY + selected * kTextPitch, kW, Video::CHAR_H, buf, kW);
+					for (int i = 0; i < kLines; ++i) {
+						if (lines & (1 << i)) {
+							_stub->copyRect(0, kTextY + i * kTextPitch, kW, Video::CHAR_H, buf, kW);
+						}
+					}
 				}
 				_stub->updateScreen(0);
-				shownLevel = selected;
+				shown = selected;
+				changed = 0;
 			}
 			if (_stub->_pi.dirMask & PlayerInput::DIR_UP) {
 				_stub->_pi.dirMask &= ~PlayerInput::DIR_UP;
@@ -632,18 +686,16 @@ void Game::displayTitleScreenAmiga() {
 			}
 			if (_stub->_pi.dirMask & PlayerInput::DIR_DOWN) {
 				_stub->_pi.dirMask &= ~PlayerInput::DIR_DOWN;
-				if (selected < kQuitItem) {
+				if (selected < count - 1) {
 					++selected;
 				}
 			}
-			// Left, right or fire on the screen mode line cycles it,
-			// and the change is made there and then: the menu is a
-			// static screen, the one place a mode change costs nothing
-			// but a repaint. Each border transition reshapes the
-			// surface, so the whole picture goes back up, not just
-			// the line that changed.
+			// Left, right or fire on a setting cycles it, and the change
+			// is made there and then: the menu is a static screen, the
+			// one place a mode change costs nothing but a repaint.
 			int step = 0;
-			if (selected == kScreenItem || selected == kSkillItem) {
+			const int item = (page == kPageOptions) ? optItems[selected] : -1;
+			if (item >= 0 && item != kBackOpt) {
 				if (_stub->_pi.dirMask & PlayerInput::DIR_LEFT) {
 					step = -1;
 				} else if (_stub->_pi.dirMask & PlayerInput::DIR_RIGHT) {
@@ -651,19 +703,56 @@ void Game::displayTitleScreenAmiga() {
 				}
 				_stub->_pi.dirMask &= ~(PlayerInput::DIR_LEFT | PlayerInput::DIR_RIGHT);
 			}
-			if (step != 0 && selected == kScreenItem) {
-				const int want = (g_options.screen + kScreenModes + step) % kScreenModes;
-				g_options.screen = _stub->setScreenMode(want);
-				shownLevel = -1;
-				_stub->copyRect(0, 0, kW, kH, buf, kW);
-				_stub->updateScreen(0);
-			} else if (step != 0) {
-				// The Amiga screen never offered this: the port pinned
-				// the skill at Normal, and Expert was unreachable.
-				_menu._skill = (_menu._skill + 3 + step) % 3;
-				shownLevel = -1;
+			if (step != 0) {
+				switch (item) {
+				case kSkillOpt:
+					// The Amiga screen never offered this: the port pinned
+					// the skill at Normal, and Expert was unreachable.
+					_menu._skill = (_menu._skill + 3 + step) % 3;
+					break;
+				case kScreenOpt: {
+						// Each border transition reshapes the surface, so the
+						// whole picture goes back up, not just the line.
+						const int want = (g_options.screen + kScreenModes + step) % kScreenModes;
+						g_options.screen = _stub->setScreenMode(want);
+						shown = -1;
+						_stub->copyRect(0, 0, kW, kH, buf, kW);
+						_stub->updateScreen(0);
+					}
+					break;
+#ifdef ATARIST
+				case kMusicOpt:
+					// the title plays the menu track, so the change is heard
+					if (musicInstalled) {
+						g_options.music = !g_options.music;
+						if (g_options.music) {
+							_mix.playMusic(1);
+						} else {
+							_mix.stopMusic();
+						}
+					}
+					break;
+				case kVolumeOpt: {
+						// tens, wrapping, so fire alone reaches every level;
+						// a figure from RS.CFG between them rounds to the next
+						int q = (step > 0) ? g_options.music_volume / 10 + 1 : (g_options.music_volume + 9) / 10 - 1;
+						if (q > 10) {
+							q = 0;
+						} else if (q < 0) {
+							q = 10;
+						}
+						_mix.ST_setMusicVolume(q * 10);
+					}
+					break;
+				case kHzOpt:
+					g_options.refresh_rate = (g_options.refresh_rate == 60) ? 50 : 60;
+					STDL_SetRefresh(g_options.refresh_rate);
+					break;
+#endif
+				}
+				changed |= 1 << selected;
 			}
-			if (selected != kQuitItem && selected != kScreenItem && selected != kSkillItem) {
+			if (page == kPageMain && selected < Menu::LEVELS_COUNT) {
 				_currentLevel = selected;
 			}
 		}
@@ -671,9 +760,26 @@ void Game::displayTitleScreenAmiga() {
 		if (_stub->_pi.quit) {
 			break;
 		}
-		if (confirm(_stub->_pi)) {
-			if (selected == kScreenItem || selected == kSkillItem) {
-				_stub->_pi.dirMask |= PlayerInput::DIR_RIGHT;   // fire cycles it too
+		const bool back = (page == kPageOptions) && (_stub->_pi.escape || _stub->_pi.backspace);
+		if (back) {
+			_stub->_pi.escape = false;
+			_stub->_pi.backspace = false;
+		}
+		if (back || confirm(_stub->_pi)) {
+			if (page == kPageOptions) {
+				if (!back && optItems[selected] != kBackOpt) {
+					_stub->_pi.dirMask |= PlayerInput::DIR_RIGHT;   // fire cycles it too
+					continue;
+				}
+				page = kPageMain;
+				selected = kOptionsItem;
+				shown = -1;
+				continue;
+			}
+			if (selected == kOptionsItem) {
+				page = kPageOptions;
+				selected = 0;
+				shown = -1;
 				continue;
 			}
 			quitSelected = (selected == kQuitItem);
@@ -681,6 +787,7 @@ void Game::displayTitleScreenAmiga() {
 		}
 		_stub->sleep(30);
 	}
+	free(bands);
 	if (quitSelected) {
 		_stub->_pi.quit = true;
 	}

@@ -116,6 +116,7 @@ static void initOptions() {
 	// the music a little under the effects; it stays an RS.CFG option
 	// for anyone who wants it louder.
 	g_options.music_volume = 50;
+	g_options.refresh_rate = 0;       // the rate the machine booted at
 	g_options.cheats = 0;
 	g_options.log_fps = false;
 	g_options.bench = false;
@@ -192,6 +193,7 @@ static void initOptions() {
 		int min, max;
 	} ints[] = {
 		{ "music_volume", &g_options.music_volume, 0, 100 },
+		{ "refresh_rate", &g_options.refresh_rate, 0, 60 },
 		// The engine has carried these since the desktop build's
 		// --cheats: 1 monsters die in one hit, 2 Conrad is never
 		// hit, 4 his life never goes down. Add them up, or say

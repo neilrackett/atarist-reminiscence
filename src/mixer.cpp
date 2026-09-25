@@ -13,6 +13,7 @@
 extern "C" {
 #include <stdl/stdl.h>
 }
+#include <mint/osbind.h>
 
 // Sound effects on the STE: voice 3 of the STDL_Voice mixer, so
 // they coexist with the SfxPlayer music on voices 0-2. If the voice
@@ -245,6 +246,26 @@ static bool ATARIST_playMusic(int num) {
 	STDL_VolumeMusic((g_options.music_volume * 128) / 100);
 	STDL_PlayMusic(_ymMusic, -1);    // loop until the scene ends
 	return true;
+}
+
+void Mixer::ST_setMusicVolume(int percent) {
+	g_options.music_volume = percent;
+	STDL_VolumeMusic((percent * 128) / 100);
+}
+
+// Any track in MUSIC\: they are built from the player's own disks
+// (tools/make-music.sh), so a copy of the game may well have none,
+// and a Music line that could only ever say On would be a lie.
+bool Mixer::ST_musicInstalled() {
+	static int installed = -1;
+	if (installed < 0) {
+		_DTA dta;
+		_DTA *saved = Fgetdta();
+		Fsetdta(&dta);
+		installed = (Fsfirst("MUSIC\\*.STM", 0) == 0) ? 1 : 0;
+		Fsetdta(saved);
+	}
+	return installed != 0;
 }
 
 static void ATARIST_stopMusic() {

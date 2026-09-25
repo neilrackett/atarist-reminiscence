@@ -21,12 +21,20 @@
 #         Known to jump and stripe on some machines
 # The two overscan modes can flicker on some hardware - a cartridge
 # with resident firmware, a mouse being moved, or disk activity is
-# enough - which is why a bordered mode is not the default. The title menu has a
-# "Screen" line that cycles through the four for the current
-# run; this line sets what it starts on. Replaces the old overscan,
+# enough - which is why a bordered mode is not the default. Options
+# on the title menu has a "Screen" line that cycles through the four
+# for the current run; this line sets what it starts on. Replaces the old overscan,
 # overscan_bottom and crop_screen settings, which are still read as
 # top, full and fill if an older RS.CFG has them. (default: fit)
 #screen=top
+
+# The display's refresh rate, 50 or 60. At 60Hz most monitors draw
+# the picture taller, so fit comes close to the height the overscan
+# modes give. The overscan modes always run at 50Hz, and some PAL TVs
+# won't show 60Hz at all. Options on the title menu changes it for
+# the current run. (default: the machine's own - 50 on a PAL ST, 60
+# on an NTSC one)
+#refresh_rate=60
 
 # Room palettes from a PALETTE\ folder beside this file, in place of
 # the colours the game chooses itself: PALETTE\L1R45.HEX for level 1
@@ -58,7 +66,8 @@
 
 # Play YM chip music. Needs the .STM tracks in a MUSIC\ folder beside
 # this file - see the README for building them from your own disks.
-# Sampled effects need an STE and play regardless of this.
+# Sampled effects need an STE and play regardless of this. Options
+# on the title menu turns it on or off for the current run.
 # (default: false)
 #music=true
 
@@ -66,7 +75,8 @@
 # under the sampled effects, which come through the STE mixer well
 # below full scale - at 100 the music stood some 15dB above them.
 # The chip's own volume steps are coarse, about 3dB each, so a
-# change of a few points may do nothing. (default: 50)
+# change of a few points may do nothing. Options on the title menu
+# sets it in tens for the current run. (default: 50)
 #music_volume=100
 
 # Use the .PRF music files rather than the .STM ones. (default: false)

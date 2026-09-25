@@ -71,6 +71,12 @@ struct Mixer {
 	void playMusic(int num, int tempo = 0);
 	void stopMusic();
 	void mix(int16_t *buf, int len);
+#ifdef ATARIST
+	// for the title's Options: set the music level (percent) and hear
+	// it at once, and whether there is any music to play
+	void ST_setMusicVolume(int percent);
+	static bool ST_musicInstalled();
+#endif
 
 	static void mixCallback(void *param, int16_t *buf, int len);
 };
