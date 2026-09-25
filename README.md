@@ -301,6 +301,7 @@ The desktop SDL2 build is still available via `make -f Makefile.sdl`.
 ## Credits
 
 - A massive thank you to [Gregory Montoir for REminiscence](https://github.com/cyxx/REminiscence) and agreeing to let me use it.
+- A big thank you to everyone on [X](https://x.com/neilrackett) and [Atari Forum](https://www.atari-forum.com/viewtopic.php?t=46425) who helped with testing and refining the colour palette.
 - Delphine Software, obviously, for making another great game.
 - Yaz0r, Pixel and gawd for sharing information they gathered on the game.
 
