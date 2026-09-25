@@ -9,7 +9,7 @@
 # fails to find a file that is visibly present.
 #
 # extract-data.sh already names its output correctly. This is for
-# data extracted with something else, which the README suggests for
+# data extracted with something else, which docs/extracting-files.md suggests for
 # anyone without CAPS/SPS images.
 set -eu
 
