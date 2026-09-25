@@ -112,6 +112,14 @@ struct Game {
 	enum { kLogicStepMs = 1000 / 30, kLogicStallMs = 250 };
 	int32_t _logicDebt;
 	uint16_t _logicCatchUps;
+	// ST: when the next step is due (see updateTiming), and where the
+	// 30/35/35ms pattern that averages a third of 100ms has got to
+	uint32_t _stDeadline;
+	uint8_t _stStepPhase;
+	int stNextStep();
+	// ST: a save chosen on the title menu, loaded once its level is up
+	// (-1 none)
+	int16_t _stLoadSlot;
 	WidescreenMode _widescreenMode;
 	bool _autoSave;
 	uint32_t _saveTimestamp;

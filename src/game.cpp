@@ -18,6 +18,7 @@
 extern "C" {
 #include <stdl/stdl.h>
 }
+#include <mint/osbind.h>
 #endif
 
 #ifdef ATARIST
@@ -155,6 +156,45 @@ struct IconCache {
 };
 static IconCache _icnCache;
 
+// The saved games on disk for the title's Load line: RS<level>_<slot>.SAV,
+// level 1-7 and slot 00 (the level's save point) to 99, in level and
+// slot order; newest is the index of the most recently written.
+struct STSave {
+	uint8_t level, slot;
+	uint32_t stamp;                  // DOS date and time, for the newest
+};
+static int ST_scanSaves(STSave *out, int max, int *newest) {
+	int n = 0;
+	*newest = -1;
+	_DTA dta;
+	_DTA *saved = Fgetdta();
+	Fsetdta(&dta);
+	for (long r = Fsfirst("RS*.SAV", 0); r == 0 && n < max; r = Fsnext()) {
+		const char *s = dta.dta_name;
+		if (s[0] != 'R' || s[1] != 'S' || s[2] < '1' || s[2] > '7' || s[3] != '_'
+		    || s[4] < '0' || s[4] > '9' || s[5] < '0' || s[5] > '9' || strcmp(s + 6, ".SAV") != 0) {
+			continue;
+		}
+		STSave e;
+		e.level = (uint8_t)(s[2] - '1');
+		e.slot = (uint8_t)((s[4] - '0') * 10 + (s[5] - '0'));
+		e.stamp = ((uint32_t)dta.dta_date << 16) | dta.dta_time;
+		int i = n++;
+		while (i > 0 && (out[i - 1].level > e.level || (out[i - 1].level == e.level && out[i - 1].slot > e.slot))) {
+			out[i] = out[i - 1];
+			--i;
+		}
+		out[i] = e;
+	}
+	Fsetdta(saved);
+	for (int i = 0; i < n; ++i) {
+		if (*newest < 0 || out[i].stamp >= out[*newest].stamp) {
+			*newest = i;
+		}
+	}
+	return n;
+}
+
 // On the Amiga data a monster has no palette of its own: its slot is
 // loaded with half of the object palette, entries (monster & 1) * 8
 // on (loadMonsterSprites).
@@ -267,6 +307,9 @@ Game::Game(SystemStub *stub, FileSystem *fs, const char *savePath, int level, Re
 	_stIconShown = -1;
 	_stIconY = 0;
 	_stIconGen = 0xFFFF;
+	_stDeadline = 0;
+	_stStepPhase = 0;
+	_stLoadSlot = -1;
 #endif
 }
 
@@ -458,10 +501,31 @@ void Game::run() {
 			clearStateRewind();
 			loadLevelData();
 			resetGameState();
+#ifdef ATARIST
+			if (_stLoadSlot >= 0) {
+				// Load on the title: the saved state in place of the
+				// level's start, and so without its opening cutscene
+				const uint16_t cut = _cut._id;
+				_cut._id = 0xFFFF;
+				if (loadGameState((uint8_t)_stLoadSlot)) {
+					if (_stLoadSlot != kIngameSaveSlot) {
+						_stateSlot = (uint8_t)_stLoadSlot;      // Ctrl+S saves back to it
+					} else {
+						// a death continues from the save point, as
+						// it would had it been reached in play
+						_validSaveState = true;
+					}
+				} else {
+					_cut._id = cut;
+				}
+				_stLoadSlot = -1;
+			}
+#endif
 			_endLoop = false;
 			_frameTimestamp = _stub->getTimeStamp();
 			_logicDebt = 0;
 			_logicCatchUps = 0;
+			_stDeadline = _frameTimestamp;
 			_saveTimestamp = _frameTimestamp;
 			while (!_stub->_pi.quit && !_endLoop) {
 				mainLoop();
@@ -536,22 +600,38 @@ void Game::displayTitleScreenAmiga() {
 	_stub->updateScreen(0);
 	_vid.AMIGA_decodeCmp(_res._scratchBuffer + 6, buf);
 	int h = 0;
-	// Two pages: the levels with Options and Quit below them, and the
-	// settings under Options. The rows are chosen so the menu is whole
-	// in every mode it can select. Fill hides rows 0-11, so the list
-	// starts below them. Fit keeps rows in runs of ten from row 10,
-	// dropping every eleventh, so an 11-pixel pitch from row 21 puts
-	// each line inside one run with its shadow - eight rows of glyph
-	// and one below - and none of them loses a row. Ten lines end at
-	// 128, clear of the FLASHBACK logo; one more would not, which is
-	// why the settings have a page of their own.
+	// Two pages: the levels with Load, Options and Quit below them,
+	// and the settings under Options. The rows are chosen so the menu
+	// is whole in every mode it can select. Fill hides rows 0-11, so
+	// the list starts below them. Fit keeps rows in runs of ten from
+	// row 10, dropping every eleventh, so an 11-pixel pitch from row
+	// 21 puts each line inside one run with its shadow - eight rows of
+	// glyph and one below - and none of them loses a row. Eleven lines
+	// end at 139, clear of the FLASHBACK logo at about 150; the
+	// settings have a page of their own because a twelfth would not be.
 	// _currentLevel only ever holds a real level.
 	enum { kPageMain, kPageOptions };
+#ifdef ATARIST
 	enum {
-		kOptionsItem = Menu::LEVELS_COUNT,
-		kQuitItem = Menu::LEVELS_COUNT + 1,
-		kLines = Menu::LEVELS_COUNT + 2     // the longer page
+		kLoadItem = Menu::LEVELS_COUNT,
+		kOptionsItem,
+		kQuitItem,
+		kLines                            // the longer page
 	};
+	// Load: the saves on disk, one line that cycles through them,
+	// starting at the most recent
+	enum { kMaxSaves = 64 };
+	STSave saves[kMaxSaves];
+	int loadSel = 0;
+	const int saveCount = ST_scanSaves(saves, kMaxSaves, &loadSel);
+#else
+	enum {
+		kLoadItem = -1,
+		kOptionsItem = Menu::LEVELS_COUNT,
+		kQuitItem,
+		kLines
+	};
+#endif
 	enum { kSkillOpt, kScreenOpt, kMusicOpt, kVolumeOpt, kHzOpt, kBackOpt };
 	int optItems[6];
 	int optCount = 0;
@@ -629,6 +709,20 @@ void Game::displayTitleScreenAmiga() {
 						// language (QUITTER, END, SALIR, ESCI)
 						str = (i == kQuitItem) ? _res.getMenuString(LocaleData::LI_11_QUIT)
 							: (i == kOptionsItem) ? "Options" : Menu::_levelNames[i];
+#ifdef ATARIST
+						if (i == kLoadItem) {
+							// the level's number rather than its name: the
+							// longest name and a slot run past the edge
+							str = label;
+							if (saveCount == 0) {
+								snprintf(label, sizeof(label), "Load: No Saved Games");
+							} else if (saves[loadSel].slot == kIngameSaveSlot) {
+								snprintf(label, sizeof(label), "Load: Level %d, Save Point", saves[loadSel].level + 1);
+							} else {
+								snprintf(label, sizeof(label), "Load: Level %d, Slot %02d", saves[loadSel].level + 1, saves[loadSel].slot);
+							}
+						}
+#endif
 					} else {
 						switch (optItems[i]) {
 						case kSkillOpt:
@@ -704,7 +798,7 @@ void Game::displayTitleScreenAmiga() {
 			// one place a mode change costs nothing but a repaint.
 			int step = 0;
 			const int item = (page == kPageOptions) ? optItems[selected] : -1;
-			if (item >= 0 && item != kBackOpt) {
+			if ((item >= 0 && item != kBackOpt) || (page == kPageMain && selected == kLoadItem)) {
 				if (_stub->_pi.dirMask & PlayerInput::DIR_LEFT) {
 					step = -1;
 				} else if (_stub->_pi.dirMask & PlayerInput::DIR_RIGHT) {
@@ -712,6 +806,16 @@ void Game::displayTitleScreenAmiga() {
 				}
 				_stub->_pi.dirMask &= ~(PlayerInput::DIR_LEFT | PlayerInput::DIR_RIGHT);
 			}
+#ifdef ATARIST
+			if (step != 0 && page == kPageMain) {
+				// Load: to the next save on disk, either way round
+				if (saveCount > 1) {
+					loadSel = (loadSel + saveCount + step) % saveCount;
+					changed |= 1 << selected;
+				}
+				step = 0;
+			}
+#endif
 			if (step != 0) {
 				switch (item) {
 				case kSkillOpt:
@@ -791,6 +895,17 @@ void Game::displayTitleScreenAmiga() {
 				shown = -1;
 				continue;
 			}
+#ifdef ATARIST
+			if (selected == kLoadItem) {
+				if (saveCount == 0) {
+					continue;                 // nothing to load
+				}
+				_currentLevel = saves[loadSel].level;
+				_stLoadSlot = saves[loadSel].slot;
+				info("Loading level %d slot %d from the title", _currentLevel + 1, _stLoadSlot);
+				break;
+			}
+#endif
 			quitSelected = (selected == kQuitItem);
 			break;
 		}
@@ -866,6 +981,7 @@ void Game::mainLoop() {
 	// holds its pace the same way (Cutscene::stDecideSkip).
 	if (_logicDebt >= kLogicStepMs) {
 		_logicDebt -= kLogicStepMs;
+		_stDeadline += stNextStep();      // the catch-up takes a step of the schedule
 		++_logicCatchUps;
 		if (!stepLogic()) {
 			return;
@@ -1043,33 +1159,61 @@ void Game::updateTiming() {
 		}
 	}
 #endif
+#ifdef ATARIST
+	// Pace to a deadline rather than a pause. The clock is the 200Hz
+	// counter, so time comes in 5ms ticks and 33.3ms is not one of
+	// them: sleeping "33ms less this frame's work" rounded every pause
+	// up to a whole tick and a machine with time to spare ran at
+	// 28.5fps, the game 5% slow. The deadline moves on 30, 35 and 35ms
+	// in turn - 100ms for three steps, exactly 30 a second - and a
+	// frame done early sleeps until it, so the rate is exact over any
+	// three frames and each wait ends on a tick.
+	if (!(_stub->_pi.dbgMask & PlayerInput::DF_FASTMODE)) {
+		const uint32_t now = _stub->getTimeStamp();
+		_stDeadline += stNextStep();
+		const int32_t behind = (int32_t)(now - _stDeadline);
+		if (behind > kLogicStallMs) {
+			// a load, a cutscene or a menu, not gameplay: the schedule
+			// starts again from here and nothing is made up
+			_stDeadline = now;
+			_logicDebt = 0;
+		} else if (behind > 0) {
+			// Late: mainLoop runs a catch-up step once a whole step is
+			// owed. Two at most, so a machine that cannot keep pace
+			// even with catch-ups slows down instead of falling ever
+			// further behind.
+			if (behind > 2 * kLogicStepMs) {
+				_stDeadline = now - 2 * kLogicStepMs;
+			}
+			_logicDebt = (int32_t)(now - _stDeadline);
+		} else {
+			_logicDebt = 0;
+			_stub->sleep(-behind);
+		}
+		_frameTimestamp = _stub->getTimeStamp();
+		return;
+	}
+#endif
 	static const int frameHz = 30;
 	int32_t delay = _stub->getTimeStamp() - _frameTimestamp;
 	int32_t pause = (_stub->_pi.dbgMask & PlayerInput::DF_FASTMODE) ? 20 : (1000 / frameHz);
-#ifdef ATARIST
-	// Bank the overrun for mainLoop's catch-up step. A frame that ran
-	// very long was a load or a cutscene, not gameplay, and is not
-	// made up; and the debt is capped at two steps so a machine that
-	// cannot keep pace even with catch-ups slows down instead of
-	// falling ever further behind.
-	if (delay > pause) {
-		const int32_t over = delay - pause;
-		if (over > kLogicStallMs) {
-			_logicDebt = 0;
-		} else {
-			_logicDebt += over;
-			if (_logicDebt > 2 * kLogicStepMs) {
-				_logicDebt = 2 * kLogicStepMs;
-			}
-		}
-	}
-#endif
 	pause -= delay;
 	if (pause > 0) {
 		_stub->sleep(pause);
 	}
 	_frameTimestamp = _stub->getTimeStamp();
 }
+
+#ifdef ATARIST
+// the next step of the schedule, 6 or 7 ticks of the 200Hz clock in
+// the ratio 1:2 - 30, 35, 35ms - which is 20 ticks for three steps
+int Game::stNextStep() {
+	_stStepPhase = (uint8_t)(_stStepPhase + 20);
+	const int ticks = _stStepPhase / 3;
+	_stStepPhase = (uint8_t)(_stStepPhase % 3);
+	return ticks * 5;
+}
+#endif
 
 void Game::playCutscene(int id) {
 	if (id != -1) {
