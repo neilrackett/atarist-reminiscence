@@ -41,9 +41,18 @@ static const int kScreenStride = 160;
 // the tallest surface an open border gives (both borders: 273 rows)
 static const int kMaxScreenRows = 288;
 // Fit's geometry, shared with ST_textRow: two rows cropped at each
-// end, then runs of kFitRun - 1 kept rows with one dropped between,
-// so the kept runs start at kFitCrop + n * kFitRun.
-enum { kFitCrop = 2, kFitRun = 11 };
+// end, and between them every eleventh row dropped, the first at
+// kFitFirstDrop - rows 9, 20, 31 ... 218. Where the drops fall is
+// chosen: Conrad stands on floors 72 rows apart and his head bobs a
+// row as he walks, and at 12, 23, 34 ... the row that went was the
+// top of his hair on the top and bottom floors, so he walked about
+// half bald. From 9 no floor loses the top of his head or his feet.
+enum { kFitCrop = 2, kFitRun = 11, kFitFirstDrop = 9 };
+
+// where row y falls in Fit's pattern: 0-9 a kept run, 10 dropped
+static inline int fitPhase(int y) {
+	return (y - kFitFirstDrop - 1 + kFitRun) % kFitRun;
+}
 // Fill's two windows: where the 200 shown rows start on the menu and
 // in cutscenes, and where they start in play (see buildFillTable).
 enum { kFillScreensTop = 12, kFillGameTop = 18 };
@@ -449,7 +458,7 @@ void SystemStub_STDL::setScreenSize(int w, int h) {
 // reshapes the screen surface, so the caller repaints afterwards.
 // The nearest row to y on which an 8-pixel line of text loses nothing
 // in Fit: the first three rows of a kept run, so the line ends inside
-// it. The engine's fixed-row text - the continue screen, the score,
+// it (and not the short runs either end, which are too short). The engine's fixed-row text - the continue screen, the score,
 // a level code - was laid out for a screen that shows every row; on
 // Fit most of it straddled a dropped one and came out ragged. The
 // shift is at most five rows and is applied in every mode, so a
@@ -459,12 +468,11 @@ int ST_textRow(int y) {
 	int bestDist = kFitRun;
 	for (int d = -(kFitRun / 2); d <= kFitRun / 2; ++d) {
 		const int c = y + d;
-		if (c < kFitCrop) {
+		if (c < kFitFirstDrop || c + 8 > kMaxSrcH - kFitCrop) {
 			continue;
 		}
-		const int phase = (c - kFitCrop) % kFitRun;
 		const int dist = d < 0 ? -d : d;
-		if (phase <= 2 && dist < bestDist) {
+		if (fitPhase(c) <= 2 && dist < bestDist) {
 			best = c;
 			bestDist = dist;
 		}
@@ -524,7 +532,8 @@ int SystemStub_STDL::setScreenMode(int mode) {
 		buildFillTable();
 	} else {
 		// Fit: two rows cropped at each end, then every eleventh of
-		// the 220 between dropped - twenty of them, 200 rows exactly.
+		// the 220 between dropped - twenty of them, 200 rows exactly,
+		// placed as kFitFirstDrop explains.
 		// The old dst = y * 25 / 28 lost the same twenty-four lines
 		// but in an 8/8/9 rhythm, and it is the rhythm that shows:
 		// edges wobble where the gap changes length. Regular ten-row
@@ -535,7 +544,7 @@ int SystemStub_STDL::setScreenMode(int mode) {
 		int d = 0;
 		for (int y = 0; y < kMaxSrcH; ++y) {
 			const bool cropped = (y < kFitCrop) || (y >= kMaxSrcH - kFitCrop);
-			const bool dropped = !cropped && ((y - kFitCrop) % kFitRun) == kFitRun - 1;
+			const bool dropped = !cropped && fitPhase(y) == kFitRun - 1;
 			if (cropped || dropped) {
 				_yDrop[y] = 1;
 				_yMap[y] = (uint8_t)(d ? d - 1 : 0);

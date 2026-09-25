@@ -539,10 +539,10 @@ void Game::displayTitleScreenAmiga() {
 	// Two pages: the levels with Options and Quit below them, and the
 	// settings under Options. The rows are chosen so the menu is whole
 	// in every mode it can select. Fill hides rows 0-11, so the list
-	// starts below them. Fit keeps rows in runs of ten from row 2,
-	// dropping every eleventh, so an 11-pixel pitch from row 13 puts
+	// starts below them. Fit keeps rows in runs of ten from row 10,
+	// dropping every eleventh, so an 11-pixel pitch from row 12 puts
 	// each 8-pixel line inside one run and none of them loses a row.
-	// Eleven lines end at 130, clear of the FLASHBACK logo; a twelfth
+	// Eleven lines end at 129, clear of the FLASHBACK logo; a twelfth
 	// would not, which is why the settings have a page of their own.
 	// _currentLevel only ever holds a real level.
 	enum { kPageMain, kPageOptions };
@@ -562,7 +562,7 @@ void Game::displayTitleScreenAmiga() {
 	optItems[optCount++] = kHzOpt;
 #endif
 	optItems[optCount++] = kBackOpt;
-	static const int kTextY = 13;
+	static const int kTextY = 12;
 	static const int kTextPitch = 11;
 	static const int kBand = kW * Video::CHAR_H;
 	static const char *const kScreenNames[kScreenModes] = { "Fit", "Fill", "Overscan Top", "Overscan Full" };
@@ -1250,12 +1250,12 @@ void Game::inp_handleSpecialKeys() {
 // before the sprites, so copying the change onto the visible layer
 // cannot wipe one.
 void Game::ST_placeIcon() {
-	// Placed for the mode. Fit drops rows 12 and 23, and at the
-	// engine's y=8 the icon's bottom row was 23 - a flat base; from 7 it
-	// spans 7-22 and loses only row 12, in the middle, where a missing
-	// line hides in the shading. Fill in play starts at row 18, so there
-	// it sits just under that edge.
-	const int iconY = (g_options.screen == kScreenFill) ? 19 : 7;
+	// Placed for the mode. Fit drops rows 9 and 20, both inside the
+	// engine's y=8; from 10 it spans 10-25 and loses only row 20, low
+	// in the middle, where a missing line hides in the shading. Fill in
+	// play starts at row 18, so there it sits just under that edge; the
+	// overscan modes show every row and keep the engine's 8.
+	const int iconY = (g_options.screen == kScreenFill) ? 19 : (g_options.screen == kScreenFit) ? 10 : 8;
 	const uint16_t src = _pgeLive[0].current_inventory_PGE;
 	const int want = (src != 0xFF) ? _res._pgeInit[src].icon_num : -1;
 	if (_vid._stBackGen != _stIconGen) {
@@ -1411,10 +1411,10 @@ bool Game::handleConfigPanel() {
 	MenuConfirm confirm;
 #ifdef ATARIST
 	// Rows in pixels rather than cells, placed for Fit: it keeps rows
-	// in runs of ten from row 2 and drops every eleventh, so an
-	// 11-pixel pitch from 102 puts each 8-pixel line inside one run,
+	// in runs of ten from row 10 and drops every eleventh, so an
+	// 11-pixel pitch from 100 puts each 8-pixel line inside one run,
 	// and the five lines sit centred in the panel's 80-176 box.
-	static const int16_t kRow[5] = { 102, 113, 124, 135, 146 };
+	static const int16_t kRow[5] = { 100, 111, 122, 133, 144 };
 #else
 	static const int16_t kRow[5] = {
 		(y + 2) * Video::CHAR_H, (y + 4) * Video::CHAR_H, (y + 6) * Video::CHAR_H,
