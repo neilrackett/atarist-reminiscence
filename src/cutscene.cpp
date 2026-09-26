@@ -166,7 +166,11 @@ void Cutscene::stBandedLoop(uint16_t num) {
 	ST_clearLayer(_auxPage, 0xC0);
 	_stShowFull = true;
 	ST_pageBandStart(_gfx._cry, _gfx._cry + _gfx._crh + 1, 0xC0, _frontPage, _backPage, _auxPage);
+	if (!ST_segCacheBegin()) {
+		warning("Cutscene polygon cache: no memory");
+	}
 	mainLoop(num);
+	ST_segCacheEnd();
 	ST_pageBandEnd();
 }
 
@@ -596,6 +600,15 @@ void Cutscene::op_waitForSync() {
 	}
 }
 
+#ifdef ATARIST
+// what the polygon cache takes: every polygon but the alpha shadows
+// (the reference converter's) and the Mac logo's concave fill
+bool Cutscene::stSegCacheable() const {
+	return ST_segCacheOn() && !_isConcavePolygonShape && _vid->_layerScale == 1
+		&& !(_hasAlphaColor && _primitiveColor > 0xC7);
+}
+#endif
+
 void Cutscene::checkShape(uint16_t shapeOffset) {
 	_isConcavePolygonShape = _res->isMac() && _id == kCineLogos && (shapeOffset & 0x7FF) == 2;
 }
@@ -629,11 +642,23 @@ void Cutscene::drawShape(const uint8_t *data, int16_t x, int16_t y) {
 		scalePoints(&pt, 1, _vid->_layerScale);
 		_gfx.drawPoint(_primitiveColor, &pt);
 	} else {
+#ifdef ATARIST
+		// op_drawShape has already replayed any polygon this scene
+		// drew before (segHit); a new one is read relative to its
+		// origin, recorded, and drawn from the recording.
+		const uint8_t *key = data - 1;
+		const bool cached = stSegCacheable();
+		const int16_t ox = cached ? 0 : x;
+		const int16_t oy = cached ? 0 : y;
+#else
+		const int16_t ox = x;
+		const int16_t oy = y;
+#endif
 		Point *pt = _vertices;
 		int16_t ix = READ_BE_UINT16(data); data += 2;
 		int16_t iy = READ_BE_UINT16(data); data += 2;
-		pt->x = ix + x;
-		pt->y = iy + y;
+		pt->x = ix + ox;
+		pt->y = iy + oy;
 		++pt;
 		int16_t n = numVertices - 1;
 		++numVertices;
@@ -646,11 +671,23 @@ void Cutscene::drawShape(const uint8_t *data, int16_t x, int16_t y) {
 			} else {
 				ix += dx;
 				iy += dy;
-				pt->x = ix + x;
-				pt->y = iy + y;
+				pt->x = ix + ox;
+				pt->y = iy + oy;
 				++pt;
 			}
 		}
+#ifdef ATARIST
+		if (cached) {
+			if (const void *e = ST_segRecord(key, _vertices, numVertices)) {
+				ST_segDraw(_backPage, e, x, y, _primitiveColor, _gfx._crx, _gfx._cry, _gfx._crw, _gfx._crh);
+				return;
+			}
+			for (int i = 0; i < numVertices; ++i) {
+				_vertices[i].x += x;
+				_vertices[i].y += y;
+			}
+		}
+#endif
 		scalePoints(_vertices, numVertices, _vid->_layerScale);
 		if (_isConcavePolygonShape) {
 			_gfx.floodFill(_primitiveColor, _vertices, numVertices);
@@ -686,6 +723,12 @@ void Cutscene::op_drawShape() {
 
 	const uint8_t *shapeData = shapeDataTable + READ_BE_UINT16(shapeOffsetTable + (shapeOffset & 0x7FF) * 2);
 	uint16_t primitiveCount = READ_BE_UINT16(shapeData); shapeData += 2;
+#ifdef ATARIST
+	const bool segOn = ST_segCacheOn() && !_isConcavePolygonShape && _vid->_layerScale == 1;
+	if (segOn) {
+		ST_segShapeBegin(_backPage, _gfx._crx, _gfx._cry, _gfx._crw, _gfx._crh);
+	}
+#endif
 	while (primitiveCount--) {
 		uint16_t verticesOffset = READ_BE_UINT16(shapeData); shapeData += 2;
 		const uint8_t *primitiveVertices = verticesDataTable + READ_BE_UINT16(verticesOffsetTable + (verticesOffset & 0x3FFF) * 2);
@@ -701,8 +744,22 @@ void Cutscene::op_drawShape() {
 			color += 0x10;
 		}
 		_primitiveColor = 0xC0 + color;
+#ifdef ATARIST
+		// a polygon (not an ellipse or a point) drawn before in this
+		// scene: straight from the cache, see ST_segRecord
+		if (segOn && !(_hasAlphaColor && _primitiveColor > 0xC7)
+		    && (uint8_t)(*primitiveVertices - 1) < 0x7F
+		    && segHit(primitiveVertices, x + dx, y + dy, _primitiveColor)) {
+			continue;
+		}
+#endif
 		drawShape(primitiveVertices, x + dx, y + dy);
 	}
+#ifdef ATARIST
+	if (segOn) {
+		ST_segShapeEnd();
+	}
+#endif
 	if (_clearScreen != 0 && !_stPrescan) {
 #ifdef ATARIST
 		ST_copyPage(_auxPage, _backPage);

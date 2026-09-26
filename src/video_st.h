@@ -168,6 +168,23 @@ void ST_hspanV(uint8_t *layer, int x1, int x2, int y, uint8_t v, bool setPrio);
 void ST_fillArea(uint8_t *layer, const int16_t *pts, int crx, int cry,
 		int crw, uint8_t v, bool setPrio);
 
+// The cutscene polygon cache (see video_st.cpp): Begin/End bracket a
+// played scene (false: no memory, drawn the ordinary way). A shape's
+// primitives go between ShapeBegin and ShapeEnd; segHit draws one
+// recorded under its key and returns 1, or returns 0 and the caller
+// records it - Record takes it relative to the shape's origin (null if
+// it cannot) and Draw fills it at an origin in the clip rect.
+bool ST_segCacheBegin();
+void ST_segCacheEnd();
+bool ST_segCacheOn();
+void ST_segCacheStats(uint32_t *hits, uint32_t *misses);
+void ST_segShapeBegin(uint8_t *layer, int crx, int cry, int crw, int crh);
+void ST_segShapeEnd();
+extern "C" int segHit(const void *key, int x, int y, int colour8);
+const void *ST_segRecord(const void *key, const void *pts, int n);
+void ST_segDraw(uint8_t *layer, const void *entry, int x, int y, uint8_t colour8,
+		int crx, int cry, int crw, int crh);
+
 // fast path for opaque 3+-point non-flat polygons; returns false
 // when the caller must use the reference converter
 bool ST_drawPolygonFast(uint8_t *layer, const void *pts, int n,

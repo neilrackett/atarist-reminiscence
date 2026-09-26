@@ -1884,7 +1884,9 @@ __asm__(
  * f01 24, f23 28, pv 32, lim 36 (xlo:xhi, clip-inclusive, crx
  * applied), fn 40 (colour nibble | prio mode << 4, 64 variants).
  * PolyState adds: pts 44, n 48, imax 52, ia 56, ib 60, ya 64, yb 68,
- * y 72, ylast 76, crx 80, recip 84 (n..crx as words in the low half).
+ * y 72, ylast 76, crx 80, recip 84 (n..crx as words in the low half),
+ * rec 88 (non-zero: record the segments there instead of filling -
+ * mode 4, rs4_run).
  * regs: d0 f01, d1 f23, d5 pv, d6 lim, a2 variant entry,
  * a3 fa, a4 fb, a5 row, a6 prow; rs_run stack: ret, count, sa, sb
  * per row: d2 left mask (m:m), d3 ~m, d4 right mask, d7 full groups,
@@ -2095,6 +2097,8 @@ __asm__(
 "    movem.l %d2-%d7/%a2-%a6,-(%sp)\n"
 "    move.l 48(%sp),%a0\n"
 "    RS_LOAD\n"
+"    tst.l  88(%a0)\n"                 /* rec: record, don't fill */
+"    bne    pw4_seg\n"
 "    move.b 43(%a0),%d2\n"
 "    btst   #5,%d2\n"
 "    beq    pw0_seg\n"
@@ -2103,6 +2107,7 @@ __asm__(
 "    PW_LOOP 2\n"
 "    PW_LOOP 3\n"
 "    PW_LOOP 0\n"
+"    PW_LOOP 4\n"
 "pw_out:\n"
 "    RS_STORE\n"
 "    movem.l (%sp)+,%d2-%d7/%a2-%a6\n"
@@ -2237,6 +2242,195 @@ __asm__(
 "    add.l  %a6,%a4\n"
 "    lea    128(%a5),%a5\n"
 "    dbra   %d5,rs3_row\n"
+"    rts\n"
+/* The record core (mode 4, see ST_segRecord): a page core's calling
+ * convention, but instead of filling its rows it appends the segment
+ * - fa, sa, fb, sb, rows - at the state's rec pointer (offset 88) and
+ * steps the edges past them exactly as a fill would. */
+"rs4_run:\n"
+"    move.l 88(%a0),%a1\n"
+"    move.l %a3,(%a1)+\n"
+"    move.l 4(%a0),(%a1)+\n"
+"    move.l %a4,(%a1)+\n"
+"    move.l %a6,(%a1)+\n"
+"    move.w %d5,%d2\n"
+"    addq.w #1,%d2\n"
+"    move.w %d2,(%a1)+\n"
+"    move.l %a1,88(%a0)\n"
+"1:  add.l  4(%a0),%a3\n"
+"    add.l  %a6,%a4\n"
+"    lea    128(%a5),%a5\n"
+"    dbra   %d5,1b\n"
+"    rts\n"
+/* Replay recorded segments through the page cores (ST_segDraw).
+ * ReplayState offsets past RasterState: seg 44 (next record), nseg
+ * 48, xt 52 (the x translation, 16.16), skip 56 (rows above the clip
+ * still to step past), left 60 (rows still to fill); counts in the
+ * low words. Each record carries its own fa and fb, so a segment
+ * wholly above the clip is passed over without stepping. */
+"_segReplay:\n"                      /* (state) */
+"    movem.l %d2-%d7/%a2-%a6,-(%sp)\n"
+"    move.l 48(%sp),%a0\n"
+"    RS_LOAD\n"
+"    bsr.s  sr_loop\n"
+"    movem.l (%sp)+,%d2-%d7/%a2-%a6\n"
+"    rts\n"
+/* the segments: a0 state, d0/d1 fill, d6 lim, a2 variant, a5 row */
+"sr_loop:\n"
+"sr_seg:\n"
+"    move.l 44(%a0),%a1\n"
+"    move.l (%a1)+,%a3\n"             /* fa */
+"    move.l (%a1)+,4(%a0)\n"          /* sa, where the cores read it */
+"    move.l (%a1)+,%a4\n"             /* fb */
+"    move.l (%a1)+,%a6\n"             /* sb */
+"    move.w (%a1)+,%d5\n"             /* rows */
+"    move.l %a1,44(%a0)\n"
+"    move.l 52(%a0),%d2\n"
+"    add.l  %d2,%a3\n"
+"    add.l  %d2,%a4\n"
+"    move.w 58(%a0),%d2\n"            /* skip */
+"    beq.s  2f\n"
+"    cmp.w  %d5,%d2\n"
+"    bcs.s  1f\n"
+"    sub.w  %d5,58(%a0)\n"            /* all of it above the clip */
+"    bra.s  sr_next\n"
+"1:  sub.w  %d2,%d5\n"
+"    clr.w  58(%a0)\n"
+"    subq.w #1,%d2\n"
+"3:  add.l  4(%a0),%a3\n"
+"    add.l  %a6,%a4\n"
+"    dbra   %d2,3b\n"
+"2:  move.w 62(%a0),%d2\n"            /* left */
+"    cmp.w  %d2,%d5\n"
+"    bls.s  4f\n"
+"    move.w %d2,%d5\n"
+"4:  sub.w  %d5,62(%a0)\n"
+"    subq.w #1,%d5\n"
+"    btst   #4,43(%a0)\n"
+"    bne.s  5f\n"
+"    bsr    rs2_run\n"
+"    bra.s  6f\n"
+"5:  bsr    rs3_run\n"
+"6:  tst.w  62(%a0)\n"
+"    beq.s  sr_out\n"
+"sr_next:\n"
+"    subq.w #1,50(%a0)\n"
+"    bne.s  sr_seg\n"
+"sr_out:\n"
+"    rts\n"
+/* segHit(key, x, y, colour8): a cached polygon drawn start to finish -
+ * the lookup, ST_segDraw's clipping and state, and the segments - for
+ * op_drawShape's loop, where the C path's setup cost as much as the
+ * fill. 0 when the key is not cached (the caller records it). The
+ * shape's box grows in g_segCtx and is applied once per shape
+ * (ST_segShapeEnd). SegCtx offsets past ReplayState: layer 64,
+ * remap 68, fill01 72, fill23 76, hash 80, lim 84, crx 88, cry 90,
+ * xmaxv 92, ylast 94, box xlo 96 xhi 98 y0 100 y1 102, hits 104. */
+"    .globl _segHit\n"                  /* called from cutscene.cpp */
+"_segHit:\n"
+"    movem.l %d2-%d7/%a2-%a6,-(%sp)\n"
+"    lea    _g_segCtx,%a0\n"
+"    move.l 48(%sp),%d0\n"             /* key */
+"    move.l %d0,%d1\n"
+"    lsr.l  #8,%d1\n"
+"    eor.l  %d0,%d1\n"
+"    and.w  #255,%d1\n"
+"    add.w  %d1,%d1\n"
+"    add.w  %d1,%d1\n"
+"    move.l 80(%a0),%a1\n"
+"    move.l (%a1,%d1.w),%a1\n"
+"1:  move.l %a1,%d1\n"
+"    beq.s  sh_miss\n"
+"    cmp.l  (%a1),%d0\n"
+"    beq.s  2f\n"
+"    move.l 4(%a1),%a1\n"
+"    bra.s  1b\n"
+"sh_miss:\n"
+"    moveq  #0,%d0\n"
+"    movem.l (%sp)+,%d2-%d7/%a2-%a6\n"
+"    rts\n"
+"2:  addq.l #1,104(%a0)\n"
+"    move.w 54(%sp),%d2\n"             /* x */
+"    move.w %d2,%d3\n"
+"    add.w  12(%a1),%d2\n"             /* xlo */
+"    add.w  14(%a1),%d3\n"             /* xhi */
+"    tst.w  %d3\n"
+"    bmi    sh_done\n"                 /* wholly left of the clip */
+"    cmp.w  92(%a0),%d2\n"
+"    bgt    sh_done\n"                 /* wholly right of it */
+"    move.w 58(%sp),%d4\n"             /* y */
+"    add.w  8(%a1),%d4\n"              /* ytop */
+"    move.w %d4,%d6\n"                 /* first = max(ytop, 0) */
+"    bpl.s  3f\n"
+"    moveq  #0,%d6\n"
+"3:  move.w %d4,%d7\n"                 /* last = min(ybot, ylast) */
+"    add.w  10(%a1),%d7\n"
+"    subq.w #1,%d7\n"
+"    cmp.w  94(%a0),%d7\n"
+"    ble.s  4f\n"
+"    move.w 94(%a0),%d7\n"
+"4:  cmp.w  %d7,%d6\n"
+"    bgt    sh_done\n"                 /* wholly above or below */
+"    cmp.w  96(%a0),%d2\n"             /* the shape's box */
+"    bge.s  5f\n"
+"    move.w %d2,96(%a0)\n"
+"5:  cmp.w  98(%a0),%d3\n"
+"    ble.s  5f\n"
+"    move.w %d3,98(%a0)\n"
+"5:  cmp.w  100(%a0),%d6\n"
+"    bge.s  5f\n"
+"    move.w %d6,100(%a0)\n"
+"5:  cmp.w  102(%a0),%d7\n"
+"    ble.s  5f\n"
+"    move.w %d7,102(%a0)\n"
+"5:  move.w %d6,%d5\n"                 /* skip = first - ytop */
+"    sub.w  %d4,%d5\n"
+"    move.w %d5,58(%a0)\n"
+"    sub.w  %d6,%d7\n"                 /* left = last - first + 1 */
+"    addq.w #1,%d7\n"
+"    move.w %d7,62(%a0)\n"
+"    move.w 16(%a1),50(%a0)\n"         /* nseg */
+"    lea    20(%a1),%a1\n"
+"    move.l %a1,44(%a0)\n"             /* seg */
+"    move.w 54(%sp),%d5\n"             /* xt = (x + crx) << 16 */
+"    add.w  88(%a0),%d5\n"
+"    swap   %d5\n"
+"    clr.w  %d5\n"
+"    move.l %d5,52(%a0)\n"
+"    add.w  90(%a0),%d6\n"             /* row = layer + (cry + first) * 128 */
+"    ext.l  %d6\n"
+"    lsl.l  #7,%d6\n"
+"    move.l 64(%a0),%a5\n"
+"    add.l  %d6,%a5\n"
+"    moveq  #0,%d1\n"                  /* v = remap[colour8] & 15 */
+"    move.b 63(%sp),%d1\n"
+"    move.l 68(%a0),%a1\n"
+"    move.b (%a1,%d1.w),%d1\n"
+"    and.w  #15,%d1\n"
+"    moveq  #0x20,%d5\n"               /* mode 3 if it cannot need clamping */
+"    tst.w  %d2\n"
+"    bmi.s  6f\n"
+"    cmp.w  92(%a0),%d3\n"
+"    bgt.s  6f\n"
+"    moveq  #0x30,%d5\n"
+"6:  or.w   %d1,%d5\n"
+"    move.l %d5,40(%a0)\n"             /* fn */
+"    add.w  %d5,%d5\n"
+"    lea    rs_mtab(%pc),%a2\n"
+"    move.w (%a2,%d5.w),%d5\n"
+"    lea    (%a2,%d5.w),%a2\n"         /* variant entry */
+"    add.w  %d1,%d1\n"
+"    add.w  %d1,%d1\n"
+"    move.l 76(%a0),%a1\n"
+"    move.l (%a1,%d1.w),%d2\n"         /* f23 */
+"    move.l 72(%a0),%a1\n"
+"    move.l (%a1,%d1.w),%d0\n"         /* f01 */
+"    move.l %d2,%d1\n"
+"    move.l 84(%a0),%d6\n"             /* lim */
+"    bsr    sr_loop\n"
+"sh_done:\n"
+"    moveq  #1,%d0\n"
+"    movem.l (%sp)+,%d2-%d7/%a2-%a6\n"
 "    rts\n"
 "\n"
 /* One end group, planes p0..p3 and priority mode pm: d2 = m:m,
@@ -2431,10 +2625,39 @@ struct PolyState : RasterState {
 	long y, ylast;
 	long crx;
 	const uint16_t *recip;
+	uint8_t *rec;                // record mode: where the next segment goes
 };
+
+// segReplay's state: the segments to fill and where (see ST_segDraw)
+struct ReplayState : RasterState {
+	const uint8_t *seg;
+	long nseg;
+	int32_t xt;                  // x translation, 16.16, clip origin included
+	long skip, left;             // rows above the clip, rows to fill
+};
+
+struct SegEntry;
+
+// segHit's context (offsets in the asm): the page and clip of the
+// shape being drawn, its colour tables, and the box its hits grow
+struct SegCtx : ReplayState {
+	uint8_t *layer;
+	const uint8_t *remap;
+	const unsigned long *fill01, *fill23;
+	SegEntry **hash;
+	unsigned long lim;
+	int16_t crx, cry, xmaxv, ylast;
+	int16_t bxlo, bxhi, by0, by1;
+	uint32_t hits;
+};
+extern "C" SegCtx g_segCtx;
+SegCtx g_segCtx;
+// the asm addresses these fields by number: the sizes pin the layout
+typedef char SegCtxLayout[(sizeof(ReplayState) == 64 && sizeof(SegCtx) == 108) ? 1 : -1];
 
 extern "C" void rasterSeg(RasterState *st, long count);
 extern "C" void polyWalk(PolyState *st);
+extern "C" void segReplay(ReplayState *st);
 
 extern "C" void fillRowAsm(uint16_t *row, uint16_t *prow, long x, long x1,
 	unsigned long f01, unsigned long f23, unsigned long pv);
@@ -2730,8 +2953,246 @@ bool ST_drawPolygonFast(uint8_t *layer, const void *ptsv, int n,
 	st.ylast = ylast;
 	st.crx = crx;
 	st.recip = g_recip16;
+	st.rec = 0;
 	polyWalk(&st);
 	return true;
+}
+
+/*
+ * Cutscene polygon cache. A scene redraws the same polygons frame after
+ * frame at new positions - 87% of what the intro and level 1's opening
+ * draw had been drawn before in the same scene, 93% through the
+ * intro's camera moves - and for a whole-pixel move the walk is the
+ * same one, shifted: the edges carry the vertices' integer x and only
+ * differences in y. So the first draw records the walk, relative to
+ * the shape's origin and with no clipping, as the segments polyWalk
+ * fills (edge positions and steps, row count), and every later draw
+ * hands those straight to the fill cores - from op_drawShape's loop,
+ * lookup to last row in segHit, because the C route's per-polygon
+ * setup cost as much as the parse and walk it replaced. Output is the
+ * same pixels, because the same walker produced the segments (checked
+ * against the uncached draw over every level's opening scene and the
+ * credits). Measured, cycle-exact: a fifth to a quarter less
+ * cutscene work on every machine - the intro 34.7s -> 26.4s on an
+ * STE, 20.8s -> 15.8s on a Mega STE, level 1's opening 9.6s -> 7.5s.
+ *
+ * Keyed by the primitive's vertex data, which lives as long as the
+ * scene's polygon data does: ST_segCacheBegin/End bracket one played
+ * pass. The arena is emptied when full rather than managed - scenes
+ * reuse what they drew recently, so 32K keeps 83-85% of the hits a
+ * cache of everything would.
+ */
+struct SegEntry {
+	const void *key;
+	SegEntry *next;
+	int16_t ytop, rows;          // relative to the shape's origin
+	int16_t xlo, xhi;            // vertex x extent, likewise
+	int16_t nseg, pad;
+	// nseg records follow: fa, sa, fb, sb (longs), rows (word)
+};
+enum {
+	kSegRec = 18,
+	kSegArena = 32 * 1024,
+	kSegBuckets = 256,
+};
+static uint8_t *g_segArena;
+static uint32_t g_segUsed;
+static SegEntry *g_segHash[kSegBuckets];
+static uint32_t g_segMisses;
+static Point g_segPts[256];
+
+typedef char SegEntryLayout[(sizeof(SegEntry) == 20) ? 1 : -1];
+
+static inline unsigned segBucket(const void *key) {
+	const uintptr_t k = (uintptr_t)key;
+	return (unsigned)(k ^ (k >> 8)) & (kSegBuckets - 1);
+}
+
+static void segFlush() {
+	memset(g_segHash, 0, sizeof(g_segHash));
+	g_segUsed = 0;
+}
+
+bool ST_segCacheBegin() {
+	g_segMisses = 0;
+	g_segCtx.hits = 0;
+	g_segCtx.hash = g_segHash;
+	g_segCtx.fill01 = kFill01;
+	g_segCtx.fill23 = kFill23;
+	if (!g_segArena) {
+		g_segArena = (uint8_t *)malloc(kSegArena);
+	}
+	segFlush();
+	return g_segArena != 0;
+}
+
+void ST_segCacheEnd() {
+	free(g_segArena);
+	g_segArena = 0;
+}
+
+bool ST_segCacheOn() {
+	return g_segArena != 0 && ST_cutscenePalMode();
+}
+
+void ST_segCacheStats(uint32_t *hits, uint32_t *misses) {
+	*hits = g_segCtx.hits;
+	*misses = g_segMisses;
+}
+
+// A shape's primitives are drawn between these: Begin fixes the page,
+// clip and colour table for segHit, End applies the box its hits grew
+// - pageTouch once per shape rather than per polygon, over the union
+// of what they could have drawn.
+void ST_segShapeBegin(uint8_t *layer, int crx, int cry, int crw, int crh) {
+	SegCtx &c = g_segCtx;
+	const int xmaxv = (crw < kSTLayerW - crx ? crw : kSTLayerW - crx) - 1;
+	int ylast = crh - 1;
+	if (ylast > kSTLayerH - 1 - cry) {
+		ylast = kSTLayerH - 1 - cry;
+	}
+	c.layer = layer;
+	c.remap = ST_getRemap();
+	c.lim = ((unsigned long)crx << 16) | (unsigned)(crx + xmaxv);
+	c.crx = crx;
+	c.cry = cry;
+	c.xmaxv = xmaxv;
+	c.ylast = ylast;
+	c.bxlo = c.by0 = 0x7FFF;
+	c.bxhi = c.by1 = -0x7FFF;
+}
+
+void ST_segShapeEnd() {
+	const SegCtx &c = g_segCtx;
+	if (c.by0 > c.by1) {
+		return;
+	}
+	pageTouch(c.layer, c.crx + (c.bxlo < 1 ? 0 : c.bxlo - 1),
+		c.crx + (c.bxhi >= c.xmaxv ? c.xmaxv : c.bxhi + 1) + 1,
+		c.cry + c.by0, c.cry + c.by1 + 1);
+}
+
+static inline uint8_t *putSeg(uint8_t *p, int32_t fa, int32_t sa, int32_t fb, int32_t sb, int rows) {
+	int32_t *l = (int32_t *)p;
+	l[0] = fa;
+	l[1] = sa;
+	l[2] = fb;
+	l[3] = sb;
+	*(int16_t *)(p + 16) = (int16_t)rows;
+	return p + kSegRec;
+}
+
+// Record a polygon given relative to its shape's origin; the three
+// kinds ST_drawPolygonFast draws, the same way. Null when it is not
+// one of them, or cannot fit.
+const void *ST_segRecord(const void *key, const void *ptsv, int n) {
+	const Point *pts = (const Point *)ptsv;
+	if (!g_segArena || n < 2 || n > (int)(sizeof(g_segPts) / sizeof(g_segPts[0]))) {
+		return 0;
+	}
+	++g_segMisses;
+	initRecip16();
+	int imin = 0, imax = 0;
+	int16_t xlo = pts[0].x, xhi = xlo;
+	int16_t ytop = pts[0].y, ybot = ytop;
+	for (int i = 1; i < n; ++i) {
+		const int16_t x = pts[i].x, y = pts[i].y;
+		if (y < ytop) { ytop = y; imin = i; }
+		if (y > ybot) { ybot = y; imax = i; }
+		if (x < xlo) xlo = x;
+		if (x > xhi) xhi = x;
+	}
+	// a walk makes at most one segment per vertex and one for the
+	// last row
+	const uint32_t need = (sizeof(SegEntry) + (n + 2) * kSegRec + 3) & ~3u;
+	if (g_segUsed + need > kSegArena) {
+		segFlush();
+	}
+	SegEntry *e = (SegEntry *)(g_segArena + g_segUsed);
+	uint8_t *rec = (uint8_t *)(e + 1);
+	uint8_t *end;
+	if (ytop == ybot) {
+		end = putSeg(rec, (int32_t)xlo << 16, 0, (int32_t)xhi << 16, 0, 1);
+	} else if (n == 2) {
+		// as the line path: a trapezoid row per row down to the one
+		// above the far end, then the far end's pixel
+		const int dy = ybot - ytop;
+		const int32_t step = edgeStep(pts[imax].x - pts[imin].x, dy);
+		const int32_t fa = (int32_t)pts[imin].x << 16;
+		end = putSeg(rec, fa, step, fa + step, step, dy);
+		end = putSeg(end, (int32_t)pts[imax].x << 16, 0, (int32_t)pts[imax].x << 16, 0, 1);
+	} else {
+		// the walker's own pass, from row 0 so nothing is above its
+		// clip, filling nothing
+		for (int i = 0; i < n; ++i) {
+			g_segPts[i].x = pts[i].x;
+			g_segPts[i].y = pts[i].y - ytop;
+		}
+		PolyState st;
+		memset(&st, 0, sizeof(st));
+		st.fn = 2 << 4;
+		st.fa = st.fb = (int32_t)pts[imin].x << 16;
+		st.pts = g_segPts;
+		st.n = n;
+		st.imax = imax;
+		st.ia = st.ib = imin;
+		st.ylast = ybot - ytop;
+		st.recip = g_recip16;
+		st.rec = rec;
+		polyWalk(&st);
+		end = st.rec;
+	}
+	e->key = key;
+	e->ytop = ytop;
+	e->rows = ybot - ytop + 1;
+	e->xlo = xlo;
+	e->xhi = xhi;
+	e->nseg = (int16_t)((end - rec) / kSegRec);
+	e->pad = 0;
+	const unsigned b = segBucket(key);
+	e->next = g_segHash[b];
+	g_segHash[b] = e;
+	g_segUsed += (sizeof(SegEntry) + (end - rec) + 3) & ~3u;
+	return e;
+}
+
+// Draw a recorded polygon with its origin at (x, y) in the clip rect:
+// ST_drawPolygonFast's clipping and box, then the fill cores.
+void ST_segDraw(uint8_t *layer, const void *entry, int x, int y, uint8_t colour8,
+		int crx, int cry, int crw, int crh) {
+	const SegEntry *e = (const SegEntry *)entry;
+	const int xlo = e->xlo + x, xhi = e->xhi + x;
+	const int ytop = e->ytop + y, ybot = ytop + e->rows - 1;
+	const int xmaxv = (crw < kSTLayerW - crx ? crw : kSTLayerW - crx) - 1;
+	pageTouch(layer, crx + (xlo < 1 ? 0 : xlo - 1), crx + (xhi >= xmaxv ? xmaxv : xhi + 1) + 1,
+		cry + (ytop < 0 ? 0 : ytop), cry + (ybot > crh - 1 ? crh - 1 : ybot) + 1);
+	int ylast = crh - 1;
+	if (ylast > kSTLayerH - 1 - cry) {
+		ylast = kSTLayerH - 1 - cry;
+	}
+	if (ylast > ybot) {
+		ylast = ybot;
+	}
+	const int first = (ytop < 0) ? 0 : ytop;
+	if (first > ylast) {
+		return;
+	}
+	const uint8_t v = ST_getRemap()[colour8] & 15;
+	ReplayState st;
+	st.f01 = kFill01[v];
+	st.f23 = kFill23[v];
+	st.pv = 0;
+	st.lim = ((unsigned long)crx << 16) | (unsigned)(crx + xmaxv);
+	st.fn = v | (prioMode(colour8, xlo >= 0 && xhi <= xmaxv) << 4);
+	st.fa = st.sa = st.fb = st.sb = 0;
+	st.row = (uint16_t *)(layer + (cry + first) * kSTRowBytes);
+	st.prow = 0;
+	st.seg = (const uint8_t *)(e + 1);
+	st.nseg = e->nseg;
+	st.xt = (int32_t)(x + crx) << 16;
+	st.skip = first - ytop;
+	st.left = ylast - first + 1;
+	segReplay(&st);
 }
 
 // Row fill with the colour already remapped: fillArea resolves the

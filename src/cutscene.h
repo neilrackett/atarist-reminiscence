@@ -101,6 +101,7 @@ struct Cutscene {
 	bool _stShowFull;
 	void stBandedLoop(uint16_t num);
 	void stShow(const uint8_t *page);
+	bool stSegCacheable() const;
 	bool _stop;
 	const uint8_t *_polPtr;
 	const uint8_t *_cmdPtr;
