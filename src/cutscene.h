@@ -102,6 +102,16 @@ struct Cutscene {
 	void stBandedLoop(uint16_t num);
 	void stShow(const uint8_t *page);
 	bool stSegCacheable() const;
+	uint8_t *_stBakePage;     // a shape sprite's bake draws here
+	uint16_t _stBakeQueue[16];  // shapes seen once, baked while waiting
+	uint8_t _stBakeHead, _stBakeTail;
+	int32_t _stBakeMs;        // the longest bake yet, in ms
+	bool stShapeSprite(uint16_t shapeOffset, int16_t x, int16_t y, const uint8_t *shapeData,
+		uint16_t count, const uint8_t *verticesOffsetTable, const uint8_t *verticesDataTable);
+	const void *stBakeShape(uint16_t key, const uint8_t *shapeData, uint16_t count,
+		const uint8_t *verticesOffsetTable, const uint8_t *verticesDataTable);
+	void stIdleBake(int32_t ms);
+	void stQueueBake(uint16_t key);
 	bool _stop;
 	const uint8_t *_polPtr;
 	const uint8_t *_cmdPtr;

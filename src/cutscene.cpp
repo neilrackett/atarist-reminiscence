@@ -46,6 +46,9 @@ Cutscene::Cutscene(Resource *res, SystemStub *stub, Video *vid)
 	_stSched = 0;
 	_statSkipped = _statNoShow = 0;
 	_stPart = 0;
+	_stBakePage = 0;
+	_stBakeHead = _stBakeTail = 0;
+	_stBakeMs = 20;
 }
 
 const uint8_t *Cutscene::getCommandData() const {
@@ -87,6 +90,12 @@ void Cutscene::sync(int frameDelay) {
 			_stSched = now - kMaxDebt;
 			pause = -kMaxDebt;
 		}
+	}
+#endif
+#ifdef ATARIST
+	if (pause > 0 && _stBakeHead != _stBakeTail) {
+		stIdleBake(pause);
+		pause -= (int32_t)(_stub->getTimeStamp() - now);
 	}
 #endif
 	if (pause > 0) {
@@ -169,6 +178,8 @@ void Cutscene::stBandedLoop(uint16_t num) {
 	if (!ST_segCacheBegin()) {
 		warning("Cutscene polygon cache: no memory");
 	}
+	_stBakeHead = _stBakeTail = 0;
+	_stBakeMs = 20;
 	mainLoop(num);
 	ST_segCacheEnd();
 	ST_pageBandEnd();
@@ -565,6 +576,7 @@ void Cutscene::op_refreshScreen() {
 			ST_cutscenePalPart(_stPart);
 		} else {
 			ST_cutscenePalLock(_stPart);
+			ST_shpColoursChanged(); // sprites are baked in colour
 		}
 #endif
 		clearBackPage();
@@ -609,6 +621,194 @@ bool Cutscene::stSegCacheable() const {
 }
 #endif
 
+#ifdef ATARIST
+// One primitive's bounds from its data, relative to the shape's origin
+// and a pixel wider than anything its fill draws (the ellipse filler
+// can reach a row past its radius).
+static void primBounds(const uint8_t *data, int dx, int dy, int *x0, int *x1, int *y0, int *y1) {
+	const uint8_t numVertices = *data++;
+	int a0, a1, b0, b1;
+	if (numVertices & 0x80) {
+		const int cx = (int16_t)READ_BE_UINT16(data) + dx;
+		const int cy = (int16_t)READ_BE_UINT16(data + 2) + dy;
+		const int rx = (int16_t)READ_BE_UINT16(data + 4);
+		const int ry = (int16_t)READ_BE_UINT16(data + 6);
+		a0 = cx - rx; a1 = cx + rx; b0 = cy - ry; b1 = cy + ry;
+	} else {
+		int16_t ix = READ_BE_UINT16(data);
+		int16_t iy = READ_BE_UINT16(data + 2);
+		data += 4;
+		a0 = a1 = ix; b0 = b1 = iy;
+		for (int n = (numVertices == 0) ? 0 : numVertices; n > 0; --n) {
+			ix += (int8_t)*data++;
+			iy += (int8_t)*data++;
+			if (ix < a0) a0 = ix;
+			if (ix > a1) a1 = ix;
+			if (iy < b0) b0 = iy;
+			if (iy > b1) b1 = iy;
+		}
+		a0 += dx; a1 += dx; b0 += dy; b1 += dy;
+	}
+	if (a0 - 1 < *x0) *x0 = a0 - 1;
+	if (a1 + 1 > *x1) *x1 = a1 + 1;
+	if (b0 - 1 < *y0) *y0 = b0 - 1;
+	if (b1 + 1 > *y1) *y1 = b1 + 1;
+}
+
+// A shape's primitive header, as op_drawShape reads it: the vertex
+// data, its offset from the shape's origin, and a foreground colour.
+struct StPrim {
+	const uint8_t *vertices;
+	int16_t dx, dy;
+	uint8_t colour;
+	bool alpha;
+};
+
+static const uint8_t *stReadPrim(const uint8_t *p, const uint8_t *verticesOffsetTable,
+		const uint8_t *verticesDataTable, StPrim *prim) {
+	const uint16_t verticesOffset = READ_BE_UINT16(p); p += 2;
+	prim->vertices = verticesDataTable + READ_BE_UINT16(verticesOffsetTable + (verticesOffset & 0x3FFF) * 2);
+	prim->dx = prim->dy = 0;
+	if (verticesOffset & 0x8000) {
+		prim->dx = READ_BE_UINT16(p); p += 2;
+		prim->dy = READ_BE_UINT16(p); p += 2;
+	}
+	prim->alpha = (verticesOffset & 0x4000) != 0;
+	prim->colour = 0xC0 + 0x10 + *p++;
+	return p;
+}
+
+// a shape for stIdleBake; a full queue drops it (it bakes when seen)
+void Cutscene::stQueueBake(uint16_t key) {
+	const uint8_t next = (_stBakeTail + 1) & 15;
+	if (next != _stBakeHead) {
+		_stBakeQueue[_stBakeTail] = key;
+		_stBakeTail = next;
+	}
+}
+
+// Draw a foreground shape as a sprite, baking it the second time its
+// shape and x phase come round. False: draw it as polygons - it is new,
+// its bake is waiting for spare time, the clip cuts it, it has a
+// shadow polygon, or it will not fit the scratch.
+bool Cutscene::stShapeSprite(uint16_t shapeOffset, int16_t x, int16_t y, const uint8_t *shapeData,
+		uint16_t count, const uint8_t *verticesOffsetTable, const uint8_t *verticesDataTable) {
+	if (!ST_shpCacheOn() || _isConcavePolygonShape || _vid->_layerScale != 1) {
+		return false;
+	}
+	const uint16_t key = (shapeOffset & 0x7FF) | (((x + _gfx._crx) & 15) << 11);
+	if (const void *s = ST_shpFind(key)) {
+		return ST_shpDraw(_backPage, s, x, y, _gfx._crx, _gfx._cry, _gfx._crw, _gfx._crh);
+	}
+	if (!ST_shpSeen(key)) {
+		// seen once: baked while a frame waits for its time, if one
+		// has enough to spare (stIdleBake), else the next time round
+		stQueueBake(key);
+		return false;
+	}
+	// Seen before: bake it now, and the sprite pays back from the next
+	// frame. Except in a scene with plenty of headroom (a Mega STE's
+	// intro runs at 60% of its budget), where the frames it would slow
+	// were on time without it and the waits have room for the bake: a
+	// frame on time without the time to spare leaves it to the next
+	// wait (stIdleBake) rather than overrun.
+	const int32_t slack = (int32_t)(_tstamp + (_frameDelay - 1) * 16 - _stub->getTimeStamp());
+	if (_statWork * 4 < _statBudget * 3 && slack > 0 && slack < 2 * _stBakeMs) {
+		stQueueBake(key);
+		return false;
+	}
+	const void *s = stBakeShape(key, shapeData, count, verticesOffsetTable, verticesDataTable);
+	return s && ST_shpDraw(_backPage, s, x, y, _gfx._crx, _gfx._cry, _gfx._crw, _gfx._crh);
+}
+
+// Bake a foreground shape at the x phase in its key (see ST_shpFind);
+// null if it cannot be (a shadow polygon, too big for the scratch).
+const void *Cutscene::stBakeShape(uint16_t key, const uint8_t *shapeData, uint16_t count,
+		const uint8_t *verticesOffsetTable, const uint8_t *verticesDataTable) {
+	// the shape's bounds, and whether it can be baked
+	int x0 = 0x7FFF, x1 = -0x7FFF, y0 = 0x7FFF, y1 = -0x7FFF;
+	StPrim prim;
+	const uint8_t *p = shapeData;
+	for (uint16_t i = 0; i < count; ++i) {
+		p = stReadPrim(p, verticesOffsetTable, verticesDataTable, &prim);
+		if (prim.alpha && prim.colour > 0xC7) {
+			return 0;               // a shadow: it darkens what is under it
+		}
+		primBounds(prim.vertices, prim.dx, prim.dy, &x0, &x1, &y0, &y1);
+	}
+	if (x0 > x1) {
+		return 0;
+	}
+	// its origin in the scratch: the same x phase, the box inside
+	const int phase = key >> 11;
+	int sox = phase;
+	while (sox + x0 < 0) {
+		sox += 16;
+	}
+	const int soy = -y0;
+	if (sox + x1 > Video::GAMESCREEN_W - 1 || y1 - y0 > Video::GAMESCREEN_H - 1) {
+		return 0;
+	}
+	const uint32_t t0 = _stub->getTimeStamp();
+	uint8_t *scratch = ST_shpBakeBegin();
+	const int16_t crx = _gfx._crx, cry = _gfx._cry, crw = _gfx._crw, crh = _gfx._crh;
+	_gfx._crx = _gfx._cry = 0;
+	_gfx._crw = Video::GAMESCREEN_W;
+	_gfx._crh = Video::GAMESCREEN_H;
+	_stBakePage = scratch;
+	ST_segShapeBegin(scratch, 0, 0, Video::GAMESCREEN_W, Video::GAMESCREEN_H);
+	ST_segBakeMode(true);
+	p = shapeData;
+	for (uint16_t i = 0; i < count; ++i) {
+		p = stReadPrim(p, verticesOffsetTable, verticesDataTable, &prim);
+		_hasAlphaColor = prim.alpha;
+		_primitiveColor = prim.colour;
+		// a recorded polygon through segHit, as on a page
+		if ((uint8_t)(*prim.vertices - 1) < 0x7F
+		    && segHit(prim.vertices, sox + prim.dx, soy + prim.dy, _primitiveColor)) {
+			continue;
+		}
+		drawShape(prim.vertices, sox + prim.dx, soy + prim.dy);
+	}
+	ST_segBakeMode(false);
+	_stBakePage = 0;
+	_gfx._crx = crx;
+	_gfx._cry = cry;
+	_gfx._crw = crw;
+	_gfx._crh = crh;
+	const void *e = ST_shpBakeEnd(key, sox, soy, x0, y0, x1, y1);
+	const int32_t t = (int32_t)(_stub->getTimeStamp() - t0);
+	if (t > _stBakeMs) {
+		_stBakeMs = t;
+	}
+	return e;
+}
+#endif
+
+// Bake queued shapes in the time a frame would otherwise sleep: a
+// machine with time to spare pays for no bake inside a frame, where
+// one pushed frames late (on a Mega STE a scene has a second of sleep
+// in 50 frames). A bake starts only with the longest one yet, and a
+// little, still to spare.
+void Cutscene::stIdleBake(int32_t ms) {
+	const uint32_t end = _stub->getTimeStamp() + ms;
+	while (_stBakeHead != _stBakeTail
+	       && (int32_t)(end - _stub->getTimeStamp()) >= _stBakeMs + 5) {
+		const uint16_t key = _stBakeQueue[_stBakeHead];
+		_stBakeHead = (_stBakeHead + 1) & 15;
+		if (!ST_shpCacheOn() || ST_shpFind(key)) {
+			continue;
+		}
+		const uint8_t *shapeOffsetTable    = _polPtr + READ_BE_UINT16(_polPtr + 0x02);
+		const uint8_t *shapeDataTable      = _polPtr + READ_BE_UINT16(_polPtr + 0x0E);
+		const uint8_t *verticesOffsetTable = _polPtr + READ_BE_UINT16(_polPtr + 0x0A);
+		const uint8_t *verticesDataTable   = _polPtr + READ_BE_UINT16(_polPtr + 0x12);
+		const uint8_t *shapeData = shapeDataTable + READ_BE_UINT16(shapeOffsetTable + (key & 0x7FF) * 2);
+		const uint16_t count = READ_BE_UINT16(shapeData);
+		stBakeShape(key, shapeData + 2, count, verticesOffsetTable, verticesDataTable);
+	}
+}
+
 void Cutscene::checkShape(uint16_t shapeOffset) {
 	_isConcavePolygonShape = _res->isMac() && _id == kCineLogos && (shapeOffset & 0x7FF) == 2;
 }
@@ -617,7 +817,8 @@ void Cutscene::drawShape(const uint8_t *data, int16_t x, int16_t y) {
 	debug(DBG_CUT, "Cutscene::drawShape()");
 	
 #ifdef ATARIST
-	if (_stPrescan || stSkipDraw()) {
+	// a sprite's bake may fall in a skipped frame's wait (stIdleBake)
+	if (_stPrescan || (stSkipDraw() && !_stBakePage)) {
 		return;
 	}
 #else
@@ -625,7 +826,12 @@ void Cutscene::drawShape(const uint8_t *data, int16_t x, int16_t y) {
 		return;
 	}
 #endif
-	_gfx.setLayer(_backPage, _vid->_w);
+#ifdef ATARIST
+	uint8_t *const page = _stBakePage ? _stBakePage : _backPage;
+#else
+	uint8_t *const page = _backPage;
+#endif
+	_gfx.setLayer(page, _vid->_w);
 	uint8_t numVertices = *data++;
 	if (numVertices & 0x80) {
 		Point pt;
@@ -644,10 +850,17 @@ void Cutscene::drawShape(const uint8_t *data, int16_t x, int16_t y) {
 	} else {
 #ifdef ATARIST
 		// op_drawShape has already replayed any polygon this scene
-		// drew before (segHit); a new one is read relative to its
-		// origin, recorded, and drawn from the recording.
+		// drew before (segHit), except in a shape sprite's bake; a new
+		// one is read relative to its origin, recorded, and drawn from
+		// the recording.
 		const uint8_t *key = data - 1;
 		const bool cached = stSegCacheable();
+		if (cached && _stBakePage) {
+			if (const void *e = ST_segFind(key)) {
+				ST_segDraw(page, e, x, y, _primitiveColor, _gfx._crx, _gfx._cry, _gfx._crw, _gfx._crh);
+				return;
+			}
+		}
 		const int16_t ox = cached ? 0 : x;
 		const int16_t oy = cached ? 0 : y;
 #else
@@ -679,7 +892,7 @@ void Cutscene::drawShape(const uint8_t *data, int16_t x, int16_t y) {
 #ifdef ATARIST
 		if (cached) {
 			if (const void *e = ST_segRecord(key, _vertices, numVertices)) {
-				ST_segDraw(_backPage, e, x, y, _primitiveColor, _gfx._crx, _gfx._cry, _gfx._crw, _gfx._crh);
+				ST_segDraw(page, e, x, y, _primitiveColor, _gfx._crx, _gfx._cry, _gfx._crw, _gfx._crh);
 				return;
 			}
 			for (int i = 0; i < numVertices; ++i) {
@@ -724,6 +937,11 @@ void Cutscene::op_drawShape() {
 	const uint8_t *shapeData = shapeDataTable + READ_BE_UINT16(shapeOffsetTable + (shapeOffset & 0x7FF) * 2);
 	uint16_t primitiveCount = READ_BE_UINT16(shapeData); shapeData += 2;
 #ifdef ATARIST
+	// a foreground shape as one sprite (see ST_shpFind); a background
+	// shape is drawn once a part, so it never pays for a bake
+	if (_clearScreen == 0 && stShapeSprite(shapeOffset, x, y, shapeData, primitiveCount, verticesOffsetTable, verticesDataTable)) {
+		return;
+	}
 	const bool segOn = ST_segCacheOn() && !_isConcavePolygonShape && _vid->_layerScale == 1;
 	if (segOn) {
 		ST_segShapeBegin(_backPage, _gfx._crx, _gfx._cry, _gfx._crw, _gfx._crh);

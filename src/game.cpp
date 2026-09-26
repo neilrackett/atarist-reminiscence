@@ -1368,14 +1368,16 @@ void Game::playCutscene(int id) {
 		}
 		_mix.stopMusic();
 #ifdef ATARIST
-		uint32_t segHits, segMisses;
+		uint32_t segHits, segMisses, shpDrawn, shpBaked;
 		ST_segCacheStats(&segHits, &segMisses);
-		info("Cutscene done: %u frames, %u late, %u skipped, %u unshown, work %ums (copy %ums) of %ums budget (overscan misses %u), ready after %ums, polygons from the cache %u of %u",
+		ST_shpStats(&shpDrawn, &shpBaked);
+		info("Cutscene done: %u frames, %u late, %u skipped, %u unshown, work %ums (copy %ums) of %ums budget (overscan misses %u), ready after %ums, polygons from the cache %u of %u, shapes as sprites %u (%u baked)",
 			_cut._statFrames, _cut._statLate, _cut._statSkipped, _cut._statNoShow,
 			(unsigned)_cut._statWork, (unsigned)_cut._statCopy,
 			(unsigned)_cut._statBudget,
 			(unsigned)ST_overscanMisses(), (unsigned)_cut._statLoad,
-			(unsigned)segHits, (unsigned)(segHits + segMisses));
+			(unsigned)segHits, (unsigned)(segHits + segMisses),
+			(unsigned)shpDrawn, (unsigned)shpBaked);
 #else
 		info("Cutscene done");
 #endif

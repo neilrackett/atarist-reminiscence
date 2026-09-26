@@ -2275,47 +2275,63 @@ __asm__(
 "    bsr.s  sr_loop\n"
 "    movem.l (%sp)+,%d2-%d7/%a2-%a6\n"
 "    rts\n"
-/* the segments: a0 state, d0/d1 fill, d6 lim, a2 variant, a5 row */
+/* the segments: a0 state, d0/d1 fill, d6 lim, a2 variant, a5 row;
+ * a6 prow for the priority modes (0, 1 - a shape sprite's bake marks
+ * its coverage that way), which fill through rs_run */
 "sr_loop:\n"
 "sr_seg:\n"
 "    move.l 44(%a0),%a1\n"
 "    move.l (%a1)+,%a3\n"             /* fa */
 "    move.l (%a1)+,4(%a0)\n"          /* sa, where the cores read it */
 "    move.l (%a1)+,%a4\n"             /* fb */
-"    move.l (%a1)+,%a6\n"             /* sb */
-"    move.w (%a1)+,%d5\n"             /* rows */
+"    move.l (%a1)+,%d3\n"             /* sb */
+"    move.w (%a1)+,%d4\n"             /* rows */
 "    move.l %a1,44(%a0)\n"
 "    move.l 52(%a0),%d2\n"
 "    add.l  %d2,%a3\n"
 "    add.l  %d2,%a4\n"
 "    move.w 58(%a0),%d2\n"            /* skip */
 "    beq.s  2f\n"
-"    cmp.w  %d5,%d2\n"
+"    cmp.w  %d4,%d2\n"
 "    bcs.s  1f\n"
-"    sub.w  %d5,58(%a0)\n"            /* all of it above the clip */
-"    bra.s  sr_next\n"
-"1:  sub.w  %d2,%d5\n"
+"    sub.w  %d4,58(%a0)\n"            /* all of it above the clip */
+"    bra    sr_next\n"
+"1:  sub.w  %d2,%d4\n"
 "    clr.w  58(%a0)\n"
 "    subq.w #1,%d2\n"
 "3:  add.l  4(%a0),%a3\n"
-"    add.l  %a6,%a4\n"
+"    add.l  %d3,%a4\n"
 "    dbra   %d2,3b\n"
 "2:  move.w 62(%a0),%d2\n"            /* left */
-"    cmp.w  %d2,%d5\n"
+"    cmp.w  %d2,%d4\n"
 "    bls.s  4f\n"
-"    move.w %d2,%d5\n"
-"4:  sub.w  %d5,62(%a0)\n"
+"    move.w %d2,%d4\n"
+"4:  sub.w  %d4,62(%a0)\n"
+"    btst   #5,43(%a0)\n"
+"    beq    7f\n"                      /* modes 0/1: the priority core */
+"    move.l %d3,%a6\n"
+"    move.w %d4,%d5\n"
 "    subq.w #1,%d5\n"
 "    btst   #4,43(%a0)\n"
 "    bne.s  5f\n"
 "    bsr    rs2_run\n"
-"    bra.s  6f\n"
+"    bra    6f\n"
 "5:  bsr    rs3_run\n"
+"    bra    6f\n"
+"7:  move.l %a0,-(%sp)\n"             /* rs_run takes a0 for groups */
+"    move.l %d3,-(%sp)\n"             /* sb */
+"    move.l 4(%a0),-(%sp)\n"          /* sa */
+"    ext.l  %d4\n"
+"    move.l %d4,-(%sp)\n"             /* rows */
+"    move.l 32(%a0),%d5\n"            /* pv */
+"    bsr    rs_run\n"
+"    lea    12(%sp),%sp\n"
+"    move.l (%sp)+,%a0\n"
 "6:  tst.w  62(%a0)\n"
-"    beq.s  sr_out\n"
+"    beq    sr_out\n"
 "sr_next:\n"
 "    subq.w #1,50(%a0)\n"
-"    bne.s  sr_seg\n"
+"    bne    sr_seg\n"
 "sr_out:\n"
 "    rts\n"
 /* segHit(key, x, y, colour8): a cached polygon drawn start to finish -
@@ -2325,7 +2341,9 @@ __asm__(
  * shape's box grows in g_segCtx and is applied once per shape
  * (ST_segShapeEnd). SegCtx offsets past ReplayState: layer 64,
  * remap 68, fill01 72, fill23 76, hash 80, lim 84, crx 88, cry 90,
- * xmaxv 92, ylast 94, box xlo 96 xhi 98 y0 100 y1 102, hits 104. */
+ * xmaxv 92, ylast 94, box xlo 96 xhi 98 y0 100 y1 102, hits 104,
+ * bake 108 (a shape sprite's bake: mode 1, which marks coverage in
+ * the priority plane, and prow for it). */
 "    .globl _segHit\n"                  /* called from cutscene.cpp */
 "_segHit:\n"
 "    movem.l %d2-%d7/%a2-%a6,-(%sp)\n"
@@ -2402,6 +2420,13 @@ __asm__(
 "    lsl.l  #7,%d6\n"
 "    move.l 64(%a0),%a5\n"
 "    add.l  %d6,%a5\n"
+"    tst.b  108(%a0)\n"                /* a bake: prow for the priority core */
+"    beq.s  9f\n"
+"    lsr.l  #2,%d6\n"
+"    add.l  #28672,%d6\n"              /* kSTPlaneBytes */
+"    move.l 64(%a0),%a6\n"
+"    add.l  %d6,%a6\n"
+"9:\n"
 "    moveq  #0,%d1\n"                  /* v = remap[colour8] & 15 */
 "    move.b 63(%sp),%d1\n"
 "    move.l 68(%a0),%a1\n"
@@ -2413,7 +2438,10 @@ __asm__(
 "    cmp.w  92(%a0),%d3\n"
 "    bgt.s  6f\n"
 "    moveq  #0x30,%d5\n"
-"6:  or.w   %d1,%d5\n"
+"6:  tst.b  108(%a0)\n"
+"    beq.s  8f\n"
+"    moveq  #0x10,%d5\n"               /* a bake: mode 1 marks coverage */
+"8:  or.w   %d1,%d5\n"
 "    move.l %d5,40(%a0)\n"             /* fn */
 "    add.w  %d5,%d5\n"
 "    lea    rs_mtab(%pc),%a2\n"
@@ -2431,6 +2459,56 @@ __asm__(
 "sh_done:\n"
 "    moveq  #1,%d0\n"
 "    movem.l (%sp)+,%d2-%d7/%a2-%a6\n"
+"    rts\n"
+/* shpBlit(data, dst, rows): a shape sprite (ST_shpBakeEnd) onto a
+ * page, rows of word ops from the first group of the sprite's box:
+ * n (1..0x3FFF) groups wholly covered, their 4 plane words each;
+ * 0x4000, one group part covered: a keep mask and its 4 words (zero
+ * where not covered); 0x8000|n, n groups not covered; 0, end of row.
+ * A covered group is two moves, where the polygons it came from each
+ * paid a row of edge stepping and mask set-up. */
+"_shpBlit:\n"
+"    movem.l %d2/%d6/%a2,-(%sp)\n"
+"    move.l 16(%sp),%a0\n"             /* data */
+"    move.l 20(%sp),%a1\n"             /* dst: the box's first group */
+"    move.l 24(%sp),%d6\n"             /* rows */
+"    subq.w #1,%d6\n"
+"sb_row:\n"
+"    move.l %a1,%a2\n"
+"sb_op:\n"
+"    move.w (%a0)+,%d0\n"
+"    beq.s  sb_eol\n"
+"    bmi.s  sb_skip\n"
+"    cmp.w  #0x4000,%d0\n"
+"    beq.s  sb_part\n"
+"    subq.w #1,%d0\n"
+"1:  move.l (%a0)+,(%a2)+\n"
+"    move.l (%a0)+,(%a2)+\n"
+"    dbra   %d0,1b\n"
+"    bra.s  sb_op\n"
+"sb_skip:\n"
+"    and.w  #0x7FFF,%d0\n"
+"    lsl.w  #3,%d0\n"
+"    add.w  %d0,%a2\n"
+"    bra.s  sb_op\n"
+"sb_part:\n"
+"    move.w (%a0)+,%d1\n"              /* keep mask, both halves */
+"    move.w %d1,%d2\n"
+"    swap   %d1\n"
+"    move.w %d2,%d1\n"
+"    move.l (%a2),%d2\n"
+"    and.l  %d1,%d2\n"
+"    or.l   (%a0)+,%d2\n"
+"    move.l %d2,(%a2)+\n"
+"    move.l (%a2),%d2\n"
+"    and.l  %d1,%d2\n"
+"    or.l   (%a0)+,%d2\n"
+"    move.l %d2,(%a2)+\n"
+"    bra.s  sb_op\n"
+"sb_eol:\n"
+"    lea    128(%a1),%a1\n"
+"    dbra   %d6,sb_row\n"
+"    movem.l (%sp)+,%d2/%d6/%a2\n"
 "    rts\n"
 "\n"
 /* One end group, planes p0..p3 and priority mode pm: d2 = m:m,
@@ -2608,7 +2686,12 @@ struct RasterState {
 // nothing reads their plane and the room rebake after the scene
 // rewrites it, so the word per group was a fifth of the fill for
 // nothing.
+static bool g_shpBaking;   // see ST_shpBakeBegin
+
 static inline unsigned long prioMode(uint8_t colour8, bool xInside) {
+	if (g_shpBaking) {
+		return 1;                 // coverage, for the sprite's mask
+	}
 	if (ST_cutscenePalMode()) {
 		return xInside ? 3 : 2;
 	}
@@ -2649,15 +2732,17 @@ struct SegCtx : ReplayState {
 	int16_t crx, cry, xmaxv, ylast;
 	int16_t bxlo, bxhi, by0, by1;
 	uint32_t hits;
+	uint8_t bake, pad[3];        // fill in mode 1, marking coverage
 };
 extern "C" SegCtx g_segCtx;
 SegCtx g_segCtx;
 // the asm addresses these fields by number: the sizes pin the layout
-typedef char SegCtxLayout[(sizeof(ReplayState) == 64 && sizeof(SegCtx) == 108) ? 1 : -1];
+typedef char SegCtxLayout[(sizeof(ReplayState) == 64 && sizeof(SegCtx) == 112) ? 1 : -1];
 
 extern "C" void rasterSeg(RasterState *st, long count);
 extern "C" void polyWalk(PolyState *st);
 extern "C" void segReplay(ReplayState *st);
+extern "C" void shpBlit(const void *data, uint8_t *dst, long rows);
 
 extern "C" void fillRowAsm(uint16_t *row, uint16_t *prow, long x, long x1,
 	unsigned long f01, unsigned long f23, unsigned long pv);
@@ -3013,8 +3098,12 @@ static void segFlush() {
 	g_segUsed = 0;
 }
 
+static void shpInit();
+static void shpRelease();
+
 bool ST_segCacheBegin() {
 	g_segMisses = 0;
+	shpInit();
 	g_segCtx.hits = 0;
 	g_segCtx.hash = g_segHash;
 	g_segCtx.fill01 = kFill01;
@@ -3029,10 +3118,23 @@ bool ST_segCacheBegin() {
 void ST_segCacheEnd() {
 	free(g_segArena);
 	g_segArena = 0;
+	shpRelease();
 }
 
 bool ST_segCacheOn() {
 	return g_segArena != 0 && ST_cutscenePalMode();
+}
+
+// the C route to a recorded polygon, for draws segHit does not see (a
+// shape sprite's bake)
+const void *ST_segFind(const void *key) {
+	for (SegEntry *e = g_segHash[segBucket(key)]; e; e = e->next) {
+		if (e->key == key) {
+			++g_segCtx.hits;
+			return e;
+		}
+	}
+	return 0;
 }
 
 void ST_segCacheStats(uint32_t *hits, uint32_t *misses) {
@@ -3060,6 +3162,269 @@ void ST_segShapeBegin(uint8_t *layer, int crx, int cry, int crw, int crh) {
 	c.ylast = ylast;
 	c.bxlo = c.by0 = 0x7FFF;
 	c.bxhi = c.by1 = -0x7FFF;
+}
+
+/*
+ * Cutscene shape sprites, the level above the polygon cache. A shape
+ * (op_drawShape's unit: a character, a head, a machine) is 15-20
+ * overlapping polygons, and drawn that way each of its rows pays the
+ * fill's row set-up once per polygon crossing it - 420-510 cycles
+ * before a pixel is written - plus the overdraw between them. So a
+ * foreground shape seen a second time at the same x phase is baked:
+ * its polygons are drawn into a scratch layer through the same fill
+ * code, in the priority mode, which marks coverage in the priority
+ * plane, and the covered groups are kept as runs (see shpBlit). A
+ * wholly covered group is then two moves, a part-covered one a
+ * masked write, an empty one nothing. Second sighting, because most
+ * shape-and-phase pairs in a camera move are drawn once (345 of 445
+ * in the intro) and a bake costs more than the draw it replaces; when
+ * a bake happens is Cutscene::stShapeSprite's call.
+ *
+ * Measured, cycle-exact, one binary with and without: an STE's intro
+ * 27.1s -> 23.2s of work, level 1's opening 7.6s -> 6.5s; a Mega
+ * STE's level 1 opening 5.0s -> 4.1s and its intro unchanged (it
+ * bakes only in its spare time there). With frame skipping the STE
+ * drops 138 intro frames rather than 155.
+ *
+ * Output is the polygons' pixels: an opaque shape drawn in order onto
+ * a page is the page with its covered pixels replaced by the shape's
+ * own. Colours are baked through the scene part's locked remap, so a
+ * new part empties the cache (ST_shpFlush). The bake is unclipped and
+ * keeps the exact bounds of what it covered: a shape is a sprite in
+ * any frame where those lie inside the clip, and polygons in one where
+ * the clip cuts it - bounds with a pixel's margin turned away the
+ * shapes that reach the clip's edge, which were most of the work. A
+ * shape with a shadow polygon, or too big for the scratch, is always
+ * polygons.
+ */
+struct ShpEntry {
+	ShpEntry *next;
+	uint16_t key;
+	int16_t x0, x1, y0, y1;      // the pixels it covers, from the origin
+	int16_t bx, by;              // the stored box's first group and row, likewise
+	int16_t groups, rows, pad;
+	// the ops follow
+};
+enum {
+	kShpArena = 64 * 1024,
+	kShpBuckets = 128,
+	kShpSeen = 512,
+};
+static uint8_t *g_shpArena;
+static uint32_t g_shpUsed;
+static ShpEntry *g_shpHash[kShpBuckets];
+static uint16_t g_shpSeen[kShpSeen];
+// planes for kShpRows rows, and their priority rows where a layer's
+// are, so the fills address it as they do a page
+static uint8_t *g_shpScratch;
+static bool g_shpSavedTrk;
+static uint32_t g_shpDrawn, g_shpBaked;
+
+typedef char ShpEntryLayout[(sizeof(ShpEntry) == 24) ? 1 : -1];
+
+// the cutscene colours (0xC0-0xFF) the sprites were baked through
+static uint8_t g_shpRemap[64];
+
+void ST_shpFlush() {
+	memset(g_shpHash, 0, sizeof(g_shpHash));
+	memset(g_shpSeen, 0, sizeof(g_shpSeen));
+	g_shpUsed = 0;
+	memcpy(g_shpRemap, ST_getRemap() + 0xC0, sizeof(g_shpRemap));
+}
+
+// a new scene part locks its own colours: the sprites stay if they
+// came out the same (as they often do across a scene's parts)
+void ST_shpColoursChanged() {
+	if (memcmp(g_shpRemap, ST_getRemap() + 0xC0, sizeof(g_shpRemap)) != 0) {
+		ST_shpFlush();
+	}
+}
+
+static void shpInit() {
+	g_shpDrawn = g_shpBaked = 0;
+	if (!g_shpArena) {
+		g_shpArena = (uint8_t *)malloc(kShpArena);
+	}
+	if (!g_shpScratch) {
+		g_shpScratch = (uint8_t *)calloc(1, kSTLayerSize);
+	}
+	ST_shpFlush();
+}
+
+static void shpRelease() {
+	free(g_shpArena);
+	g_shpArena = 0;
+	free(g_shpScratch);
+	g_shpScratch = 0;
+}
+
+bool ST_shpCacheOn() {
+	return g_shpArena != 0 && g_shpScratch != 0 && ST_segCacheOn();
+}
+
+void ST_shpStats(uint32_t *drawn, uint32_t *baked) {
+	*drawn = g_shpDrawn;
+	*baked = g_shpBaked;
+}
+
+const void *ST_shpFind(uint16_t key) {
+	for (ShpEntry *e = g_shpHash[(key ^ (key >> 7)) & (kShpBuckets - 1)]; e; e = e->next) {
+		if (e->key == key) {
+			return e;
+		}
+	}
+	return 0;
+}
+
+bool ST_shpSeen(uint16_t key) {
+	uint16_t &s = g_shpSeen[(key ^ (key >> 9)) & (kShpSeen - 1)];
+	if (s == (uint16_t)(key + 1)) {
+		return true;
+	}
+	s = key + 1;
+	return false;
+}
+
+// The scratch layer, with box tracking off - nothing drawn there is
+// on a page - and the fills marking coverage.
+uint8_t *ST_shpBakeBegin() {
+	g_shpSavedTrk = g_trk;
+	g_trk = false;
+	g_shpBaking = true;
+	return g_shpScratch;
+}
+
+// Keep what the bake drew in rows [soy + y0, soy + y1] and columns
+// [sox + x0, sox + x1] of the scratch (bounds with a pixel's margin,
+// from the shape's origin, which the bake put at (sox, soy)), clearing
+// it for the next one. Null if it cannot be kept.
+const void *ST_shpBakeEnd(uint16_t key, int sox, int soy, int x0, int y0, int x1, int y1) {
+	g_trk = g_shpSavedTrk;
+	g_shpBaking = false;
+	const int r0 = soy + y0, r1 = soy + y1;
+	const int g0 = (sox + x0) >> 4, g1 = (sox + x1) >> 4;
+	uint8_t *planes = g_shpScratch;
+	uint8_t *prio = g_shpScratch + kSTPlaneBytes;
+	// the covered box, and the covered columns of its end groups
+	int tr0 = kSTLayerH, tr1 = -1, tg0 = 16, tg1 = -1;
+	uint16_t colOr[16];
+	memset(colOr, 0, sizeof(colOr));
+	for (int r = r0; r <= r1; ++r) {
+		const uint16_t *cov = (const uint16_t *)(prio + r * kSTPrioRowBytes);
+		for (int g = g0; g <= g1; ++g) {
+			if (cov[g]) {
+				if (r < tr0) tr0 = r;
+				tr1 = r;
+				if (g < tg0) tg0 = g;
+				if (g > tg1) tg1 = g;
+				colOr[g] |= cov[g];
+			}
+		}
+	}
+	const int rows = (tr1 >= tr0) ? tr1 - tr0 + 1 : 0;
+	const int groups = (tg1 >= tg0) ? tg1 - tg0 + 1 : 0;
+	// at worst an op and five words per group, and an end per row
+	const uint32_t need = (sizeof(ShpEntry) + rows * (groups * 12 + 2) + 3) & ~3u;
+	ShpEntry *e = 0;
+	if (need <= kShpArena) {
+		if (g_shpUsed + need > kShpArena) {
+			ST_shpFlush();
+		}
+		e = (ShpEntry *)(g_shpArena + g_shpUsed);
+	}
+	uint16_t *out = e ? (uint16_t *)(e + 1) : 0;
+	for (int r = tr0; r <= tr1; ++r) {
+		uint16_t *cov = (uint16_t *)(prio + r * kSTPrioRowBytes);
+		uint16_t *pl = (uint16_t *)(planes + r * kSTRowBytes);
+		uint16_t *run = 0;       // the open run of covered groups
+		int skip = 0;
+		for (int g = tg0; g <= tg1; ++g) {
+			const uint16_t c = cov[g];
+			if (c == 0) {
+				++skip;
+				run = 0;
+				continue;
+			}
+			uint16_t *w = pl + g * 4;
+			if (out) {
+				if (skip) {
+					*out++ = 0x8000 | skip;
+					skip = 0;
+				}
+				if (c == 0xFFFF) {
+					if (run) {
+						++*run;
+					} else {
+						run = out;
+						*out++ = 1;
+					}
+				} else {
+					run = 0;
+					*out++ = 0x4000;
+					*out++ = (uint16_t)~c;
+				}
+				*out++ = w[0];
+				*out++ = w[1];
+				*out++ = w[2];
+				*out++ = w[3];
+			}
+			w[0] = w[1] = w[2] = w[3] = 0;
+			cov[g] = 0;
+		}
+		if (out) {
+			*out++ = 0;
+		}
+	}
+	if (!e) {
+		return 0;
+	}
+	e->key = key;
+	if (rows > 0) {
+		int lead = 0, trail = 0;
+		while (!(colOr[tg0] & (0x8000 >> lead))) ++lead;
+		while (!(colOr[tg1] & (1 << trail))) ++trail;
+		e->x0 = tg0 * 16 + lead - sox;
+		e->x1 = tg1 * 16 + 15 - trail - sox;
+		e->y0 = tr0 - soy;
+		e->y1 = tr1 - soy;
+	} else {
+		e->x0 = e->y0 = 0;
+		e->x1 = e->y1 = -1;
+	}
+	e->bx = tg0 * 16 - sox;
+	e->by = tr0 - soy;
+	e->groups = groups;
+	e->rows = rows;
+	const unsigned b = (key ^ (key >> 7)) & (kShpBuckets - 1);
+	e->next = g_shpHash[b];
+	g_shpHash[b] = e;
+	g_shpUsed += ((uint8_t *)out - (uint8_t *)e + 3) & ~3u;
+	++g_shpBaked;
+	return e;
+}
+
+// Blit a shape with its origin at (x, y) in the clip rect; false when
+// the clip would cut it (the caller draws it as polygons).
+bool ST_shpDraw(uint8_t *layer, const void *sprite, int x, int y,
+		int crx, int cry, int crw, int crh) {
+	const ShpEntry *e = (const ShpEntry *)sprite;
+	if (e->rows > 0 && (x + e->x0 < 0 || x + e->x1 > crw - 1 || y + e->y0 < 0 || y + e->y1 > crh - 1)) {
+		return false;
+	}
+	if (e->rows > 0) {
+		const int ax = x + crx + e->bx;          // a group boundary: bx keeps the phase
+		const int ay = cry + y + e->by;
+		shpBlit(e + 1, layer + ay * kSTRowBytes + (ax >> 4) * 8, e->rows);
+		pageTouch(layer, ax, ax + e->groups * 16, ay, ay + e->rows);
+	}
+	++g_shpDrawn;
+	return true;
+}
+
+// segHit's fills for a shape sprite's bake (see ST_shpBakeBegin)
+void ST_segBakeMode(bool on) {
+	g_segCtx.bake = on;
+	g_segCtx.pv = on ? 0xFFFFul : 0ul;
 }
 
 void ST_segShapeEnd() {
@@ -3181,12 +3546,12 @@ void ST_segDraw(uint8_t *layer, const void *entry, int x, int y, uint8_t colour8
 	ReplayState st;
 	st.f01 = kFill01[v];
 	st.f23 = kFill23[v];
-	st.pv = 0;
+	st.pv = (colour8 & 0x80) ? 0xFFFFul : 0ul;
 	st.lim = ((unsigned long)crx << 16) | (unsigned)(crx + xmaxv);
 	st.fn = v | (prioMode(colour8, xlo >= 0 && xhi <= xmaxv) << 4);
 	st.fa = st.sa = st.fb = st.sb = 0;
 	st.row = (uint16_t *)(layer + (cry + first) * kSTRowBytes);
-	st.prow = 0;
+	st.prow = (uint16_t *)(layer + kSTPlaneBytes + (cry + first) * kSTPrioRowBytes);
 	st.seg = (const uint8_t *)(e + 1);
 	st.nseg = e->nseg;
 	st.xt = (int32_t)(x + crx) << 16;

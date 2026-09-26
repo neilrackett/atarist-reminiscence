@@ -180,7 +180,25 @@ bool ST_segCacheOn();
 void ST_segCacheStats(uint32_t *hits, uint32_t *misses);
 void ST_segShapeBegin(uint8_t *layer, int crx, int cry, int crw, int crh);
 void ST_segShapeEnd();
+void ST_segBakeMode(bool on);
+
+// Cutscene shape sprites (see video_st.cpp): Find a baked shape by
+// key (shape number | x phase << 11), Draw it (false: the clip cuts
+// it), Seen says whether a key came before (and marks it). A bake
+// draws the shape into the layer BakeBegin returns, then BakeEnd
+// keeps it (null if it cannot). Flush when the colours change.
+bool ST_shpCacheOn();
+const void *ST_shpFind(uint16_t key);
+bool ST_shpSeen(uint16_t key);
+uint8_t *ST_shpBakeBegin();
+const void *ST_shpBakeEnd(uint16_t key, int sox, int soy, int x0, int y0, int x1, int y1);
+bool ST_shpDraw(uint8_t *layer, const void *sprite, int x, int y,
+		int crx, int cry, int crw, int crh);
+void ST_shpFlush();
+void ST_shpColoursChanged();
+void ST_shpStats(uint32_t *drawn, uint32_t *baked);
 extern "C" int segHit(const void *key, int x, int y, int colour8);
+const void *ST_segFind(const void *key);
 const void *ST_segRecord(const void *key, const void *pts, int n);
 void ST_segDraw(uint8_t *layer, const void *entry, int x, int y, uint8_t colour8,
 		int crx, int cry, int crw, int crh);
