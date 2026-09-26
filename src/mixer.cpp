@@ -94,11 +94,32 @@ static const uint8_t *ATARIST_volumeTable(uint8_t volume) {
 enum { kVoiceIdlePauseMs = 2000 };
 
 static volatile bool _stVoiceSeq;    // a sequencer is on the voice tick
+static void (*_stTickFn)(void *);
+static void *_stTickUd;
+
+// The sequencer's tick runs in VBL context: flag it, so a log line
+// from inside the engine's sequencer code is dropped rather than
+// written with GEMDOS from an interrupt.
+static void ST_voiceTick(void *) {
+	++g_stInTick;
+	_stTickFn(_stTickUd);
+	--g_stInTick;
+}
 
 // Every sequencer installs and removes its tick here, so the pause
-// above knows when to keep out.
+// above knows when to keep out. The tick is off while the function
+// and its data change, or a VBL between the two stores could call
+// one with the other's. A paused device runs no tick, so installing
+// one resumes it: the action music's first note is played by its
+// own tick, and on a device the idle pause had stopped it never came.
 void ST_setVoiceTick(void (*fn)(void *), void *ud) {
-	STDL_SetVoiceTick(fn, ud);
+	STDL_SetVoiceTick(0, 0);
+	_stTickFn = fn;
+	_stTickUd = ud;
+	if (fn) {
+		STDL_ResumeVoices();         // unconditional, see ATARIST_playSample
+		STDL_SetVoiceTick(ST_voiceTick, 0);
+	}
 	_stVoiceSeq = (fn != 0);
 }
 
@@ -129,7 +150,7 @@ void ATARIST_mixerTick() {
 	}
 }
 
-volatile uint8_t g_stSfxVoice3;      // see ATARIST_playSample and mod_player.cpp
+volatile uint8_t g_stSfxVoice3;      // see ATARIST_playSample, and mixer.h
 
 static void ATARIST_playSample(const uint8_t *data, uint32_t len, uint16_t freq, uint8_t volume) {
 	// ste_sound=false means no sampled sound at all. Without this the
@@ -210,7 +231,7 @@ static uint32_t _ymMissing;          /* one bit per track, log once */
 // teleporta and teleport2 differ only there, and would otherwise
 // both become TELEPORT. tools/make-music.sh names its output with
 // this same rule, for the .STM and .MOD tracks alike.
-void ST_musicName(const char *src, char *out) {
+static void ST_musicName(const char *src, char *out) {
 	char tmp[16];
 	int n = 0;
 	for (const char *p = src; *p && n < 15; ++p) {
@@ -230,20 +251,26 @@ void ST_musicName(const char *src, char *out) {
 	out[n] = 0;
 }
 
+// Track `num`'s name in MUSIC\, from the alternate name - the one
+// the module sets carry - or else the primary. False for a number
+// that is no track.
+bool ST_musicStem(int num, char *out) {
+	if (num < 0 || num * 2 >= ModPlayer::_namesCount) {
+		return false;
+	}
+	const char *want = ModPlayer::_names[num * 2 + 1];
+	ST_musicName(want ? want : ModPlayer::_names[num * 2], out);
+	return true;
+}
+
 static bool ATARIST_playMusic(int num) {
-	if (!g_options.music || num < 0 || num * 2 >= ModPlayer::_namesCount) {
+	char stem[16];
+	if (!g_options.music || !ST_musicStem(num, stem)) {
 		return false;
 	}
 	if (_ymMusic != 0 && num == _ymTrack && STDL_PlayingMusic()) {
 		return true;                 // already playing this track
 	}
-	// the alternate name is the one the module sets carry
-	const char *want = ModPlayer::_names[num * 2 + 1];
-	if (want == 0) {
-		want = ModPlayer::_names[num * 2];
-	}
-	char stem[16];
-	ST_musicName(want, stem);
 	// MUSIC\, not DATA\: these streams are derived, optional and
 	// unshippable, where DATA\ holds the game's own files. Different
 	// provenance, different lifetime, so a data folder can be replaced
@@ -284,6 +311,47 @@ void Mixer::ST_setMusicVolume(int percent) {
 // player's own disks (RExtract or tools/make-music.sh), so a copy of
 // the game may well have none, and a Music line offering what cannot
 // play would be a lie. Modules also need the STE's voice device.
+int Mixer::ST_musicKind() {
+	if (!g_options.music) {
+		return kMusicOff;
+	}
+	if (g_options.music_mod && ST_musicInstalled(true)) {
+		return kMusicMod;
+	}
+	return ST_musicInstalled(false) ? kMusicYm : kMusicOff;
+}
+
+// The loop rules both music players share. The software mixers wrap
+// at the loop's end on the first pass too, so a looping sample's
+// first stretch ends there rather than at len; a repeat of one word
+// or less is Paula's "no loop". A start past the loop's end - a
+// module's 9xx sample offset can land there - wraps back into the loop
+// as the software mixer's position does. STDL starts a voice on its
+// first frame, so a start inside the loop starts at the loop's
+// beginning instead: the right loop, at most one cycle early, where
+// looping only the rest of it changed the loop's length and its note.
+// A sample that cannot play at all silences the voice, as an empty
+// one silences a Paula channel.
+bool ST_playPaulaVoice(int v, const int8_t *data, uint32_t len, uint32_t loopPos, uint32_t loopLen,
+                       uint32_t off, uint32_t freq, int vol) {
+	const bool looping = (loopLen > 2);
+	const uint32_t end = looping ? loopPos + loopLen : len;
+	if (looping && off >= end) {
+		off = loopPos + (off - loopPos) % loopLen;
+	}
+	if (off >= end || freq == 0) {
+		STDL_StopVoice(v);
+		return false;
+	}
+	if (looping && off > loopPos) {
+		off = loopPos;
+	}
+	STDL_ResumeVoices();             // unconditional, see ATARIST_playSample
+	STDL_SetVoice(v, data + off, end - off, looping ? loopPos - off : 0, looping ? loopLen : 0,
+	              freq, (uint8_t)CLIP(vol, 0, 64));
+	return true;
+}
+
 bool Mixer::ST_musicInstalled(bool mod) {
 	static int installed[2] = { -1, -1 };
 	int &known = installed[mod ? 1 : 0];
@@ -441,9 +509,7 @@ void Mixer::playMusic(int num, int tempo) {
 		// the action music is driven on the same voices a module plays
 		// on; they never overlap in the game, but should they, the
 		// module gives way
-		if (_mod._playing) {
-			_mod.stop();
-		}
+		_mod.stop();
 #endif
 		_sfx.play(num);
 		if (_sfx._playing) {
@@ -453,8 +519,12 @@ void Mixer::playMusic(int num, int tempo) {
 #ifdef ATARIST
 		// The .mod score itself where an STE can play it on its voice
 		// device and the player chose it (music=mod, or true) - else
-		// the YM stream converted from it, which any ST can play.
-		if (g_options.music && g_options.music_mod) {
+		// the YM stream converted from it, which any ST can play. The
+		// action music stops first either way: a module would take its
+		// voice tick from under it, leaving it marked playing for good
+		// and every later action cue ignored.
+		_sfx.stop();
+		if (ST_musicKind() == kMusicMod) {
 			ATARIST_stopMusic();
 			_mod.play(num, tempo);
 			if (_mod._playing) {
@@ -462,9 +532,7 @@ void Mixer::playMusic(int num, int tempo) {
 				return;
 			}
 		}
-		if (_mod._playing) {
-			_mod.stop();
-		}
+		_mod.stop();
 		if (ATARIST_playMusic(num)) {
 			_musicType = MT_MOD;
 		}

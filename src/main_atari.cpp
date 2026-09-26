@@ -75,6 +75,13 @@ static Language detectLanguage(FileSystem *fs) {
 	return LANG_EN;
 }
 
+// an RS.CFG value that is `word` and not the start of a longer one,
+// in any case
+static bool cfgWord(const char *p, const char *word) {
+	const size_t n = strlen(word);
+	return strncasecmp(p, word, n) == 0 && !isalpha((unsigned char)p[n]);
+}
+
 static void initOptions() {
 	g_options.bypass_protection = true;
 	g_options.enable_password_menu = false;
@@ -146,8 +153,8 @@ static void initOptions() {
 	// Match a custom palette by hue rather than nearest colour.
 	g_options.palette_hue = false;
 	// The STE's sample device. Off, nothing opens the sound DMA at
-	// all: no sampled effects, and the chip music (music=true) is
-	// unaffected because that drives the YM instead. Exists because
+	// all: the effects play their YM versions and music=true the YM
+	// streams, as on a plain ST, since those drive the chip instead. Exists because
 	// the DMA ring loops every 82ms whether or not a sound is
 	// playing, so this is the way to tell a fault in the ring from
 	// a fault in something else.
@@ -238,14 +245,14 @@ static void initOptions() {
 				}
 				if (*p && nameLen != 0) {
 					bool found = false;
-					// screen=fill|fit|top|full - the one option that takes a
-					// word. Matched on the whole word, since fill and fit
-					// share a first letter; anything else is left as it was.
+					// The options that take a word, matched on the whole
+					// word, since fill and fit share a first letter.
+					// screen=fill|fit|top|full; anything else is left as
+					// it was.
 					if (nameLen == 6 && strncmp(name, "screen", 6) == 0) {
 						static const char *const words[kScreenModes] = { "fit", "fill", "top", "full" };
 						for (int i = 0; i < kScreenModes; ++i) {
-							const size_t n = strlen(words[i]);
-							if (strncasecmp(p, words[i], n) == 0 && !isalpha((unsigned char)p[n])) {
+							if (cfgWord(p, words[i])) {
 								g_options.screen = i;
 								screenSet = true;
 							}
@@ -257,13 +264,10 @@ static void initOptions() {
 					// then means the modules where the machine can play them
 					// and the YM streams elsewhere
 					if (nameLen == 5 && strncmp(name, "music", 5) == 0) {
-						if (strncasecmp(p, "ym", 2) == 0 && !isalpha((unsigned char)p[2])) {
+						const bool ym = cfgWord(p, "ym");
+						if (ym || cfgWord(p, "mod")) {
 							g_options.music = true;
-							g_options.music_mod = false;
-							found = true;
-						} else if (strncasecmp(p, "mod", 3) == 0 && !isalpha((unsigned char)p[3])) {
-							g_options.music = true;
-							g_options.music_mod = true;
+							g_options.music_mod = !ym;
 							found = true;
 						}
 					}

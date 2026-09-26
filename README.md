@@ -61,14 +61,19 @@ providers, including [MD/Sidepad](https://downloads.neilrackett.com/md-sidepad).
 Save, load, quit and the state-slot keys stay on the keyboard: they are
 Ctrl combinations, and a pad button emulates a single key.
 
-On the title menu, **Load** picks up a saved game: left and right step
+On the title menu, **Start** lists the levels: fire on one plays it, and
+Back (or Escape) returns to the menu. The list opens on the level last
+played - the Jungle, when the game has just been started - so Start and
+fire begin a new game.
+
+**Load Game** picks up a saved game: left and right step
 through the ones on disk, starting with the most recent, and fire loads it.
 A level's save point is listed along with the slots saved with Ctrl+S or
 from the in-game menu.
 
 **Options** holds the skill level, the screen mode, the
 refresh rate, the music and its volume: left, right or fire changes a
-setting, and Back (or Escape) returns to the levels. Changes last for the
+setting, and Back (or Escape) returns to the menu. Changes last for the
 current run; `RS.CFG` sets where they start (see [Configuration](docs/configuration.md)).
 
 At 60Hz most monitors draw the picture taller, so Fit comes close to the

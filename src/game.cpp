@@ -156,9 +156,10 @@ struct IconCache {
 };
 static IconCache _icnCache;
 
-// The saved games on disk for the title's Load line: RS<level>_<slot>.SAV,
-// level 1-7 and slot 00 (the level's save point) to 99, in level and
-// slot order; newest is the index of the most recently written.
+// The saved games on disk for the title's Load line: RS<level>_<slot>.SAV
+// as makeGameStateName writes them, level 1-7 and slot 00 (the level's
+// save point) to 99, in level and slot order; newest is the index of
+// the most recently written.
 struct STSave {
 	uint8_t level, slot;
 	uint32_t stamp;                  // DOS date and time, for the newest
@@ -169,16 +170,32 @@ static int ST_scanSaves(STSave *out, int max, int *newest) {
 	_DTA dta;
 	_DTA *saved = Fgetdta();
 	Fsetdta(&dta);
-	for (long r = Fsfirst("RS*.SAV", 0); r == 0 && n < max; r = Fsnext()) {
+	for (long r = Fsfirst("RS?_??.SAV", 0); r == 0; r = Fsnext()) {
 		const char *s = dta.dta_name;
-		if (s[0] != 'R' || s[1] != 'S' || s[2] < '1' || s[2] > '7' || s[3] != '_'
-		    || s[4] < '0' || s[4] > '9' || s[5] < '0' || s[5] > '9' || strcmp(s + 6, ".SAV") != 0) {
-			continue;
+		if (s[2] < '1' || s[2] > '7' || s[4] < '0' || s[4] > '9' || s[5] < '0' || s[5] > '9') {
+			continue;                    // the pattern's ? match anything
 		}
 		STSave e;
 		e.level = (uint8_t)(s[2] - '1');
 		e.slot = (uint8_t)((s[4] - '0') * 10 + (s[5] - '0'));
 		e.stamp = ((uint32_t)dta.dta_date << 16) | dta.dta_time;
+		if (n == max) {
+			// full: the oldest gives way to a newer one, so the most
+			// recent save is always listed however many there are
+			int oldest = 0;
+			for (int k = 1; k < n; ++k) {
+				if (out[k].stamp < out[oldest].stamp) {
+					oldest = k;
+				}
+			}
+			if (e.stamp <= out[oldest].stamp) {
+				continue;
+			}
+			for (int k = oldest; k < n - 1; ++k) {
+				out[k] = out[k + 1];
+			}
+			--n;
+		}
 		int i = n++;
 		while (i > 0 && (out[i - 1].level > e.level || (out[i - 1].level == e.level && out[i - 1].slot > e.slot))) {
 			out[i] = out[i - 1];
@@ -508,9 +525,8 @@ void Game::run() {
 			if (_stLoadSlot >= 0) {
 				// Load on the title: the saved state in place of the
 				// level's start, and so without its opening cutscene
-				const uint16_t cut = _cut._id;
-				_cut._id = 0xFFFF;
 				if (loadGameState((uint8_t)_stLoadSlot)) {
+					_cut._id = 0xFFFF;
 					if (_stLoadSlot != kIngameSaveSlot) {
 						_stateSlot = (uint8_t)_stLoadSlot;      // Ctrl+S saves back to it
 					} else {
@@ -518,8 +534,6 @@ void Game::run() {
 						// it would had it been reached in play
 						_validSaveState = true;
 					}
-				} else {
-					_cut._id = cut;
 				}
 				_stLoadSlot = -1;
 			}
@@ -603,39 +617,40 @@ void Game::displayTitleScreenAmiga() {
 	_stub->updateScreen(0);
 	_vid.AMIGA_decodeCmp(_res._scratchBuffer + 6, buf);
 	int h = 0;
-	// Two pages: the levels with Load, Options and Quit below them,
-	// and the settings under Options. The rows are chosen so the menu
-	// is whole in every mode it can select. Fill hides rows 0-11, so
-	// the list starts below them. Fit keeps rows in runs of ten from
-	// row 10, dropping every eleventh, so an 11-pixel pitch from row
-	// 21 puts each line inside one run with its shadow - eight rows of
-	// glyph and one below - and none of them loses a row. Eleven lines
-	// end at 139, clear of the FLASHBACK logo at about 150; the
-	// settings have a page of their own because a twelfth would not be.
-	// _currentLevel only ever holds a real level.
-	enum { kPageMain, kPageOptions };
-#ifdef ATARIST
+	// Three pages: Start, Load, Options and Quit; the levels, under
+	// Start; and the settings, under Options. The rows are chosen so
+	// the menu is whole in every mode it can select. Fill hides rows
+	// 0-11, so the list starts below them. Fit keeps rows in runs of
+	// ten from row 10, dropping every eleventh, so an 11-pixel pitch
+	// from row 21 puts each line inside one run with its shadow -
+	// eight rows of glyph and one below - and none of them loses a row.
+	// The longest page, the levels and Back, ends at row 118, clear of
+	// the FLASHBACK logo at about 150. _currentLevel only ever holds a
+	// real level.
+	enum { kPageMain, kPageLevels, kPageOptions };
 	enum {
-		kLoadItem = Menu::LEVELS_COUNT,
+		kBackLevel = Menu::LEVELS_COUNT,  // the levels page's last line
+		kLines                            // the longest page
+	};
+	enum {
+		kStartItem,
+#ifdef ATARIST
+		kLoadItem,
+#endif
 		kOptionsItem,
 		kQuitItem,
-		kLines                            // the longer page
+		kMainCount
 	};
+#ifdef ATARIST
 	// Load: the saves on disk, one line that cycles through them,
 	// starting at the most recent
 	enum { kMaxSaves = 64 };
 	STSave saves[kMaxSaves];
-	int loadSel = 0;
+	int loadSel;
 	const int saveCount = ST_scanSaves(saves, kMaxSaves, &loadSel);
-#else
-	enum {
-		kLoadItem = -1,
-		kOptionsItem = Menu::LEVELS_COUNT,
-		kQuitItem,
-		kLines
-	};
 #endif
-	enum { kSkillOpt, kScreenOpt, kMusicOpt, kVolumeOpt, kHzOpt, kBackOpt };
+	// the lines left and right change; Load's is on the main page
+	enum { kSkillOpt, kScreenOpt, kMusicOpt, kVolumeOpt, kHzOpt, kBackOpt, kLoadOpt };
 	int optItems[6];
 	int optCount = 0;
 	optItems[optCount++] = kSkillOpt;
@@ -669,7 +684,7 @@ void Game::displayTitleScreenAmiga() {
 	const bool modInstalled = Mixer::ST_musicInstalled(true);
 #endif
 	int page = kPageMain;
-	int selected = _currentLevel;
+	int selected = kStartItem;
 	int shown = -1;           // the selection on screen; -1 to draw every line
 	uint16_t changed = 0;     // lines whose text changed
 	bool quitSelected = false;
@@ -689,7 +704,8 @@ void Game::displayTitleScreenAmiga() {
 			// or a short keypress outright: several presses could go
 			// by before one happened to straddle a poll. Draw when
 			// something moves and spend the rest of the time listening.
-			const int count = (page == kPageMain) ? (int)kLines : optCount;
+			const int count = (page == kPageMain) ? (int)kMainCount
+				: (page == kPageLevels) ? (int)kLines : optCount;
 			if (shown != selected || changed != 0) {
 				static const uint8_t selectedColor = 0xE4;
 				static const uint8_t defaultColor = 0xE8;
@@ -706,26 +722,34 @@ void Game::displayTitleScreenAmiga() {
 					const int y = kTextY + i * kTextPitch;
 					memcpy(buf + y * kW, bands + i * kBand, kBand);
 					if (i >= count) {
-						continue;                   // the longer page's line: picture only
+						continue;                   // a line this page does not use: picture only
 					}
 					char label[40];
 					const char *str = label;
-					if (page == kPageMain) {
-						// QUIT as the DOS menu has it, in the data's
-						// language (QUITTER, END, SALIR, ESCI)
+					if (page == kPageLevels) {
+						str = (i == kBackLevel) ? "Back" : Menu::_levelNames[i];
+					} else if (page == kPageMain) {
+						// START, QUIT and LOAD GAME as the DOS menus have
+						// them, in the data's language (QUITTER, END,
+						// SALIR, ESCI; CHARGER, LADEN...), and OPTIONS in
+						// capitals to match: no menu of the DOS game had
+						// one, so there is no translation to take
 						str = (i == kQuitItem) ? _res.getMenuString(LocaleData::LI_11_QUIT)
-							: (i == kOptionsItem) ? "Options" : Menu::_levelNames[i];
+							: (i == kStartItem) ? _res.getMenuString(LocaleData::LI_07_START) : "OPTIONS";
 #ifdef ATARIST
 						if (i == kLoadItem) {
 							// the level's number rather than its name: the
-							// longest name and a slot run past the edge
+							// longest name and a slot run past the edge.
+							// The longest word, Italian's CARICA IL GIOCO,
+							// still ends at x=299.
+							const char *load = _res.getMenuString(LocaleData::LI_20_LOAD_GAME);
 							str = label;
 							if (saveCount == 0) {
-								snprintf(label, sizeof(label), "Load: No Saved Games");
+								snprintf(label, sizeof(label), "%s: No Saved Games", load);
 							} else if (saves[loadSel].slot == kIngameSaveSlot) {
-								snprintf(label, sizeof(label), "Load: Level %d, Save Point", saves[loadSel].level + 1);
+								snprintf(label, sizeof(label), "%s: Level %d, Save Point", load, saves[loadSel].level + 1);
 							} else {
-								snprintf(label, sizeof(label), "Load: Level %d, Slot %02d", saves[loadSel].level + 1, saves[loadSel].slot);
+								snprintf(label, sizeof(label), "%s: Level %d, Slot %02d", load, saves[loadSel].level + 1, saves[loadSel].slot);
 							}
 						}
 #endif
@@ -738,13 +762,9 @@ void Game::displayTitleScreenAmiga() {
 							snprintf(label, sizeof(label), "Screen: %s", kScreenNames[g_options.screen]);
 							break;
 #ifdef ATARIST
-						case kMusicOpt:
-							if (!ymInstalled && !modInstalled) {
-								str = "Music: Not Installed";
-							} else if (!g_options.music) {
-								str = "Music: Off";
-							} else {
-								str = (g_options.music_mod && modInstalled) ? "Music: MOD" : "Music: YM";
+						case kMusicOpt: {
+								static const char *const kMusicNames[] = { "Music: Off", "Music: YM", "Music: MOD" };
+								str = (ymInstalled || modInstalled) ? kMusicNames[Mixer::ST_musicKind()] : "Music: Not Installed";
 							}
 							break;
 						case kVolumeOpt:
@@ -809,8 +829,13 @@ void Game::displayTitleScreenAmiga() {
 			// is made there and then: the menu is a static screen, the
 			// one place a mode change costs nothing but a repaint.
 			int step = 0;
-			const int item = (page == kPageOptions) ? optItems[selected] : -1;
-			if ((item >= 0 && item != kBackOpt) || (page == kPageMain && selected == kLoadItem)) {
+			int item = (page == kPageOptions) ? optItems[selected] : -1;
+#ifdef ATARIST
+			if (page == kPageMain && selected == kLoadItem) {
+				item = kLoadOpt;
+			}
+#endif
+			if (item >= 0 && item != kBackOpt) {
 				if (_stub->_pi.dirMask & PlayerInput::DIR_LEFT) {
 					step = -1;
 				} else if (_stub->_pi.dirMask & PlayerInput::DIR_RIGHT) {
@@ -818,16 +843,6 @@ void Game::displayTitleScreenAmiga() {
 				}
 				_stub->_pi.dirMask &= ~(PlayerInput::DIR_LEFT | PlayerInput::DIR_RIGHT);
 			}
-#ifdef ATARIST
-			if (step != 0 && page == kPageMain) {
-				// Load: to the next save on disk, either way round
-				if (saveCount > 1) {
-					loadSel = (loadSel + saveCount + step) % saveCount;
-					changed |= 1 << selected;
-				}
-				step = 0;
-			}
-#endif
 			if (step != 0) {
 				switch (item) {
 				case kSkillOpt:
@@ -846,32 +861,30 @@ void Game::displayTitleScreenAmiga() {
 					}
 					break;
 #ifdef ATARIST
-				case kMusicOpt: {
-						// the title plays the menu track, so the change is heard
-						int kinds[3];
-						int n = 0, cur = 0;
-						kinds[n++] = 0;                     // off
-						if (ymInstalled) {
-							kinds[n++] = 1;
-						}
-						if (modInstalled) {
-							kinds[n++] = 2;
-						}
-						const int now = !g_options.music ? 0 : (g_options.music_mod && modInstalled) ? 2 : 1;
-						for (int k = 0; k < n; ++k) {
-							if (kinds[k] == now) {
-								cur = k;
-							}
-						}
-						const int want = kinds[(cur + n + step) % n];
-						if (n > 1 && want != now) {
+				case kMusicOpt:
+					// Off, YM and MOD in turn, skipping a kind not
+					// installed; the title plays the menu track, so the
+					// change is heard
+					if (ymInstalled || modInstalled) {
+						const int now = Mixer::ST_musicKind();
+						int want = now;
+						do {
+							want = (want + 3 + step) % 3;
+						} while ((want == Mixer::kMusicYm && !ymInstalled) || (want == Mixer::kMusicMod && !modInstalled));
+						if (want != now) {
 							_mix.stopMusic();
-							g_options.music = (want != 0);
-							if (want != 0) {
-								g_options.music_mod = (want == 2);
+							g_options.music = (want != Mixer::kMusicOff);
+							if (g_options.music) {
+								g_options.music_mod = (want == Mixer::kMusicMod);
 								_mix.playMusic(1);
 							}
 						}
+					}
+					break;
+				case kLoadOpt:
+					// to the next save on disk, either way round
+					if (saveCount > 1) {
+						loadSel = (loadSel + saveCount + step) % saveCount;
 					}
 					break;
 				case kVolumeOpt: {
@@ -894,7 +907,7 @@ void Game::displayTitleScreenAmiga() {
 				}
 				changed |= 1 << selected;
 			}
-			if (page == kPageMain && selected < Menu::LEVELS_COUNT) {
+			if (page == kPageLevels && selected < Menu::LEVELS_COUNT) {
 				_currentLevel = selected;
 			}
 		}
@@ -902,12 +915,21 @@ void Game::displayTitleScreenAmiga() {
 		if (_stub->_pi.quit) {
 			break;
 		}
-		const bool back = (page == kPageOptions) && (_stub->_pi.escape || _stub->_pi.backspace);
+		const bool back = (page != kPageMain) && (_stub->_pi.escape || _stub->_pi.backspace);
 		if (back) {
 			_stub->_pi.escape = false;
 			_stub->_pi.backspace = false;
 		}
 		if (back || confirm(_stub->_pi)) {
+			if (page == kPageLevels) {
+				if (back || selected == kBackLevel) {
+					page = kPageMain;
+					selected = kStartItem;
+					shown = -1;
+					continue;
+				}
+				break;                        // play _currentLevel
+			}
 			if (page == kPageOptions) {
 				if (!back && optItems[selected] != kBackOpt) {
 					_stub->_pi.dirMask |= PlayerInput::DIR_RIGHT;   // fire cycles it too
@@ -915,6 +937,14 @@ void Game::displayTitleScreenAmiga() {
 				}
 				page = kPageMain;
 				selected = kOptionsItem;
+				shown = -1;
+				continue;
+			}
+			if (selected == kStartItem) {
+				// on the level last played: the first on a fresh
+				// start, so Start and fire begin a new game
+				page = kPageLevels;
+				selected = _currentLevel;
 				shown = -1;
 				continue;
 			}
@@ -1003,8 +1033,8 @@ void Game::mainLoop() {
 	// The engine advances the game once per drawn frame, so a machine
 	// that draws in 43ms plays at 76% speed: Conrad walked, fell and
 	// shot in slow motion on an STE. Keep the game at 30 steps a second
-	// instead: updateTiming banks the time each frame runs over its
-	// 33ms, and once a whole step is owed the logic runs twice for
+	// instead: updateTiming measures how far a frame ends behind its
+	// deadline, and once a whole step is owed the logic runs twice for
 	// one draw. One catch-up per frame at most, so the shown rate
 	// never drops below half the step rate; the cutscene player
 	// holds its pace the same way (Cutscene::stDecideSkip).
@@ -1234,13 +1264,13 @@ void Game::updateTiming() {
 }
 
 #ifdef ATARIST
-// the next step of the schedule, 6 or 7 ticks of the 200Hz clock in
-// the ratio 1:2 - 30, 35, 35ms - which is 20 ticks for three steps
+// the next step of the schedule, 6 or 7 ticks of the 200Hz clock:
+// 30, 35, 35ms, which is 20 ticks for three steps
 int Game::stNextStep() {
-	_stStepPhase = (uint8_t)(_stStepPhase + 20);
-	const int ticks = _stStepPhase / 3;
-	_stStepPhase = (uint8_t)(_stStepPhase % 3);
-	return ticks * 5;
+	static const uint8_t kStepMs[3] = { 30, 35, 35 };
+	const int ms = kStepMs[_stStepPhase];
+	_stStepPhase = (uint8_t)((_stStepPhase == 2) ? 0 : _stStepPhase + 1);
+	return ms;
 }
 #endif
 
@@ -2536,6 +2566,21 @@ void Game::loadLevelRoomHelper(int level, int room) {
 				num = 2;
 				break;
 			}
+#ifdef ATARIST
+			// The switches above fire on the way through a transition
+			// room, so a saved game resumed in the level's second half
+			// (Load on the title, Ctrl+L) drew its rooms from the first
+			// half's file. A room that is not in the loaded half has no
+			// data - it ends where the room before it ends - so take
+			// the other half then.
+			if (num == 0 && _res._lev) {
+				const uint32_t end = READ_BE_UINT32(_res._lev + room * 4);
+				const uint32_t prev = room ? READ_BE_UINT32(_res._lev + (room - 1) * 4) : 64 * 4;
+				if (end == prev) {
+					num = (_res._levNum == 1) ? 2 : 1;
+				}
+			}
+#endif
 			if (num != 0 && _res._levNum != num) {
 				char name[9];
 				snprintf(name, sizeof(name), "level2_%d", num);
@@ -2672,9 +2717,12 @@ void Game::loadLevelData() {
 			char name[32];
 			snprintf(name, sizeof(name), "level%d", lvl->sound);
 #ifdef ATARIST
-			// up to 152K of samples a plain ST cannot play
+			// up to 152K of samples a plain ST cannot play: it gets the
+			// YM's versions instead, built here rather than mid-play
 			extern bool ATARIST_samplesPlayable();
-			if (ATARIST_samplesPlayable())
+			if (!ATARIST_samplesPlayable()) {
+				ST_prepareYmSfx();
+			} else
 #endif
 			_res.load(name, Resource::OT_SPL);
 		}

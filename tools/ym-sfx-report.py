@@ -25,10 +25,11 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(HERE, '..', 'dist', 'DATA')
-RATE = 3546897 // 650            # Resource::load_SPL's playback rate
+RATE = 3546897 // 650            # kPaulaFreq / 650, as Resource::load_SPL
 YM_CLOCK = 2000000               # tone Hz = clock / (16 * period)
 STEP = RATE * 40 // 1000
 
+# Resource::_splNames (src/staticres.cpp), without the extensions
 NAMES = """pneuma05 bip00105 bip00205 laser205 tir2 explo mort0105 mort0310
 bouclier asc_debut asc_milieu asc_fin verre_casse chalu110 saut trappe
 impact_shield stby0105 teletower desint recharge mitrail touche coup
@@ -59,25 +60,8 @@ def banks():
     return out
 
 
-def report(i, x, top):
-    print('%2d %-14s %4dms' % (i, NAMES[i], len(x) * 1000 // RATE))
-    for s in range(0, len(x), STEP):
-        seg = x[s:s + STEP]
-        if len(seg) < 16:
-            break
-        rms = np.sqrt((seg ** 2).mean())
-        vol = 15 + int(round(20 * np.log10(max(rms, 1e-9) / top) / 3))
-        spec = np.abs(np.fft.rfft(seg * np.hanning(len(seg)))) ** 2 + 1e-12
-        f = np.fft.rfftfreq(len(seg), 1 / RATE)
-        flat = np.exp(np.log(spec).mean()) / spec.mean()
-        cen = (spec * f).sum() / spec.sum()
-        pk = f[1 + np.argmax(spec[1:])]
-        period = int(YM_CLOCK / (16 * pk)) if pk > 0 else 0
-        print('   %4dms vol %3d  flat %.2f  centroid %5dHz  peak %5dHz (period %4d)'
-              % (s * 1000 // RATE, max(vol, 0), flat, cen, pk, period))
-
-
-def summary(i, x, top):
+def analyse(x, top):
+    """one row per 40ms step: (YM volume, flatness, centroid Hz, peak Hz)"""
     rows = []
     for s in range(0, len(x) - 16, STEP):
         seg = x[s:s + STEP]
@@ -88,10 +72,28 @@ def summary(i, x, top):
                      np.exp(np.log(spec).mean()) / spec.mean(),
                      (spec * f).sum() / spec.sum(),
                      f[1 + np.argmax(spec[1:])]))
+    return rows
+
+
+def period(hz):
+    return int(YM_CLOCK / (16 * hz)) if hz > 0 else 0
+
+
+def report(i, x, top):
+    print('%2d %-14s %4dms' % (i, NAMES[i], len(x) * 1000 // RATE))
+    for k, (vol, flat, cen, pk) in enumerate(analyse(x, top)):
+        print('   %4dms vol %3d  flat %.2f  centroid %5dHz  peak %5dHz (period %4d)'
+              % (k * 40, max(int(round(vol)), 0), flat, cen, pk, period(pk)))
+
+
+def summary(i, x, top):
+    rows = analyse(x, top)
     n = len(rows)
+    if n == 0:
+        print('%2d %-14s %4dms too short to measure' % (i, NAMES[i], len(x) * 1000 // RATE))
+        return
     vols = [max(0, int(round(rows[min(n - 1, k * n // 4)][0]))) for k in range(4)]
     vols.append(max(0, int(round(rows[-1][0]))))
-    period = lambda hz: int(YM_CLOCK / (16 * hz)) if hz > 0 else 0
     print('%2d %-14s %4dms vol %-16s flat %.2f centroid %5dHz  period %4d -> %4d'
           % (i, NAMES[i], len(x) * 1000 // RATE, '/'.join(map(str, vols)),
              np.mean([r[1] for r in rows]), np.mean([r[2] for r in rows]),
@@ -106,10 +108,12 @@ def main():
     if not fx:
         sys.exit('no sample banks in %s' % DATA)
     top = max(np.sqrt((x[s:s + STEP] ** 2).mean())
-              for x in fx.values() for s in range(0, len(x) - STEP, STEP))
+              for x in fx.values() for s in range(0, len(x) - 16, STEP))
     ids = [int(a) for a in sys.argv[1:]] or sorted(fx)
     for i in ids:
-        if i in fx:
+        if not 0 <= i < len(NAMES):
+            print('%2d is not a sound number (0-%d)' % (i, len(NAMES) - 1))
+        elif i in fx:
             (summary if brief else report)(i, fx[i], top)
         else:
             print('%2d %-14s not in any bank' % (i, NAMES[i]))

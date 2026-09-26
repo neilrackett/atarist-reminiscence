@@ -26,6 +26,7 @@
 
 #ifdef ATARIST
 
+#include <stdlib.h>
 #include <string.h>
 #include "mixer.h"
 #include "resource.h"
@@ -122,29 +123,18 @@ static const Recipe kRecipes[] = {
 
 enum {
 	kNumRecipes = sizeof(kRecipes) / sizeof(kRecipes[0]),
-	kPoolSteps = 512,        // every recipe's steps, end to end
-	kMaxSteps = 40,          // the longest recipe
+	kDistances = 4,          // Game::playSound's softVol, 0 (near) to 3
 	kVoice = 2               // C
 };
 
-static STDL_Sfx _fx[kNumRecipes];
-static uint16_t _periods[kPoolSteps];
-static uint8_t _noises[kPoolSteps];
-static uint8_t _volumes[kPoolSteps];
+// Each recipe at each distance: the game halves a distant sample's
+// level twice a step of softVol (12dB), four of the YM's 3dB volume
+// steps. Built with the rest rather than copied per play, so nothing
+// STDL is still reading is ever rewritten.
+static STDL_Sfx _fx[kNumRecipes][kDistances];
 static uint8_t _byId[256];       // recipe index + 1, 0 = none
 static bool _built;
 static uint8_t _playingPrio;
-
-// Distant sounds play quieter copies. STDL reads an effect's arrays
-// until it ends, and on one voice at most two are live - the one
-// playing and the one waiting for the next tick - so four copies in
-// turn are never overwritten while read.
-struct Quiet {
-	STDL_Sfx fx;
-	uint8_t volumes[kMaxSteps];
-};
-static Quiet _quiet[4];
-static uint8_t _nextQuiet;
 
 // step i of n from a to b (i < n). 32-bit division, but only while
 // the recipes are built.
@@ -152,16 +142,26 @@ static int slide(int a, int b, int i, int n) {
 	return (n > 1) ? a + (b - a) * i / (n - 1) : a;
 }
 
+// The step arrays are allocated here rather than kept in bss: only a
+// machine that cannot play the samples ever builds them, so an STE
+// does not carry them. Built at a level's load where that is known
+// (ST_prepareYmSfx), since the 900-odd 32-bit divides take about a
+// frame of an 8MHz machine; the first effect builds them otherwise.
 static void build() {
-	int used = 0;
+	_built = true;
+	int total = 0;
+	for (int r = 0; r < kNumRecipes; ++r) {
+		total += kRecipes[r].steps;
+	}
+	uint8_t *pool = (uint8_t *)malloc(total * (sizeof(uint16_t) + 1 + kDistances));
+	if (!pool) {
+		return;                  // no memory: no effects, as before
+	}
+	uint16_t *periods = (uint16_t *)pool;
+	uint8_t *noises = pool + total * sizeof(uint16_t);
+	uint8_t *volumes = noises + total;
 	for (int r = 0; r < kNumRecipes; ++r) {
 		const Recipe &rc = kRecipes[r];
-		if (rc.steps > kMaxSteps || used + rc.steps > kPoolSteps) {
-			continue;            // a recipe too long for the pool: silent
-		}
-		uint16_t *periods = _periods + used;
-		uint8_t *noises = _noises + used;
-		uint8_t *volumes = _volumes + used;
 		const int tn = rc.toneSteps ? rc.toneSteps : rc.steps;
 		const int nn = rc.noiseSteps ? rc.noiseSteps : rc.steps;
 		for (int i = 0; i < rc.steps; ++i) {
@@ -176,71 +176,60 @@ static void build() {
 			if ((rc.flags & kPulse) && (i & 1)) {
 				v -= 5;
 			}
-			volumes[i] = (uint8_t)((v < 0) ? 0 : (v > 15 ? 15 : v));
+			for (int d = 0; d < kDistances; ++d) {
+				volumes[d * rc.steps + i] = (uint8_t)CLIP(v - 4 * d, 0, 15);
+			}
 		}
-		STDL_Sfx &fx = _fx[r];
-		fx.periods = periods;
-		fx.volumes = volumes;
-		fx.nsteps = rc.steps;
-		fx.volume = 0;
-		fx.step_ms = rc.ms;
-		fx.noise = 0;
-		fx.noises = noises;
+		for (int d = 0; d < kDistances; ++d) {
+			STDL_Sfx &fx = _fx[r][d];
+			fx.periods = periods;
+			fx.volumes = volumes + d * rc.steps;
+			fx.nsteps = rc.steps;
+			fx.volume = 0;
+			fx.step_ms = rc.ms;
+			fx.noise = 0;
+			fx.noises = noises;
+		}
 		_byId[rc.id] = (uint8_t)(r + 1);
-		used += rc.steps;
+		periods += rc.steps;
+		noises += rc.steps;
+		volumes += kDistances * rc.steps;
 	}
-	_built = true;
 }
 
-static const Recipe *recipe(int num, const STDL_Sfx **fx) {
+// the recipe for sound `num`, or 0 for none
+static int recipeIndex(int num) {
 	if (num < 0 || num > 255) {
-		return 0;
+		return -1;
 	}
 	if (!_built) {
 		build();
 	}
-	const int r = _byId[num] - 1;
-	if (r < 0) {
-		return 0;
-	}
-	*fx = &_fx[r];
-	return &kRecipes[r];
+	return _byId[num] - 1;
 }
 
 } // namespace
 
+void ST_prepareYmSfx() {
+	if (!_built) {
+		build();
+	}
+}
+
 void ST_playYmSfx(int num, int softVol) {
-	const STDL_Sfx *fx;
-	const Recipe *rc = recipe(num, &fx);
-	if (!rc) {
-		return;
+	const int r = recipeIndex(num);
+	if (r < 0 || softVol < 0 || softVol >= kDistances) {
+		return;                  // no recipe, or too far off to hear
 	}
 	// A distant sound gives way to a near one. The first room of the
 	// game retriggers a distant beep about twenty times a second, and
 	// at its own priority it would have held off footsteps and doors
 	// the whole time it played.
-	int prio = rc->prio - 2 * softVol;
-	if (prio < 0) {
-		prio = 0;
-	}
+	const int prio = MAX(kRecipes[r].prio - 2 * softVol, 0);
 	if (STDL_SfxActive(kVoice) && prio < _playingPrio) {
 		return;                  // something that matters more is playing
 	}
-	if (softVol > 0) {
-		// the game halves the sample's level twice a step (12dB):
-		// four of the YM's 3dB steps
-		Quiet &q = _quiet[_nextQuiet];
-		_nextQuiet = (uint8_t)((_nextQuiet + 1) & 3);
-		const int drop = 4 * softVol;
-		q.fx = *fx;
-		for (int i = 0; i < fx->nsteps; ++i) {
-			const int v = fx->volumes[i] - drop;
-			q.volumes[i] = (uint8_t)((v < 0) ? 0 : v);
-		}
-		q.fx.volumes = q.volumes;
-		fx = &q.fx;
-	}
-	if (STDL_PlaySfx(fx, kVoice) >= 0) {
+	if (STDL_PlaySfx(&_fx[r][softVol], kVoice) >= 0) {
 		_playingPrio = (uint8_t)prio;
 	}
 }

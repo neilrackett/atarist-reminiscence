@@ -77,20 +77,35 @@ struct Mixer {
 	// it at once, and whether there is any music to play
 	void ST_setMusicVolume(int percent);
 	static bool ST_musicInstalled(bool mod);
+	// what the music setting plays here: the modules only where they
+	// are installed and the STE can play them, the YM streams only
+	// where they are installed
+	enum { kMusicOff, kMusicYm, kMusicMod };
+	static int ST_musicKind();
 #endif
 
 	static void mixCallback(void *param, int16_t *buf, int len);
 };
 
 #ifdef ATARIST
-// a track's name in MUSIC\, GEMDOS 8.3 without the extension (mixer.cpp)
-void ST_musicName(const char *src, char *out);
+// track num's name in MUSIC\, GEMDOS 8.3 without the extension;
+// false for a number that is no track (mixer.cpp)
+bool ST_musicStem(int num, char *out);
+// start STDL voice v on a Paula-style sample from `off` bytes in,
+// looping [loopPos, loopPos + loopLen) when that is longer than one
+// word; false when `off` is past the first pass (mixer.cpp)
+bool ST_playPaulaVoice(int v, const int8_t *data, uint32_t len, uint32_t loopPos, uint32_t loopLen,
+                       uint32_t off, uint32_t freq, int vol);
+// a sound effect on voice 3: 0 none, 1 playing, 2 being set up - a
+// module's fourth channel keeps off the voice in both (mixer.cpp)
+extern volatile uint8_t g_stSfxVoice3;
 // STDL_SetVoiceTick for the music players, which keeps the device
 // from pausing under a sequencer (mixer.cpp)
 void ST_setVoiceTick(void (*fn)(void *), void *ud);
 // the YM's version of sound effect `num`, for a machine that cannot
 // play the samples; softVol as Game::playSound's (ym_sfx_st.cpp)
 enum { ST_YMSFX_SAVED = 0xF0 };      // the save-point jingle
+void ST_prepareYmSfx();              // build them now, at a level's load
 void ST_playYmSfx(int num, int softVol);
 void ST_auditionYmSfx(Resource *res, Mixer *mix, SystemStub *stub);
 #endif

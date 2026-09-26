@@ -19,6 +19,8 @@
 uint32_t g_debugMask;
 
 #ifdef ATARIST
+volatile uint8_t g_stInTick;         // see util.h
+
 // GEMDOS console output lands in screen RAM, so route diagnostics to
 // a log file instead of scribbling over the game. Each line is an
 // open/append/close of RS.LOG, so info and warnings are only
@@ -72,6 +74,11 @@ void error(const char *msg, ...) {
 }
 
 void warning(const char *msg, ...) {
+#ifdef ATARIST
+	if (g_stInTick) {
+		return;
+	}
+#endif
 	char buf[1024];
 	va_list va;
 	va_start(va, msg);
@@ -90,6 +97,11 @@ void warning(const char *msg, ...) {
 }
 
 void info(const char *msg, ...) {
+#ifdef ATARIST
+	if (g_stInTick) {
+		return;
+	}
+#endif
 	char buf[1024];
 	va_list va;
 	va_start(va, msg);

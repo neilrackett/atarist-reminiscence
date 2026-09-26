@@ -34,8 +34,8 @@ LIBS = $(STDL_LIB) -lm
 # digital music players other than .mod can never run here, so
 # st_stubs.cpp stands in for them with the few entry points the engine
 # still names, and the upstream sources stay untouched. The .mod player
-# is built: on an STE it drives the STDL_Voice mixer (mod_player.cpp). Nor are the SDL stub, scalers and
-# MIDI drivers built.
+# is built: on an STE it drives the STDL_Voice mixer (mod_player.cpp).
+# Nor are the SDL stub, scalers and MIDI drivers built.
 SRCS = collision.cpp cutscene.cpp file.cpp \
 	fs.cpp game.cpp graphics.cpp menu.cpp mixer.cpp \
 	piege.cpp \

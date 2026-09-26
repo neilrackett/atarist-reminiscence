@@ -13,9 +13,7 @@
 extern "C" {
 #include <stdl/stdl.h>
 }
-// a sound effect on voice 3 (mixer.cpp): 0 none, 1 playing, 2 being set
-// up - the tick keeps off the voice in both of the last two
-extern volatile uint8_t g_stSfxVoice3;
+#include <mint/osbind.h>
 #endif
 
 #ifdef USE_MODPLUG
@@ -195,6 +193,22 @@ ModPlayer_impl::ModPlayer_impl()
 	memset(&_modInfo, 0, sizeof(_modInfo));
 }
 
+// PAULA_FREQ / period. On the ST the sequencer runs in the voice tick,
+// where a 32-bit divide is a library call, several hundred cycles, and
+// the busiest modules change pitch 150 times a second. The quotient
+// fits a word for any period from 55 up, so divu.w does it there; a
+// period below that (a slide gone past any note) keeps the division.
+static int periodFreq(int period) {
+#ifdef ATARIST
+	if (period >= 55 && period <= 0xFFFF) {
+		uint32_t q = ModPlayer_impl::PAULA_FREQ;
+		__asm__("divu.w %1,%0" : "+d"(q) : "d"((uint16_t)period));
+		return (uint16_t)q;
+	}
+#endif
+	return ModPlayer_impl::PAULA_FREQ / period;
+}
+
 uint16_t ModPlayer_impl::findPeriod(uint16_t period, uint8_t fineTune) const {
 	for (int p = 0; p < 36; ++p) {
 		if (ModPlayer::_periodTable[p] == period) {
@@ -322,7 +336,7 @@ void ModPlayer_impl::handleNote(int trackNum, uint32_t noteData) {
 		tk->periodIndex = findPeriod(samplePeriod, tk->sample->fineTune);
 		if ((effectData >> 8) != 0x3 && (effectData >> 8) != 0x5) {
 			tk->period = ModPlayer::_periodTable[tk->periodIndex];
-			tk->freq = PAULA_FREQ / tk->period;
+			tk->freq = periodFreq(tk->period);
 		} else {
 			tk->portamento = ModPlayer::_periodTable[tk->periodIndex];
 		}
@@ -356,7 +370,7 @@ void ModPlayer_impl::applyVibrato(int trackNum) {
 	Track *tk = &_tracks[trackNum];
 	int vib = tk->vibratoAmp * sineWaveTable[tk->vibratoPos] / 128;
 	if (tk->period + vib != 0) {
-		tk->freq = PAULA_FREQ / (tk->period + vib);
+		tk->freq = periodFreq(tk->period + vib);
 	}
 	tk->vibratoPos += tk->vibratoSpeed;
 	if (tk->vibratoPos >= 64) {
@@ -373,7 +387,7 @@ void ModPlayer_impl::applyPortamento(int trackNum) {
 		tk->period = MAX(tk->period - tk->portamentoSpeed, tk->portamento);
 	}
 	if (tk->period != 0) {
-		tk->freq = PAULA_FREQ / tk->period;
+		tk->freq = periodFreq(tk->period);
 	}
 }
 
@@ -396,7 +410,7 @@ void ModPlayer_impl::handleEffect(int trackNum, bool tick) {
 				period = ModPlayer::_periodTable[tk->periodIndex + effectY];
 				break;
 			}
-			tk->freq = PAULA_FREQ / period;
+			tk->freq = periodFreq(period);
 		}
 		break;
 	case 0x1: // portamento up
@@ -405,7 +419,7 @@ void ModPlayer_impl::handleEffect(int trackNum, bool tick) {
 			if (tk->period < 113) { // note B-3
 				tk->period = 113;
 			}
-			tk->freq = PAULA_FREQ / tk->period;
+			tk->freq = periodFreq(tk->period);
 		}
 		break;
 	case 0x2: // portamento down
@@ -414,7 +428,7 @@ void ModPlayer_impl::handleEffect(int trackNum, bool tick) {
 			if (tk->period > 856) { // note C-1
 				tk->period = 856;
 			}
-			tk->freq = PAULA_FREQ / tk->period;
+			tk->freq = periodFreq(tk->period);
 		}
 		break;
 	case 0x3: // tone portamento
@@ -494,7 +508,7 @@ void ModPlayer_impl::handleEffect(int trackNum, bool tick) {
 				if (tk->period < 113) { // B-3 note
 					tk->period = 113;
 				}
-				tk->freq = PAULA_FREQ / tk->period;
+				tk->freq = periodFreq(tk->period);
 			}
 			break;
 		case 0x2: // fineslide down
@@ -503,7 +517,7 @@ void ModPlayer_impl::handleEffect(int trackNum, bool tick) {
 				if (tk->period > 856) { // C-1 note
 					tk->period = 856;
 				}
-				tk->freq = PAULA_FREQ / tk->period;
+				tk->freq = periodFreq(tk->period);
 			}
 			break;
 		case 0x6: // loop pattern
@@ -580,9 +594,7 @@ void ModPlayer_impl::handleEffect(int trackNum, bool tick) {
 			}
 			break;
 		default:
-#ifndef ATARIST
 			warning("Unhandled extended effect 0x%X params=0x%X", effectX, effectY);
-#endif
 			break;
 		}
 		break;
@@ -596,9 +608,7 @@ void ModPlayer_impl::handleEffect(int trackNum, bool tick) {
 		}
 		break;
 	default:
-#ifndef ATARIST
 		warning("Unhandled effect 0x%X params=0x%X", effectNum, effectXY);
-#endif
 		break;
 	}
 }
@@ -728,8 +738,7 @@ static void stModTick(void *ud) {
 void ModPlayer_impl::stStart() {
 	_stTickAcc = 0;
 	_stVolFor = -1;              // built on the first tick
-	STDL_ResumeVoices();         // unconditional, see mixer.cpp
-	ST_setVoiceTick(stModTick, this);
+	ST_setVoiceTick(stModTick, this);  // resumes the device too
 }
 
 void ModPlayer_impl::stStop() {
@@ -747,12 +756,19 @@ void ModPlayer_impl::stStop() {
 // The voice tick comes 50 times a second, which is tempo 125; the
 // sequencer runs tempo/125 ticks for each, so the few scenes at 107 to
 // 155 land their ticks on the same 20ms grid rather than between.
+//
+// Two sequencer ticks in one VBL (a tempo over 125) are synced to the
+// voices once, after both: what the first set, the second overwrites
+// before the mixer runs, and a trigger waits for the sync either way.
 void ModPlayer_impl::stTick() {
-	const uint16_t tempo = (_songTempo >= 32) ? _songTempo : BASE_TEMPO;
-	_stTickAcc = (uint16_t)(_stTickAcc + tempo);
+	bool ticked = false;
+	_stTickAcc = (uint16_t)(_stTickAcc + _songTempo);
 	while (_stTickAcc >= BASE_TEMPO && _playing) {
 		_stTickAcc = (uint16_t)(_stTickAcc - BASE_TEMPO);
 		handleTick();
+		ticked = true;
+	}
+	if (ticked) {
 		stSyncVoices();
 	}
 }
@@ -761,25 +777,12 @@ void ModPlayer_impl::stTick() {
 // effect (9xx) included
 void ModPlayer_impl::stStartVoice(int v, Track *tk, uint8_t vol) {
 	const SampleInfo *si = tk->sample;
-	const bool looping = (si->repeatLen > 2);
-	// the software mixer wraps at the loop's end on the first pass too
-	const uint32_t end = looping ? (uint32_t)si->repeatPos + si->repeatLen : si->len;
-	const uint32_t off = (uint32_t)tk->pos >> FRAC_BITS;
-	if (off >= end || tk->freq <= 0) {
-		STDL_StopVoice(v);
+	// a sample that cannot play leaves the voice stopped
+	if (!ST_playPaulaVoice(v, si->data, si->len, si->repeatPos, si->repeatLen,
+	                       (uint32_t)tk->pos >> FRAC_BITS, (uint32_t)MAX(tk->freq, 0), vol)) {
 		tk->voiceOn = false;
 		return;
 	}
-	uint32_t loopOff = 0, loopLen = 0;
-	if (looping) {
-		if (off <= si->repeatPos) {
-			loopOff = si->repeatPos - off;
-			loopLen = si->repeatLen;
-		} else {
-			loopLen = end - off;   // started inside the loop: loop the rest of it
-		}
-	}
-	STDL_SetVoice(v, si->data + off, end - off, loopOff, loopLen, (uint32_t)tk->freq, vol);
 	tk->voiceOn = true;
 	tk->voiceFreq = tk->freq;
 	tk->voiceVol = vol;
@@ -795,18 +798,30 @@ void ModPlayer_impl::stSyncVoices() {
 	// when the setting moves: worked out per channel per tick it was
 	// a __mulsi3 and a divide each, 1.6% of an STE.
 	if (_stVolFor != g_options.music_volume) {
+		// v * volume / 200 for v up to 64, stepped rather than
+		// multiplied and divided: this is the VBL, and 65 of each
+		// were library calls, a few milliseconds of it
 		_stVolFor = g_options.music_volume;
+		int q = 0, r = 0;
 		for (int v = 0; v <= 64; ++v) {
-			_stVol[v] = (uint8_t)(v * _stVolFor / 200);
+			_stVol[v] = (uint8_t)q;
+			r += _stVolFor;
+			while (r >= 200) {
+				r -= 200;
+				++q;
+			}
 		}
 	}
 	for (int i = 0; i < NUM_TRACKS; ++i) {
 		Track *tk = &_tracks[i];
 		if (i == 3 && g_stSfxVoice3 != 0) {
 			// a sound effect has the voice: the channel sits out until
-			// it ends, and comes back with its next note
+			// it ends, and comes back with its next note - a note due
+			// meanwhile is dropped, or it would sound when the effect
+			// ended, off the beat
 			if (g_stSfxVoice3 == 2 || STDL_VoiceActive(3)) {
 				tk->voiceOn = false;
+				tk->trigger = false;
 				continue;
 			}
 			g_stSfxVoice3 = 0;
@@ -821,7 +836,7 @@ void ModPlayer_impl::stSyncVoices() {
 			}
 			continue;
 		}
-		const uint8_t vol = _stVol[(tk->volume > 64) ? 64 : tk->volume];
+		const uint8_t vol = _stVol[MIN<int>(tk->volume, 64)];
 		if (tk->trigger) {
 			tk->trigger = false;
 			stStartVoice(i, tk, vol);
@@ -852,20 +867,28 @@ ModPlayer::~ModPlayer() {
 void ModPlayer::play(int num, int tempo) {
 #ifdef ATARIST
 	// An STE plays MUSIC\<name>.MOD, named as the YM tracks are
-	// (ST_musicName); without the voice device (a plain ST, or
+	// (ST_musicStem); without the voice device (a plain ST, or
 	// ste_sound=false) there is nothing to play it on.
-	if (num * 2 >= _namesCount || !STDL_VoicesOpen()) {
+	// The track playing stops first, found or not: a module left
+	// running would read to the mixer as the new track having started.
+	stop();
+	char name[16];
+	if (!STDL_VoicesOpen() || !ST_musicStem(num, name)) {
 		return;
 	}
-	const char *want = _names[num * 2 + 1] ? _names[num * 2 + 1] : _names[num * 2];
-	char name[16];
-	ST_musicName(want, name);
 	strcat(name, ".MOD");
 	File f;
 	if (!f.open(name, "rb", "MUSIC")) {
 		return;
 	}
-	stop();
+	// A module is ten to thirty times its YM stream, and it loads
+	// before the scene's own data: on a machine near its limit, leave
+	// the scene the room it needs and play the stream instead.
+	static const long kSceneReserve = 128 * 1024;
+	if ((long)Malloc(-1) < (long)f.size() + kSceneReserve) {
+		info("Music: %s left out, %ldK free", name, (long)Malloc(-1) >> 10);
+		return;
+	}
 	if (_impl->load(&f)) {
 		// 0, the title's call, means no tempo of the scene's own
 		_impl->_songTempo = (tempo >= 32) ? tempo : (int)ModPlayer_impl::BASE_TEMPO;

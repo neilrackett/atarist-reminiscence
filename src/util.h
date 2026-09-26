@@ -30,6 +30,13 @@ enum {
 
 extern uint32_t g_debugMask;
 
+#ifdef ATARIST
+// set while a music sequencer's voice tick runs, in VBL context, where
+// the log's GEMDOS writes must not happen: info and warning drop their
+// line then (ST_setVoiceTick raises it)
+extern volatile uint8_t g_stInTick;
+#endif
+
 extern void debug(uint32_t cm, const char *msg, ...);
 extern void error(const char *msg, ...);
 extern void warning(const char *msg, ...);
