@@ -4353,7 +4353,6 @@ const uint8_t Video::_font8Jp[] = {
 };
 #endif
 
-#ifndef ATARIST
 const uint16_t ModPlayer::_periodTable[] = {
 	856, 808, 762, 720, 678, 640, 604, 570, 538, 508, 480, 453, // C-1 to B-1 Finetune 0
 	428, 404, 381, 360, 339, 320, 302, 285, 269, 254, 240, 226, // C-2 to B-2 Finetune 0
@@ -4404,7 +4403,6 @@ const uint16_t ModPlayer::_periodTable[] = {
 	431, 407, 384, 363, 342, 323, 305, 288, 272, 256, 242, 228, // C-2 to B-2 Finetune -1
 	216, 203, 192, 181, 171, 161, 152, 144, 136, 128, 121, 114  // C-3 to B-3 Finetune -1
 };
-#endif
 
 const char *const ModPlayer::_names[] = {
 	"intro",       "introb",

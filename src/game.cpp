@@ -660,7 +660,10 @@ void Game::displayTitleScreenAmiga() {
 		memcpy(bands + i * kBand, buf + (kTextY + i * kTextPitch) * kW, kBand);
 	}
 #ifdef ATARIST
-	const bool musicInstalled = Mixer::ST_musicInstalled();
+	// Music cycles Off, YM and MOD, offering only what is there to play:
+	// the YM streams on any ST, the modules on an STE with the voices
+	const bool ymInstalled = Mixer::ST_musicInstalled(false);
+	const bool modInstalled = Mixer::ST_musicInstalled(true);
 #endif
 	int page = kPageMain;
 	int selected = _currentLevel;
@@ -733,7 +736,13 @@ void Game::displayTitleScreenAmiga() {
 							break;
 #ifdef ATARIST
 						case kMusicOpt:
-							str = !musicInstalled ? "Music: Not Installed" : g_options.music ? "Music: On" : "Music: Off";
+							if (!ymInstalled && !modInstalled) {
+								str = "Music: Not Installed";
+							} else if (!g_options.music) {
+								str = "Music: Off";
+							} else {
+								str = (g_options.music_mod && modInstalled) ? "Music: MOD" : "Music: YM";
+							}
 							break;
 						case kVolumeOpt:
 							snprintf(label, sizeof(label), "Music Volume: %d%%", g_options.music_volume);
@@ -834,14 +843,31 @@ void Game::displayTitleScreenAmiga() {
 					}
 					break;
 #ifdef ATARIST
-				case kMusicOpt:
-					// the title plays the menu track, so the change is heard
-					if (musicInstalled) {
-						g_options.music = !g_options.music;
-						if (g_options.music) {
-							_mix.playMusic(1);
-						} else {
+				case kMusicOpt: {
+						// the title plays the menu track, so the change is heard
+						int kinds[3];
+						int n = 0, cur = 0;
+						kinds[n++] = 0;                     // off
+						if (ymInstalled) {
+							kinds[n++] = 1;
+						}
+						if (modInstalled) {
+							kinds[n++] = 2;
+						}
+						const int now = !g_options.music ? 0 : (g_options.music_mod && modInstalled) ? 2 : 1;
+						for (int k = 0; k < n; ++k) {
+							if (kinds[k] == now) {
+								cur = k;
+							}
+						}
+						const int want = kinds[(cur + n + step) % n];
+						if (n > 1 && want != now) {
 							_mix.stopMusic();
+							g_options.music = (want != 0);
+							if (want != 0) {
+								g_options.music_mod = (want == 2);
+								_mix.playMusic(1);
+							}
 						}
 					}
 					break;

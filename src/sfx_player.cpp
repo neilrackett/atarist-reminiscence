@@ -28,7 +28,7 @@ static void ATARIST_voiceTick(void *ud) {
 		STDL_StopVoice(0);
 		STDL_StopVoice(1);
 		STDL_StopVoice(2);
-		STDL_SetVoiceTick(0, 0);
+		ST_setVoiceTick(0, 0);
 	}
 }
 #endif
@@ -79,7 +79,7 @@ void SfxPlayer::play(uint8_t num) {
 			return;
 		}
 		_playing = true;
-		STDL_SetVoiceTick(ATARIST_voiceTick, this);
+		ST_setVoiceTick(ATARIST_voiceTick, this);
 #else
 		_mix->setPremixHook(mixCallback, this);
 		_playing = true;
@@ -94,7 +94,7 @@ void SfxPlayer::play(uint8_t num) {
 void SfxPlayer::stop() {
 	if (_playing) {
 #ifdef ATARIST
-		STDL_SetVoiceTick(0, 0);
+		ST_setVoiceTick(0, 0);
 		STDL_StopVoice(0);
 		STDL_StopVoice(1);
 		STDL_StopVoice(2);

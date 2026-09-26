@@ -31,9 +31,10 @@ LIBS = $(STDL_LIB) -lm
 
 # Amiga-data engine + ST platform layer. The other versions' loaders
 # (Mac, PC98, the DOS demo archives), the SEQ cutscene player and the
-# digital music players can never run here, so st_stubs.cpp stands in
-# for them with the few entry points the engine still names, and the
-# upstream sources stay untouched. Nor are the SDL stub, scalers and
+# digital music players other than .mod can never run here, so
+# st_stubs.cpp stands in for them with the few entry points the engine
+# still names, and the upstream sources stay untouched. The .mod player
+# is built: on an STE it drives the STDL_Voice mixer (mod_player.cpp). Nor are the SDL stub, scalers and
 # MIDI drivers built.
 SRCS = collision.cpp cutscene.cpp file.cpp \
 	fs.cpp game.cpp graphics.cpp menu.cpp mixer.cpp \
@@ -41,7 +42,7 @@ SRCS = collision.cpp cutscene.cpp file.cpp \
 	protection.cpp resource.cpp sfx_player.cpp \
 	staticres.cpp splash_data.cpp unpack.cpp util.cpp video.cpp \
 	main_atari.cpp systemstub_stdl.cpp video_st.cpp st_stubs.cpp \
-	palette_st.cpp
+	palette_st.cpp mod_player.cpp
 
 OBJS = $(SRCS:%.cpp=build/%.o)
 DEPS = $(OBJS:.o=.d)

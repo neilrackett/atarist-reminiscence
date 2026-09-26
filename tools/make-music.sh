@@ -1,11 +1,12 @@
 #!/bin/bash
-# Build the Atari ST chip-music set from the Amiga Flashback modules.
+# Build the Atari ST music set from the Amiga Flashback modules.
 # Copyright (C) 2026 Neil Rackett
 #
-# The Amiga score is sampled music the ST cannot play: no DMA on a
-# plain ST, and no software mixer in this port. The YM2149 is on
-# every ST though, so the modules are converted to YM register
-# streams offline: MOD -> SMF (tools/mod2smf.py) -> STM (stdlconv).
+# The Amiga score is sampled music. An STE plays the modules as they
+# are, on its DMA sound (music=mod), so each is copied across under
+# its 8.3 name. A plain ST has no DMA, but the YM2149 is on every ST,
+# so the modules are also converted to YM register streams offline:
+# MOD -> SMF (tools/mod2smf.py) -> STM (stdlconv).
 #
 # Usage: tools/make-music.sh [module-dir]
 #        RS_MUSIC_DIR=/some/where  (modules to read, default tmp/music)
@@ -38,9 +39,9 @@ if ! ls "$SRC"/*.mod >/dev/null 2>&1; then     # also covers "no such dir"
 fi
 mkdir -p "$OUT"
 
-echo "Converting modules to YM streams:"
+echo "Copying the modules and converting them to YM streams:"
 python3 - "$SRC" "$OUT" "$HERE/mod2smf.py" "$STDLCONV" <<'PY'
-import glob, os, subprocess, sys
+import glob, os, shutil, subprocess, sys
 
 src, out, mod2smf, stdlconv = sys.argv[1:5]
 used, total, failed = {}, 0, 0
@@ -56,12 +57,15 @@ for path in sorted(glob.glob(os.path.join(src, "*.mod"))):
     # long, keep its LAST character rather than truncating: teleporta
     # and teleport2 differ only there and would both become TELEPORT.
     # The game derives the same name from its own track table
-    # (ATARIST_musicName in src/mixer.cpp) - keep the two in step.
+    # (ST_musicName in src/mixer.cpp) - keep the two in step.
     up = stem.upper().replace("_", "")
     n = (up[:7] + up[-1]) if len(up) > 8 else up
     if n in used:
         print("  !! %s and %s both map to %s" % (stem, used[n], n))
     used[n] = stem
+
+    # the module itself, for an STE to play as it is
+    shutil.copyfile(path, os.path.join(out, n + ".MOD"))
 
     mid = os.path.join(out, stem + ".mid")
     stm = os.path.join(out, n + ".STM")
@@ -88,7 +92,8 @@ print("\n%d tracks, %d bytes total%s"
 PY
 
 echo
-echo "Streams are in $OUT - set music=true in RS.CFG to hear them."
+echo "Streams (.STM) and modules (.MOD) are in $OUT - set music=true in"
+echo "RS.CFG to hear them: the modules on an STE, the streams on any ST."
 echo
 echo "Play one on target with STDL's example:"
 echo "  cp $OUT/JUNGLE.STM somewhere/DEMO.STM"

@@ -117,6 +117,7 @@ static void initOptions() {
 	// for anyone who wants it louder.
 	g_options.music_volume = 50;
 	g_options.refresh_rate = 0;       // the rate the machine booted at
+	g_options.music_mod = true;       // music=true: the modules where they can play
 	g_options.cheats = 0;
 	g_options.log_fps = false;
 	g_options.bench = false;
@@ -248,6 +249,21 @@ static void initOptions() {
 							}
 						}
 						found = true;
+					}
+					// music=ym|mod picks the kind as well as turning it on;
+					// true/false fall through to the switch below, and true
+					// then means the modules where the machine can play them
+					// and the YM streams elsewhere
+					if (nameLen == 5 && strncmp(name, "music", 5) == 0) {
+						if (strncasecmp(p, "ym", 2) == 0 && !isalpha((unsigned char)p[2])) {
+							g_options.music = true;
+							g_options.music_mod = false;
+							found = true;
+						} else if (strncasecmp(p, "mod", 3) == 0 && !isalpha((unsigned char)p[3])) {
+							g_options.music = true;
+							g_options.music_mod = true;
+							found = true;
+						}
 					}
 					for (int i = 0; ints[i].name; ++i) {
 						if (strlen(ints[i].name) == nameLen

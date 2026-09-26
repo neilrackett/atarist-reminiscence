@@ -172,6 +172,7 @@ struct Options {
 	bool palette_hue;      // ST port: match custom palettes by hue
 	bool ste_sound;        // ST port: open the STE sample device at all
 	int refresh_rate;      // ST port: 50 or 60Hz; the machine's own if neither
+	bool music_mod;        // ST port: with music on, the .mod tracks where the STE can play them
 };
 
 // ST port: the four screen modes, in the order the menu cycles them

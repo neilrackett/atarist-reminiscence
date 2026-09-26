@@ -7,7 +7,7 @@
  * The ST plays the Amiga data only, and has no software mixer. So the
  * other versions' loaders (Mac, PC98, the DOS demo archives and their
  * decompressors), the DOS SEQ cutscene player and the digital music
- * players (.mod, .ogg, CD-i, .prf and its MIDI parser) can never run -
+ * players (.ogg, CD-i, .prf and its MIDI parser) can never run -
  * yet the engine still names them, from resource-type switches and as
  * members of Mixer and Game, so their code was linked in and loaded
  * into memory with the rest of the program. On a 2MB machine that is
@@ -35,12 +35,6 @@
 #include "seq_player.h"
 
 // music players: idle from construction
-
-ModPlayer::ModPlayer(Mixer *mixer, FileSystem *fs)
-	: _isAmiga(false), _playing(false), _fs(fs) {
-}
-ModPlayer::~ModPlayer() {}
-void ModPlayer::stop() {}
 
 OggPlayer::OggPlayer(Mixer *mixer, FileSystem *fs)
 	: _fs(fs), _impl(0) {

@@ -16,7 +16,8 @@ extern "C" {
 #include <mint/osbind.h>
 
 // Sound effects on the STE: voice 3 of the STDL_Voice mixer, so
-// they coexist with the SfxPlayer music on voices 0-2. If the voice
+// they coexist with the SfxPlayer music on voices 0-2, and a module
+// lends them its fourth channel (see ATARIST_playSample). If the voice
 // device is not open (it failed, or a plain ST) fall back to a raw
 // one-shot DMA sample - resampled and volume-scaled into a scratch
 // buffer, since the bare DMA does neither.
@@ -85,8 +86,21 @@ static const uint8_t *ATARIST_volumeTable(uint8_t volume) {
  * alone is one unbroken 61.8s stretch. A shorter delay would ask the
  * library to pause and cancel dozens of times a minute during play
  * for nothing.
+ *
+ * Never while a sequencer owns the voice tick, though - a module, or
+ * the action music. A paused device runs no tick, so a song that
+ * went quiet for two seconds would never play its next note.
  */
 enum { kVoiceIdlePauseMs = 2000 };
+
+static volatile bool _stVoiceSeq;    // a sequencer is on the voice tick
+
+// Every sequencer installs and removes its tick here, so the pause
+// above knows when to keep out.
+void ST_setVoiceTick(void (*fn)(void *), void *ud) {
+	STDL_SetVoiceTick(fn, ud);
+	_stVoiceSeq = (fn != 0);
+}
 
 void ATARIST_mixerTick() {
 	if (!STDL_VoicesOpen()) {
@@ -94,6 +108,11 @@ void ATARIST_mixerTick() {
 	}
 	static uint32_t idleSince;
 	static bool asked;
+	if (_stVoiceSeq) {
+		idleSince = 0;
+		asked = false;
+		return;
+	}
 	for (int v = 0; v < 4; ++v) {
 		if (STDL_VoiceActive(v)) {
 			idleSince = 0;
@@ -109,6 +128,8 @@ void ATARIST_mixerTick() {
 		asked = true;
 	}
 }
+
+volatile uint8_t g_stSfxVoice3;      // see ATARIST_playSample and mod_player.cpp
 
 static void ATARIST_playSample(const uint8_t *data, uint32_t len, uint16_t freq, uint8_t volume) {
 	// ste_sound=false means no sampled sound at all. Without this the
@@ -127,8 +148,14 @@ static void ATARIST_playSample(const uint8_t *data, uint32_t len, uint16_t freq,
 		// and a guarded call leaves the device stopped later with no
 		// error and no sound.
 		STDL_ResumeVoices();
+		// A module playing on the voices has voice 3 for its fourth
+		// channel; the effect takes it, and the channel sits out until
+		// the effect ends (mod_player.cpp). Marked before the voice is
+		// set, so a tick between the two cannot hand it back.
+		g_stSfxVoice3 = 2;
 		STDL_SetVoice(3, (const int8_t *)data, len, 0, 0, freq,
 		              (volume > 64) ? 64 : volume);
+		g_stSfxVoice3 = 1;
 		return;
 	}
 	if (!ATARIST_dmaSample()) {
@@ -182,8 +209,8 @@ static uint32_t _ymMissing;          /* one bit per track, log once */
 // name is too long keep its last character rather than truncating -
 // teleporta and teleport2 differ only there, and would otherwise
 // both become TELEPORT. tools/make-music.sh names its output with
-// this same rule.
-static void ATARIST_musicName(const char *src, char *out) {
+// this same rule, for the .STM and .MOD tracks alike.
+void ST_musicName(const char *src, char *out) {
 	char tmp[16];
 	int n = 0;
 	for (const char *p = src; *p && n < 15; ++p) {
@@ -216,7 +243,7 @@ static bool ATARIST_playMusic(int num) {
 		want = ModPlayer::_names[num * 2];
 	}
 	char stem[16];
-	ATARIST_musicName(want, stem);
+	ST_musicName(want, stem);
 	// MUSIC\, not DATA\: these streams are derived, optional and
 	// unshippable, where DATA\ holds the game's own files. Different
 	// provenance, different lifetime, so a data folder can be replaced
@@ -253,19 +280,21 @@ void Mixer::ST_setMusicVolume(int percent) {
 	STDL_VolumeMusic((percent * 128) / 100);
 }
 
-// Any track in MUSIC\: they are built from the player's own disks
-// (tools/make-music.sh), so a copy of the game may well have none,
-// and a Music line that could only ever say On would be a lie.
-bool Mixer::ST_musicInstalled() {
-	static int installed = -1;
-	if (installed < 0) {
+// Any YM (.STM) or module (.MOD) track in MUSIC\: they come from the
+// player's own disks (RExtract or tools/make-music.sh), so a copy of
+// the game may well have none, and a Music line offering what cannot
+// play would be a lie. Modules also need the STE's voice device.
+bool Mixer::ST_musicInstalled(bool mod) {
+	static int installed[2] = { -1, -1 };
+	int &known = installed[mod ? 1 : 0];
+	if (known < 0) {
 		_DTA dta;
 		_DTA *saved = Fgetdta();
 		Fsetdta(&dta);
-		installed = (Fsfirst("MUSIC\\*.STM", 0) == 0) ? 1 : 0;
+		known = (Fsfirst(mod ? "MUSIC\\*.MOD" : "MUSIC\\*.STM", 0) == 0) ? 1 : 0;
 		Fsetdta(saved);
 	}
-	return installed != 0;
+	return known != 0 && (!mod || STDL_VoicesOpen());
 }
 
 static void ATARIST_stopMusic() {
@@ -289,7 +318,8 @@ void Mixer::init() {
 	memset(_channels, 0, sizeof(_channels));
 	_premixHook = 0;
 #ifdef ATARIST
-	// the voice mixer carries both music (0-2) and effects (3);
+	// the voice mixer carries the sampled music - the SfxPlayer's on
+	// voices 0-2, a module's on all four - and the effects on 3;
 	// fails cleanly on a plain ST and we fall back to one-shots
 	if (g_options.ste_sound) {
 		STDL_OpenVoices(6258);
@@ -407,20 +437,39 @@ void Mixer::playMusic(int num, int tempo) {
 		return;
 	}
 	if (isMusicSfx(num)) { // level action sequence
+#ifdef ATARIST
+		// the action music is driven on the same voices a module plays
+		// on; they never overlap in the game, but should they, the
+		// module gives way
+		if (_mod._playing) {
+			_mod.stop();
+		}
+#endif
 		_sfx.play(num);
 		if (_sfx._playing) {
 			_musicType = MT_SFX;
 		}
 	} else { // cutscene
 #ifdef ATARIST
-		// YM chip music stands in for the .mod score, which needs a
-		// software mixer this port does not have
+		// The .mod score itself where an STE can play it on its voice
+		// device and the player chose it (music=mod, or true) - else
+		// the YM stream converted from it, which any ST can play.
+		if (g_options.music && g_options.music_mod) {
+			ATARIST_stopMusic();
+			_mod.play(num, tempo);
+			if (_mod._playing) {
+				_musicType = MT_MOD;
+				return;
+			}
+		}
+		if (_mod._playing) {
+			_mod.stop();
+		}
 		if (ATARIST_playMusic(num)) {
 			_musicType = MT_MOD;
 		}
-		// No fallback to the players below: none of them can make a
-		// sound here, and a .mod left in DATA\ would be loaded - a
-		// hundred K or more - and never heard.
+		// Not the players below: they mix in software, which the ST
+		// cannot afford; the modules play above, on the voices.
 		return;
 #endif
 		_mod.play(num, tempo);

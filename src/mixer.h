@@ -75,10 +75,18 @@ struct Mixer {
 	// for the title's Options: set the music level (percent) and hear
 	// it at once, and whether there is any music to play
 	void ST_setMusicVolume(int percent);
-	static bool ST_musicInstalled();
+	static bool ST_musicInstalled(bool mod);
 #endif
 
 	static void mixCallback(void *param, int16_t *buf, int len);
 };
+
+#ifdef ATARIST
+// a track's name in MUSIC\, GEMDOS 8.3 without the extension (mixer.cpp)
+void ST_musicName(const char *src, char *out);
+// STDL_SetVoiceTick for the music players, which keeps the device
+// from pausing under a sequencer (mixer.cpp)
+void ST_setVoiceTick(void (*fn)(void *), void *ud);
+#endif
 
 #endif // MIXER_H__

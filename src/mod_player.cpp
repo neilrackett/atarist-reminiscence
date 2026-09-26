@@ -9,6 +9,15 @@
 #include "mod_player.h"
 #include "util.h"
 
+#ifdef ATARIST
+extern "C" {
+#include <stdl/stdl.h>
+}
+// a sound effect on voice 3 (mixer.cpp): 0 none, 1 playing, 2 being set
+// up - the tick keeps off the voice in both of the last two
+extern volatile uint8_t g_stSfxVoice3;
+#endif
+
 #ifdef USE_MODPLUG
 #include <libmodplug/modplug.h>
 
@@ -130,6 +139,14 @@ struct ModPlayer_impl {
 		int retriggerCounter;
 		int delayCounter;
 		int cutCounter;
+#ifdef ATARIST
+		// the STDL voice this track plays on: a (re)start is due, and
+		// what the voice was last given
+		bool trigger;
+		bool voiceOn;
+		int voiceFreq;
+		uint8_t voiceVol;
+#endif
 	};
 
 	bool _playing;
@@ -161,6 +178,16 @@ struct ModPlayer_impl {
 	void handleEffect(int trackNum, bool tick);
 	void mixSamples(int16_t *buf, int len);
 	bool mix(int16_t *buf, int len);
+#ifdef ATARIST
+	uint16_t _stTickAcc;
+	int _stVolFor;               // the music_volume _stVol is built for
+	uint8_t _stVol[65];          // module volume -> voice volume
+	void stStart();
+	void stStop();
+	void stTick();
+	void stSyncVoices();
+	void stStartVoice(int v, Track *tk, uint8_t vol);
+#endif
 };
 
 ModPlayer_impl::ModPlayer_impl()
@@ -174,8 +201,20 @@ uint16_t ModPlayer_impl::findPeriod(uint16_t period, uint8_t fineTune) const {
 			return fineTune * 36 + p;
 		}
 	}
+#ifdef ATARIST
+	// This runs in the voice tick, in VBL context, where error() and
+	// its log write cannot: take the nearest note instead.
+	int best = 0;
+	for (int p = 1; p < 36; ++p) {
+		if (ABS(ModPlayer::_periodTable[p] - period) < ABS(ModPlayer::_periodTable[best] - period)) {
+			best = p;
+		}
+	}
+	return fineTune * 36 + best;
+#else
 	error("Invalid period=%d", period);
 	return 0;
+#endif
 }
 
 void ModPlayer_impl::init(const int rate) {
@@ -227,6 +266,13 @@ bool ModPlayer_impl::load(File *f) {
 			si->data = (int8_t *)malloc(si->len);
 			if (si->data) {
 				f->read(si->data, si->len);
+#ifdef ATARIST
+			} else {
+				// Short of memory: reading on would load the rest of
+				// the file into the wrong samples, so the module is
+				// given up and the caller plays the YM track instead.
+				return false;
+#endif
 			}
 		}
 	}
@@ -268,6 +314,9 @@ void ModPlayer_impl::handleNote(int trackNum, uint32_t noteData) {
 		tk->sample = &_modInfo.samples[sampleNum - 1];
 		tk->volume = tk->sample->volume;
 		tk->pos = 0;
+#ifdef ATARIST
+		tk->trigger = true;
+#endif
 	}
 	if (samplePeriod != 0) {
 		tk->periodIndex = findPeriod(samplePeriod, tk->sample->fineTune);
@@ -404,6 +453,9 @@ void ModPlayer_impl::handleEffect(int trackNum, bool tick) {
 	case 0x9: // set sample offset
 		if (!tick) {
 			tk->pos = effectXY << (8 + FRAC_BITS);
+#ifdef ATARIST
+			tk->trigger = true;
+#endif
 		}
 		break;
 	case 0xA: // volume slide
@@ -483,6 +535,9 @@ void ModPlayer_impl::handleEffect(int trackNum, bool tick) {
 			} else {
 				if (tk->retriggerCounter == 0) {
 					tk->pos = 0;
+#ifdef ATARIST
+					tk->trigger = true;
+#endif
 					tk->retriggerCounter = effectY;
 					debug(DBG_MOD, "retrigger sample=%d _songSpeed=%d", effectY, _songSpeed);
 				}
@@ -525,7 +580,9 @@ void ModPlayer_impl::handleEffect(int trackNum, bool tick) {
 			}
 			break;
 		default:
+#ifndef ATARIST
 			warning("Unhandled extended effect 0x%X params=0x%X", effectX, effectY);
+#endif
 			break;
 		}
 		break;
@@ -539,7 +596,9 @@ void ModPlayer_impl::handleEffect(int trackNum, bool tick) {
 		}
 		break;
 	default:
+#ifndef ATARIST
 		warning("Unhandled effect 0x%X params=0x%X", effectNum, effectXY);
+#endif
 		break;
 	}
 }
@@ -590,6 +649,7 @@ void ModPlayer_impl::handleTick() {
 	}
 }
 
+#ifndef ATARIST
 void ModPlayer_impl::mixSamples(int16_t *buf, int samplesLen) {
 	for (int i = 0; i < NUM_TRACKS; ++i) {
 		Track *tk = &_tracks[i];
@@ -653,6 +713,131 @@ bool ModPlayer_impl::mix(int16_t *buf, int len) {
 	}
 	return _playing;
 }
+#else
+// On the ST the software mixer above is replaced by the STDL_Voice
+// device on an STE: four hardware-mixed voices, Paula-style, which is
+// what a four-channel module is written for. The sequencer runs as
+// ever - notes, effects, speed - but from the device's voice tick, and
+// after each tick the voices are told what changed: a note (re)started,
+// a new pitch (vibrato, portamento, arpeggio) or a new volume.
+
+static void stModTick(void *ud) {
+	((ModPlayer_impl *)ud)->stTick();
+}
+
+void ModPlayer_impl::stStart() {
+	_stTickAcc = 0;
+	_stVolFor = -1;              // built on the first tick
+	STDL_ResumeVoices();         // unconditional, see mixer.cpp
+	ST_setVoiceTick(stModTick, this);
+}
+
+void ModPlayer_impl::stStop() {
+	// the tick first - it reads the module - then the voices, which
+	// read the samples, and only then may unload free either
+	ST_setVoiceTick(0, 0);
+	for (int i = 0; i < NUM_TRACKS; ++i) {
+		if (i == 3 && g_stSfxVoice3 != 0) {
+			continue;            // a sound effect's, not ours
+		}
+		STDL_StopVoice(i);
+	}
+}
+
+// The voice tick comes 50 times a second, which is tempo 125; the
+// sequencer runs tempo/125 ticks for each, so the few scenes at 107 to
+// 155 land their ticks on the same 20ms grid rather than between.
+void ModPlayer_impl::stTick() {
+	const uint16_t tempo = (_songTempo >= 32) ? _songTempo : BASE_TEMPO;
+	_stTickAcc = (uint16_t)(_stTickAcc + tempo);
+	while (_stTickAcc >= BASE_TEMPO && _playing) {
+		_stTickAcc = (uint16_t)(_stTickAcc - BASE_TEMPO);
+		handleTick();
+		stSyncVoices();
+	}
+}
+
+// start a voice where the track's sample starts, the sample offset
+// effect (9xx) included
+void ModPlayer_impl::stStartVoice(int v, Track *tk, uint8_t vol) {
+	const SampleInfo *si = tk->sample;
+	const bool looping = (si->repeatLen > 2);
+	// the software mixer wraps at the loop's end on the first pass too
+	const uint32_t end = looping ? (uint32_t)si->repeatPos + si->repeatLen : si->len;
+	const uint32_t off = (uint32_t)tk->pos >> FRAC_BITS;
+	if (off >= end || tk->freq <= 0) {
+		STDL_StopVoice(v);
+		tk->voiceOn = false;
+		return;
+	}
+	uint32_t loopOff = 0, loopLen = 0;
+	if (looping) {
+		if (off <= si->repeatPos) {
+			loopOff = si->repeatPos - off;
+			loopLen = si->repeatLen;
+		} else {
+			loopLen = end - off;   // started inside the loop: loop the rest of it
+		}
+	}
+	STDL_SetVoice(v, si->data + off, end - off, loopOff, loopLen, (uint32_t)tk->freq, vol);
+	tk->voiceOn = true;
+	tk->voiceFreq = tk->freq;
+	tk->voiceVol = vol;
+}
+
+void ModPlayer_impl::stSyncVoices() {
+	// The module's volume scaled by music_volume. A voice at 64 is
+	// half the output, so four channels there would be twice as loud
+	// as an effect; at the default 50 a channel peaks at 16, and all
+	// four together where one effect does. Measured on the title
+	// track that is close to the YM stream's level at the same
+	// setting (at 32 a channel it was 9dB over it). A table, rebuilt
+	// when the setting moves: worked out per channel per tick it was
+	// a __mulsi3 and a divide each, 1.6% of an STE.
+	if (_stVolFor != g_options.music_volume) {
+		_stVolFor = g_options.music_volume;
+		for (int v = 0; v <= 64; ++v) {
+			_stVol[v] = (uint8_t)(v * _stVolFor / 200);
+		}
+	}
+	for (int i = 0; i < NUM_TRACKS; ++i) {
+		Track *tk = &_tracks[i];
+		if (i == 3 && g_stSfxVoice3 != 0) {
+			// a sound effect has the voice: the channel sits out until
+			// it ends, and comes back with its next note
+			if (g_stSfxVoice3 == 2 || STDL_VoiceActive(3)) {
+				tk->voiceOn = false;
+				continue;
+			}
+			g_stSfxVoice3 = 0;
+		}
+		if (!tk->sample || !tk->sample->data || tk->delayCounter != 0) {
+			// no sample yet, or a note held back (EDx): silent, as the
+			// software mixer leaves a delayed track; the note starts
+			// when the delay runs out
+			if (tk->voiceOn) {
+				STDL_StopVoice(i);
+				tk->voiceOn = false;
+			}
+			continue;
+		}
+		const uint8_t vol = _stVol[(tk->volume > 64) ? 64 : tk->volume];
+		if (tk->trigger) {
+			tk->trigger = false;
+			stStartVoice(i, tk, vol);
+		} else if (tk->voiceOn) {
+			if (tk->freq != tk->voiceFreq && tk->freq > 0) {
+				STDL_SetVoiceFreq(i, (uint32_t)tk->freq);
+				tk->voiceFreq = tk->freq;
+			}
+			if (vol != tk->voiceVol) {
+				STDL_SetVoiceVolume(i, vol);
+				tk->voiceVol = vol;
+			}
+		}
+	}
+}
+#endif
 #endif
 
 ModPlayer::ModPlayer(Mixer *mixer, FileSystem *fs)
@@ -665,6 +850,35 @@ ModPlayer::~ModPlayer() {
 }
 
 void ModPlayer::play(int num, int tempo) {
+#ifdef ATARIST
+	// An STE plays MUSIC\<name>.MOD, named as the YM tracks are
+	// (ST_musicName); without the voice device (a plain ST, or
+	// ste_sound=false) there is nothing to play it on.
+	if (num * 2 >= _namesCount || !STDL_VoicesOpen()) {
+		return;
+	}
+	const char *want = _names[num * 2 + 1] ? _names[num * 2 + 1] : _names[num * 2];
+	char name[16];
+	ST_musicName(want, name);
+	strcat(name, ".MOD");
+	File f;
+	if (!f.open(name, "rb", "MUSIC")) {
+		return;
+	}
+	stop();
+	if (_impl->load(&f)) {
+		// 0, the title's call, means no tempo of the scene's own
+		_impl->_songTempo = (tempo >= 32) ? tempo : (int)ModPlayer_impl::BASE_TEMPO;
+		_impl->_repeatIntro = false;   // a PC-data fix; these are the Amiga's modules
+		_impl->stStart();
+		_playing = true;
+		info("Music: %s at tempo %d", name, _impl->_songTempo);
+	} else {
+		// not playing, so stop() would never free what it did get
+		_impl->unload();
+		info("Music: %s does not fit in memory", name);
+	}
+#else
 	if (num * 2 < _namesCount) {
 		File f;
 		if (!f.open(_names[num * 2], "rb", _fs)) {
@@ -683,16 +897,23 @@ void ModPlayer::play(int num, int tempo) {
 			_playing = true;
 		}
 	}
+#endif
 }
 
 void ModPlayer::stop() {
 	if (_playing) {
+#ifdef ATARIST
+		_impl->stStop();
+#else
 		_mix->setPremixHook(0, 0);
+#endif
 		_impl->unload();
 		_playing = false;
 	}
 }
 
+#ifndef ATARIST
 bool ModPlayer::mixCallback(void *param, int16_t *buf, int len) {
 	return ((ModPlayer_impl *)param)->mix(buf, len);
 }
+#endif

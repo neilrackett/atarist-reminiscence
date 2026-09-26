@@ -19,9 +19,9 @@ So, just three decades after the original was released... **_Say hello to Flashb
 ## Requirements
 
 - Needs an ST with at least 2.5MB RAM (4MB recommended).
-- 3MB of hard disk space.
+- 3.5MB of hard disk space.
 - Sound effects are STE-only.
-- Optional music works on any ST (see below).
+- Optional music works on any ST, and an STE plays the original Amiga score (see below).
 
 Sorry, 2MB isn't enough: with a hard disk driver loaded, the larger levels run out of memory.
 
@@ -91,18 +91,29 @@ To extract them by hand instead, see
 Music is still experimental and so remains optional.
 
 The score is on the disks, in `music/` — one ProTracker module per
-track. The ST cannot play them as they are, so `tools/make-music.sh`
-converts them offline into YM2149 register streams, which every ST
-can play.
+track. An STE or Mega STE plays the modules as they are, on its DMA
+sound. Every other ST plays YM2149 versions of them, converted
+offline: a chip cover rather than the original, since three square
+waves keep the notes but not the instruments.
 
-`tools/extract-data.sh` (see [Extracting the files manually](docs/extracting-files.md))
-puts the modules in `tmp/music`, and
-`tools/make-music.sh` with no arguments converts whatever it finds
-there into `dist/MUSIC`. Copy that `MUSIC\` folder to your ST, next to
-`FLASHBAK.TOS` and alongside `DATA\`, and set `music=true` in
-`RS.CFG`.
+The [RExtract online tool](https://labs.neilrackett.com/web-rextract/)
+puts both in the `MUSIC` folder. By hand, `tools/extract-data.sh` (see
+[Extracting the files manually](docs/extracting-files.md)) puts the
+modules in `tmp/music`, and `tools/make-music.sh` with no arguments
+copies each module into `dist/MUSIC` and converts it there too. Copy
+that `MUSIC\` folder to your ST, next to `FLASHBAK.TOS` and alongside
+`DATA\`.
 
-Without the `.STM` files the game plays as it always did: each
+Then set `music=true` in `RS.CFG`, or turn it on under Options on the
+title menu. An STE plays the modules and any other ST the YM versions;
+on an STE, Options switches between the two, and `music=ym` starts
+with the YM versions.
+
+The modules are not free on an STE: mixing four sampled voices takes
+about a quarter of the machine, so cutscenes slow down with them more
+than with the YM versions.
+
+Without the music files the game plays as it always did: each
 missing track is noted once in `RS.LOG` (with `logging=true`) and the
 scene runs silent.
 

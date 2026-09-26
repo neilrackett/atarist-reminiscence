@@ -64,28 +64,32 @@
 
 # --- sound --------------------------------------------------------
 
-# Play YM chip music. Needs the .STM tracks in a MUSIC\ folder beside
-# this file - see the README for building them from your own disks.
-# Sampled effects need an STE and play regardless of this. Options
-# on the title menu turns it on or off for the current run.
+# Play music. Needs the tracks in a MUSIC\ folder beside this file -
+# see the README for making them from your own disks. true plays the
+# original Amiga modules (.MOD) on an STE or Mega STE, and the YM
+# chip versions (.STM) on any other ST or where a module is missing;
+# ym plays the YM versions everywhere. Sampled effects need an STE
+# and play regardless of this. Options on the title menu switches
+# between off, YM and the modules for the current run.
 # (default: false)
 #music=true
 
-# How loud the chip music plays, 0-100. The default sits it a little
-# under the sampled effects, which come through the STE mixer well
-# below full scale - at 100 the music stood some 15dB above them.
-# The chip's own volume steps are coarse, about 3dB each, so a
-# change of a few points may do nothing. Options on the title menu
-# sets it in tens for the current run. (default: 50)
+# How loud the music plays, 0-100. The default sits it a little under
+# the sampled effects, which come through the STE mixer well below
+# full scale - at 100 the YM music stood some 15dB above them. The
+# chip's own volume steps are coarse, about 3dB each, so with the YM
+# versions a change of a few points may do nothing. Options on the
+# title menu sets it in tens for the current run. (default: 50)
 #music_volume=100
 
 # Use the .PRF music files rather than the .STM ones. (default: false)
 #use_prf_music=true
 
 # Turn off the STE's sampled sound entirely - nothing opens the sound
-# DMA at all. Chip music (music=true) is unaffected, since that drives
-# the YM instead. For diagnosing sound faults, and for anyone who
-# wants the game silent. (default: true)
+# DMA at all. The modules go with it, and music=true plays the YM
+# versions instead, since those drive the chip rather than the DMA.
+# For diagnosing sound faults, and for anyone who wants the game
+# silent. (default: true)
 #ste_sound=false
 
 # --- speed --------------------------------------------------------
