@@ -1495,6 +1495,11 @@ int Game::pge_op_saveState(ObjectOpcodeArgs *args) {
 	_saveStateCompleted = true;
 	_validSaveState = saveGameState(kIngameSaveSlot);
 	if (_validSaveState && g_options.play_gamesaved_sound) {
+#ifdef ATARIST
+		if (_res._numSfx == 0) {
+			ST_playYmSfx(ST_YMSFX_SAVED, 0);   // no samples here: the YM's jingle
+		} else
+#endif
 		_mix.play(Resource::_gameSavedSoundData, Resource::_gameSavedSoundLen, 8000, Mixer::MAX_VOLUME);
 	}
 	return 0xFFFF;

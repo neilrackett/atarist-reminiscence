@@ -118,6 +118,7 @@ static void initOptions() {
 	g_options.music_volume = 50;
 	g_options.refresh_rate = 0;       // the rate the machine booted at
 	g_options.music_mod = true;       // music=true: the modules where they can play
+	g_options.sfx_audition = false;
 	g_options.cheats = 0;
 	g_options.log_fps = false;
 	g_options.bench = false;
@@ -176,6 +177,7 @@ static void initOptions() {
 		{ "music", &g_options.music },
 		{ "log_fps", &g_options.log_fps },
 		{ "bench", &g_options.bench },
+		{ "sfx_audition", &g_options.sfx_audition },
 		{ "logging", &g_options.logging },
 		{ "frame_skip", &g_options.frame_skip },
 		{ "blitter", &g_options.blitter },

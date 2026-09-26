@@ -25,6 +25,7 @@ struct MixerChannel {
 
 struct FileSystem;
 struct PrfMidiDriver;
+struct Resource;
 struct SystemStub;
 
 struct Mixer {
@@ -87,6 +88,11 @@ void ST_musicName(const char *src, char *out);
 // STDL_SetVoiceTick for the music players, which keeps the device
 // from pausing under a sequencer (mixer.cpp)
 void ST_setVoiceTick(void (*fn)(void *), void *ud);
+// the YM's version of sound effect `num`, for a machine that cannot
+// play the samples; softVol as Game::playSound's (ym_sfx_st.cpp)
+enum { ST_YMSFX_SAVED = 0xF0 };      // the save-point jingle
+void ST_playYmSfx(int num, int softVol);
+void ST_auditionYmSfx(Resource *res, Mixer *mix, SystemStub *stub);
 #endif
 
 #endif // MIXER_H__

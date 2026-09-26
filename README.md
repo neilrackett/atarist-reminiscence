@@ -20,7 +20,7 @@ So, just three decades after the original was released... **_Say hello to Flashb
 
 - Needs an ST with at least 2.5MB RAM (4MB recommended).
 - 3.5MB of hard disk space.
-- Sound effects are STE-only.
+- Sound effects: the Amiga's samples on an STE, simpler YM versions on any other ST.
 - Optional music works on any ST, and an STE plays the original Amiga score (see below).
 
 Sorry, 2MB isn't enough: with a hard disk driver loaded, the larger levels run out of memory.
@@ -149,7 +149,6 @@ including:
 
 ### To-do
 
-- Simplified, non-STE sound effects using YM
 - Can we achieve smooth cutscenes playback without dropping frames?
 
 ## Building

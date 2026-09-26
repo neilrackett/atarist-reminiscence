@@ -86,10 +86,11 @@
 #use_prf_music=true
 
 # Turn off the STE's sampled sound entirely - nothing opens the sound
-# DMA at all. The modules go with it, and music=true plays the YM
-# versions instead, since those drive the chip rather than the DMA.
-# For diagnosing sound faults, and for anyone who wants the game
-# silent. (default: true)
+# DMA at all. The effects then play their simpler YM versions, as on
+# a plain ST, and the modules go too: music=true plays the YM tracks
+# instead, since those drive the chip rather than the DMA. For
+# diagnosing sound faults, and for hearing what a plain ST plays.
+# (default: true)
 #ste_sound=false
 
 # --- speed --------------------------------------------------------

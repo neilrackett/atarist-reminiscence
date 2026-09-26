@@ -502,6 +502,9 @@ void Game::run() {
 			loadLevelData();
 			resetGameState();
 #ifdef ATARIST
+			if (g_options.sfx_audition) {
+				ST_auditionYmSfx(&_res, &_mix, _stub);
+			}
 			if (_stLoadSlot >= 0) {
 				// Load on the title: the saved state in place of the
 				// level's start, and so without its opening cutscene
@@ -2898,7 +2901,10 @@ void Game::playSound(uint8_t num, uint8_t softVol) {
 	debug(DBG_GAME, "playSound num:%d volume:%d", num, softVol);
 #ifdef ATARIST
 	if (_res._numSfx == 0 && num < Resource::NUM_SFXS) {
-		return;   // no samples loaded: this machine cannot play them
+		// no samples loaded: this machine cannot play them, so the
+		// YM's simplified version where there is one (ym_sfx_st.cpp)
+		ST_playYmSfx(num, softVol);
+		return;
 	}
 #endif
 	if (num < _res._numSfx) {
