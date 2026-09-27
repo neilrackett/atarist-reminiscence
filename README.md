@@ -1,6 +1,6 @@
 # Flashback for Atari ST
 
-<img src="./flashback.png" alt="Flashback" width="640" height="400" />
+<img src="./flashback.png" alt="Flashback" width="832" />
 
 Flashback ported to the Atari ST via [REminiscence](https://github.com/cyxx/REminiscence),
 by [Neil Rackett](https://neilrackett.com/atarist).
