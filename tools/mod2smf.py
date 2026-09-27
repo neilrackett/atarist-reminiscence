@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 mod2smf - ProTracker module to Standard MIDI File.
+Copyright (C) 2026 Neil Rackett
 
 The Atari ST has no sampled music: the YM2149 gives three square
 wave voices and one noise generator. STDL's stdlconv can render a
