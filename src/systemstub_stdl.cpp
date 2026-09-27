@@ -222,7 +222,8 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 	// every blit in hog mode and places it from the beam so it ends
 	// before a border ISR window (or splits it around one), so it
 	// neither shares the bus nor delays the flip.
-	if (_ovscOpen && h >= kSTLayerH - 8 && !_dblBuf) {
+	const bool fullPage = h >= kSTLayerH - 8 && !_dblBuf;
+	if (fullPage && (_ovscOpen || _hwDirty)) {
 		// Beam race: with a border open the display starts
 		// fetching at line 34 instead of 63, so a full-page copy
 		// has to start at the VBL to stay ahead of it - unsynced
@@ -231,7 +232,26 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 		// scene runs late (tried Aug 2026) brought the tearing
 		// straight back. A cutscene's smaller pushes sync through
 		// ST_beamSync instead.
+		//
+		// A new page's colours go in at the same VBL, border or
+		// not. Written after the copy (updateScreen), they reached
+		// the screen up to a frame after the picture: a level's
+		// first room showed in the colours put back from before its
+		// opening cutscene, all or part of one frame depending on
+		// where the copy met the VBL. With a border open STDL holds
+		// the write for the next VBL's blanking, so it is made
+		// before the wait; without one it goes straight to the
+		// registers, so after it, in the blanking before the
+		// picture starts.
+		// Only a page that brings new colours waits without a
+		// border: scene changes, not frames.
+		if (_ovscOpen && _hwDirty) {
+			writeHwPalette();
+		}
 		STDL_WaitVBL();
+		if (_hwDirty) {
+			writeHwPalette();
+		}
 	}
 	if (h >= 32 && groups >= 8 && _srcW == kSTLayerW
 	    && STDL_GetMachineInfo()->has_blitter) {
