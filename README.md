@@ -14,16 +14,15 @@ Using [STDL](https://github.com/neilrackett/atarist-stdl) and the Amiga
 data files, I've ported [REminiscence](https://github.com/cyxx/REminiscence),
 Gregory Montoir's re-implementation of the original game engine, to the Atari ST.
 
-So, just three decades after the original was released... **_Say hello to Flashback for the Atari ST._**
+So, just three decades after the original was released...
+**_Say hello to Flashback for the Atari ST._**
 
 ## Requirements
 
-- Needs an ST with at least 2.5MB RAM (4MB recommended).
+- 4MB RAM recommended (but should work in 2.5MB).
 - 3.5MB of hard disk space.
-- Sound effects: the Amiga's samples on an STE, simpler YM versions on any other ST.
-- Optional music works on any ST, and an STE plays the original Amiga score (see below).
-
-Sorry, 2MB isn't enough: with a hard disk driver loaded, the larger levels run out of memory.
+- Sound effects are original Amiga samples on STE, YM versions on regular ST.
+- Music is original ProTracker MODs on STE, YM versions on regular ST.
 
 ## Installing
 
@@ -93,8 +92,6 @@ To extract them by hand instead, see
 
 ### Music
 
-Music is still experimental and so remains optional.
-
 The score is on the disks, in `music/` — one ProTracker module per
 track. An STE or Mega STE plays the modules as they are, on its DMA
 sound. Every other ST plays YM2149 versions of them, converted
@@ -118,9 +115,8 @@ The modules are not free on an STE: mixing four sampled voices takes
 about a quarter of the machine, so cutscenes slow down with them more
 than with the YM versions.
 
-Without the music files the game plays as it always did: each
-missing track is noted once in `RS.LOG` (with `logging=true`) and the
-scene runs silent.
+Without a `MUSIC` folder the game simply runs silent; with one, a
+missing track is noted once in `RS.LOG` (with `logging=true`).
 
 ## Custom palettes
 
@@ -191,9 +187,8 @@ If you'd like more information about Flashback:
 **This repository is not open source.**
 
 The REminiscence engine is copyright
-[Gregory Montoir](https://github.com/cyxx) with no OSS licence — parts of
-it are a direct translation of the game's disassembly, so none fitted.
-This port exists by his express permission, given to me for this port
+[Gregory Montoir](https://github.com/cyxx) with no OSS licence.
+This port exists thanks to his express permission, given to me for this port
 and not as a licence to you: to reuse the engine, ask him. Core-engine
 changes made here are listed in [CHANGES.txt](CHANGES.txt), as requested.
 

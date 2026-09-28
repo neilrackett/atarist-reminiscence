@@ -1,47 +1,31 @@
-* release 0.5.6-atari.1
+* release 0.5.6-atarist.n
 
-	Atari ST / STE / Mega STE port by Neil Rackett, based on 0.5.6 and
-	made with the permission of Gregory Montoir. The Atari-specific
-	code is not listed here; these are the changes to the core engine,
-	all of which are portable and leave output identical.
+	Atari ST / STE / Mega STE port by Neil Rackett, based on 0.5.6
+	with Gregory Montoir's permission. Atari-only code is not	listed;
+	these are the core-engine changes every build gets.
 
-	- AMIGA_planar_mask addressed the four bitplanes as mask[j * size]
-	  inside the per-pixel loop. size is a runtime value, so each is a
-	  32-bit multiply - four per pixel, and a library call on 68000.
-	  The plane bytes are now read once per source byte, the colour is
-	  built only for pixels actually drawn, and fully transparent
-	  bytes and off-screen rows are skipped. Worth 5.5s -> 1.7s per
-	  room on an 8MHz-class machine; a smaller win anywhere the
-	  compiler cannot strength-reduce that multiply.
-	- the piege opcodes divided pos_y by 72 or 36 in seven places to
-	  find an entity's grid band, on paths walked for every entity
-	  every frame. A room is 224 rows tall, so the quotient only picks
-	  one of a handful of bands; compare chains replace the divides,
-	  which remain as an out-of-range fallback.
-	- col_getGridPos divided by 72 per collision cell per entity per
-	  frame; same treatment.
-	- pge_collideTestByNumber returned a pointer difference, which
-	  divides the byte distance by sizeof(LivePGE) - not a power of
-	  two, so a __divsi3 call for every collision pair tested. Its one
-	  caller only tests the result against zero, so it now compares
-	  the pointers directly and keeps the sign.
-	- pge_op_isInRandomRange took a modulo of two 16-bit values, which
-	  C promotes to a 32-bit divide and the compiler turns into a
-	  __modsi3 call; a 68000 has divu.w for exactly that. Narrowing
-	  the operands is the same arithmetic, so the random sequence is
-	  unchanged.
-	- markBlockAsDirty made five 32-bit multiplies per call, one of
-	  them inside the per-block loop, and re-derived the column count
-	  per block. 16-bit operands, a hoisted column count, and a memset
-	  per run instead of a store per block.
-	- drawIcon ran AMIGA_decodeIcn every frame for the inventory item
-	  on display - walking the icon list, then unpacking four
-	  bitplanes. Decoded icons are now cached (16 entries, flushed
-	  when level data reloads).
-	- decoded sprite frames are cached (64 entries, grow-only slabs)
-	  rather than re-decoded per draw.
-	- SDL: RS_DUMP=<relative dir> writes every 25th frame as a BMP,
-	  for cross-checking a port's renderer against this one.
+	- Amiga title screen: Start / Options / Quit, with the levels under
+	  Start and Skill under Options (Expert was unreachable). Lines
+	  redraw only when they change, with a one-pixel drop shadow.
+	- menus ignore the key that reached them: Return skipping the
+	  intro no longer started a game, nor did skipping a death scene
+	  answer the continue prompt.
+	- cutscenes ignore keys pressed while loading or in their first
+	  second, and start with a black palette buffer rather than the
+	  previous scene's colours.
+	- the previous level's .SPC data is freed instead of leaked.
+	- builds without zlib (plain save files) or an Ogg decoder.
+	- SDL: RS_DUMP=<dir> saves every 25th frame as a BMP.
+
+	Speed only, output identical:
+	- Bytekiller reads bits through a reverse table, not a call per bit.
+	- AMIGA_planar_mask reads each plane byte once instead of a multiply
+	  per plane per pixel: 5.5s -> 1.7s a room at 8MHz.
+	- divides and 32-bit multiplies out of the per-frame paths: piege
+	  and collision grid bands, pge_collideTestByNumber,
+	  pge_op_isInRandomRange and markBlockAsDirty.
+	- READ_BE/LE helpers always inlined; hot resource reads skip the
+	  function pointer, and findBankData remembers its last hit.
 
 * release 0.5.6
 	- added fluidsynth output for DOS .prf music
