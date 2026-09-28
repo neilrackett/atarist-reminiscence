@@ -127,7 +127,11 @@ static void initOptions() {
 	g_options.music_volume = 50;
 	g_options.refresh_rate = 0;       // the rate the machine booted at
 	g_options.music_mod = true;       // music=true: the modules where they can play
-	g_options.sfx_audition = false;
+	// Hidden, both of them, until they have earned a line in RS.CFG:
+	// sound_quality=normal|high, and experimental=true to show work in
+	// progress - for now the Options menu's Sound Quality line.
+	g_options.sound_quality = kSoundNormal;
+	g_options.experimental = false;
 	g_options.cheats = 0;
 	g_options.log_fps = false;
 	g_options.bench = false;
@@ -186,7 +190,7 @@ static void initOptions() {
 		{ "music", &g_options.music },
 		{ "log_fps", &g_options.log_fps },
 		{ "bench", &g_options.bench },
-		{ "sfx_audition", &g_options.sfx_audition },
+		{ "experimental", &g_options.experimental },
 		{ "logging", &g_options.logging },
 		{ "frame_skip", &g_options.frame_skip },
 		{ "blitter", &g_options.blitter },
@@ -257,6 +261,16 @@ static void initOptions() {
 							if (cfgWord(p, words[i])) {
 								g_options.screen = i;
 								screenSet = true;
+							}
+						}
+						found = true;
+					}
+					// sound_quality=normal|high
+					if (nameLen == 13 && strncmp(name, "sound_quality", 13) == 0) {
+						static const char *const words[2] = { "normal", "high" };
+						for (int i = 0; i < 2; ++i) {
+							if (cfgWord(p, words[i])) {
+								g_options.sound_quality = i;
 							}
 						}
 						found = true;

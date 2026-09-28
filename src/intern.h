@@ -174,7 +174,8 @@ struct Options {
 	bool ste_sound;        // ST port: open the STE sample device at all
 	int refresh_rate;      // ST port: 50 or 60Hz; the machine's own if neither
 	bool music_mod;        // ST port: with music on, the .mod tracks where the STE can play them
-	bool sfx_audition;     // ST port, hidden: each effect, sample then YM, at a level's start
+	int sound_quality;     // ST port, hidden: the STE voice device's rate, a SoundQuality
+	bool experimental;     // ST port, hidden: show work in progress (Options' Sound Quality)
 };
 
 // ST port: the four screen modes, in the order the menu cycles them
@@ -187,6 +188,16 @@ enum ScreenMode {
 	kScreenTop = 2,
 	kScreenFull = 3,
 	kScreenModes = 4
+};
+
+// ST port: the rate the STE's voice device mixes the modules and the
+// sampled effects at. Twice the rate is twice the treble and twice the
+// mixing time: with the modules playing, the intro's longest scene
+// took 43% longer to draw on an 8MHz STE, and a Mega STE at 16MHz
+// showed 267 of its 370 frames instead of 326 (Hatari, cycle-exact).
+enum SoundQuality {
+	kSoundNormal = 0,     // 6258Hz
+	kSoundHigh = 1        // 12517Hz
 };
 
 // ST port: fixed-row text is placed on a row it survives Fit on

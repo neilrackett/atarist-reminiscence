@@ -94,6 +94,8 @@ static const uint8_t *ATARIST_volumeTable(uint8_t volume) {
 enum { kVoiceIdlePauseMs = 2000 };
 
 static volatile bool _stVoiceSeq;    // a sequencer is on the voice tick
+static uint32_t _stIdleSince;        // when the voices went quiet; 0 = not idle
+static bool _stIdleAsked;            // a pause has been asked for since
 static void (*_stTickFn)(void *);
 static void *_stTickUd;
 
@@ -127,26 +129,24 @@ void ATARIST_mixerTick() {
 	if (!STDL_VoicesOpen()) {
 		return;
 	}
-	static uint32_t idleSince;
-	static bool asked;
 	if (_stVoiceSeq) {
-		idleSince = 0;
-		asked = false;
+		_stIdleSince = 0;
+		_stIdleAsked = false;
 		return;
 	}
 	for (int v = 0; v < 4; ++v) {
 		if (STDL_VoiceActive(v)) {
-			idleSince = 0;
-			asked = false;
+			_stIdleSince = 0;
+			_stIdleAsked = false;
 			return;
 		}
 	}
 	const uint32_t now = STDL_GetTicks();
-	if (idleSince == 0) {
-		idleSince = now ? now : 1;   // 0 is the "not idle" marker
-	} else if (!asked && now - idleSince >= kVoiceIdlePauseMs) {
+	if (_stIdleSince == 0) {
+		_stIdleSince = now ? now : 1;   // 0 is the "not idle" marker
+	} else if (!_stIdleAsked && now - _stIdleSince >= kVoiceIdlePauseMs) {
 		STDL_PauseVoices();
-		asked = true;
+		_stIdleAsked = true;
 	}
 }
 
@@ -379,6 +379,39 @@ static void ATARIST_stopMusic() {
 
 #endif
 
+#ifdef ATARIST
+// The rate the voice device mixes at (see SoundQuality).
+int Mixer::ST_soundRate() {
+	return (g_options.sound_quality == kSoundHigh) ? 12517 : 6258;
+}
+
+// Fails cleanly on a plain ST, which then has the one-shot fallback
+// or the YM. Said in RS.LOG, as the rate is the first thing a report
+// of crackling music needs.
+static void ATARIST_openVoices() {
+	const int rate = Mixer::ST_soundRate();
+	if (STDL_OpenVoices(rate) == 0) {
+		info("Sound: STE voices at %dHz", rate);
+	}
+}
+
+// Options' Sound Quality line: the device closes and opens again at
+// the new rate. Closing takes every voice and the sequencer's tick
+// with it, so the caller stops the music first and starts it again
+// after; the idle pause starts afresh on the new device.
+void Mixer::ST_setSoundQuality(int quality) {
+	g_options.sound_quality = quality;
+	if (!STDL_VoicesOpen()) {
+		return;
+	}
+	STDL_CloseVoices();
+	g_stSfxVoice3 = 0;
+	_stIdleSince = 0;
+	_stIdleAsked = false;
+	ATARIST_openVoices();
+}
+#endif
+
 Mixer::Mixer(FileSystem *fs, SystemStub *stub, const PrfMidiDriver *midiDriver, const char *midiSoundFont)
 	: _stub(stub), _musicType(MT_NONE), _cpc(this, fs), _mod(this, fs), _ogg(this, fs), _prf(this, fs, midiDriver, midiSoundFont), _sfx(this) {
 	_musicTrack = -1;
@@ -393,7 +426,7 @@ void Mixer::init() {
 	// voices 0-2, a module's on all four - and the effects on 3;
 	// fails cleanly on a plain ST and we fall back to one-shots
 	if (g_options.ste_sound) {
-		STDL_OpenVoices(6258);
+		ATARIST_openVoices();
 	} else {
 		info("STE sample sound disabled (ste_sound=false)");
 	}

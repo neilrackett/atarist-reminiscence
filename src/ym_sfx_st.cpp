@@ -62,7 +62,7 @@ enum {
  * tone period (YM clock / 16 / Hz) the same with t0, t1, toneSteps.
  *
  * The levels are set so each effect is about as loud as its sample
- * on an STE - measured with sfx_audition, which plays the two in turn
+ * on an STE - measured by playing the two in turn at a level's start
  * - keeping the balance an STE has between its effects and YM music.
  * Written first at full scale they came out 8dB over on average, 14
  * for the explosion.
@@ -231,25 +231,6 @@ void ST_playYmSfx(int num, int softVol) {
 	}
 	if (STDL_PlaySfx(&_fx[r][softVol], kVoice) >= 0) {
 		_playingPrio = (uint8_t)prio;
-	}
-}
-
-// sfx_audition=true (a hidden test option): at the level's start, each
-// effect with a recipe in turn - the Amiga sample first where this
-// machine can play it, then the YM version - named in RS.LOG, for
-// comparing the two by ear
-void ST_auditionYmSfx(Resource *res, Mixer *mix, SystemStub *stub) {
-	for (int n = 0; n < kNumRecipes; ++n) {
-		const int num = kRecipes[n].id;
-		const char *name = (num < Resource::NUM_SFXS) ? Resource::_splNames[num] : "saved";
-		info("Audition %d %s", num, name);
-		if (num < res->_numSfx && res->_sfxList[num].data) {
-			const SoundFx *sfx = &res->_sfxList[num];
-			mix->play(sfx->data, sfx->len, sfx->freq, Mixer::MAX_VOLUME);
-			stub->sleep(sfx->len * 1000 / sfx->freq + 400);
-		}
-		ST_playYmSfx(num, 0);
-		stub->sleep(kRecipes[n].steps * kRecipes[n].ms + 700);
 	}
 }
 

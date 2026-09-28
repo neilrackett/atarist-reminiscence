@@ -83,6 +83,10 @@ struct Mixer {
 	// where they are installed
 	enum { kMusicOff, kMusicYm, kMusicMod };
 	static int ST_musicKind();
+	// the voice device's rate for sound_quality, and a change to it
+	// from Options (the caller stops and restarts the music)
+	static int ST_soundRate();
+	static void ST_setSoundQuality(int quality);
 #endif
 
 	static void mixCallback(void *param, int16_t *buf, int len);
@@ -108,7 +112,6 @@ void ST_setVoiceTick(void (*fn)(void *), void *ud);
 enum { ST_YMSFX_SAVED = 0xF0 };      // the save-point jingle
 void ST_prepareYmSfx();              // build them now, at a level's load
 void ST_playYmSfx(int num, int softVol);
-void ST_auditionYmSfx(Resource *res, Mixer *mix, SystemStub *stub);
 #endif
 
 #endif // MIXER_H__

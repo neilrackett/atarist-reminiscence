@@ -519,9 +519,6 @@ void Game::run() {
 			loadLevelData();
 			resetGameState();
 #ifdef ATARIST
-			if (g_options.sfx_audition) {
-				ST_auditionYmSfx(&_res, &_mix, _stub);
-			}
 			if (_stLoadSlot >= 0) {
 				// Load on the title: the saved state in place of the
 				// level's start, and so without its opening cutscene
@@ -650,14 +647,20 @@ void Game::displayTitleScreenAmiga() {
 	const int saveCount = ST_scanSaves(saves, kMaxSaves, &loadSel);
 #endif
 	// the lines left and right change; Load's is on the main page
-	enum { kSkillOpt, kScreenOpt, kMusicOpt, kVolumeOpt, kHzOpt, kBackOpt, kLoadOpt };
-	int optItems[6];
+	enum { kSkillOpt, kScreenOpt, kMusicOpt, kVolumeOpt, kQualityOpt, kHzOpt, kBackOpt, kLoadOpt };
+	int optItems[7];
 	int optCount = 0;
 	optItems[optCount++] = kSkillOpt;
 	optItems[optCount++] = kScreenOpt;
 #ifdef ATARIST
 	optItems[optCount++] = kMusicOpt;
 	optItems[optCount++] = kVolumeOpt;
+	if (g_options.experimental && STDL_VoicesOpen()) {
+		// the rate of the STE's sampled sound; nothing to choose on a
+		// plain ST, or with ste_sound=false. Work in progress, so only
+		// with experimental=true.
+		optItems[optCount++] = kQualityOpt;
+	}
 	optItems[optCount++] = kHzOpt;
 #endif
 	optItems[optCount++] = kBackOpt;
@@ -769,6 +772,9 @@ void Game::displayTitleScreenAmiga() {
 							break;
 						case kVolumeOpt:
 							snprintf(label, sizeof(label), "Music Volume: %d%%", g_options.music_volume);
+							break;
+						case kQualityOpt:
+							str = (g_options.sound_quality == kSoundHigh) ? "Sound Quality: High" : "Sound Quality: Normal";
 							break;
 						case kHzOpt:
 							// the rate asked for: an open border holds the
@@ -897,6 +903,16 @@ void Game::displayTitleScreenAmiga() {
 							q = 10;
 						}
 						_mix.ST_setMusicVolume(q * 10);
+					}
+					break;
+				case kQualityOpt:
+					// Normal and High in turn. The device reopens at the
+					// new rate, which takes the music with it, so the
+					// menu track starts again - at the new rate, heard.
+					_mix.stopMusic();
+					Mixer::ST_setSoundQuality((g_options.sound_quality == kSoundHigh) ? kSoundNormal : kSoundHigh);
+					if (g_options.music) {
+						_mix.playMusic(1);
 					}
 					break;
 				case kHzOpt:
