@@ -265,7 +265,10 @@ bool ST_musicStem(int num, char *out) {
 
 static bool ATARIST_playMusic(int num) {
 	char stem[16];
-	if (!g_options.music || !ST_musicStem(num, stem)) {
+	// Music is on by default, so a copy with no MUSIC\ at all is the
+	// common case, not a mistake: stay quiet without trying each cue's
+	// file or warning about it.
+	if (!g_options.music || !Mixer::ST_musicInstalled(false) || !ST_musicStem(num, stem)) {
 		return false;
 	}
 	if (_ymMusic != 0 && num == _ymTrack && STDL_PlayingMusic()) {

@@ -109,10 +109,10 @@ copies each module into `dist/MUSIC` and converts it there too. Copy
 that `MUSIC\` folder to your ST, next to `FLASHBAK.TOS` and alongside
 `DATA\`.
 
-Then set `music=true` in `RS.CFG`, or turn it on under Options on the
-title menu. An STE plays the modules and any other ST the YM versions;
-on an STE, Options switches between the two, and `music=ym` starts
-with the YM versions.
+Music then plays by default: an STE plays the modules and any other ST
+the YM versions. On an STE, Options on the title menu switches between
+the two; `music=ym` in `RS.CFG` starts with the YM versions, and
+`music=false` turns music off.
 
 The modules are not free on an STE: mixing four sampled voices takes
 about a quarter of the machine, so cutscenes slow down with them more

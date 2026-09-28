@@ -65,14 +65,15 @@
 # --- sound --------------------------------------------------------
 
 # Play music. Needs the tracks in a MUSIC\ folder beside this file -
-# see the README for making them from your own disks. true plays the
-# original Amiga modules (.MOD) on an STE or Mega STE, and the YM
-# chip versions (.STM) on any other ST or where a module is missing;
-# ym plays the YM versions everywhere. Sampled effects need an STE
-# and play regardless of this. Options on the title menu switches
-# between off, YM and the modules for the current run.
-# (default: false)
-#music=true
+# see the README for making them from your own disks; without them the
+# game is simply quiet. true plays the original Amiga modules (.MOD)
+# on an STE or Mega STE, and the YM chip versions (.STM) on any other
+# ST or where a module is missing; ym plays the YM versions
+# everywhere; false turns music off. Sampled effects need an STE and
+# play regardless of this. Options on the title menu switches between
+# off, YM and the modules for the current run.
+# (default: true)
+#music=false
 
 # How loud the music plays, 0-100. The default sits it a little under
 # the sampled effects, which come through the STE mixer well below
@@ -87,7 +88,7 @@
 
 # Turn off the STE's sampled sound entirely - nothing opens the sound
 # DMA at all. The effects then play their simpler YM versions, as on
-# a plain ST, and the modules go too: music=true plays the YM tracks
+# a plain ST, and the modules go too: the music plays the YM tracks
 # instead, since those drive the chip rather than the DMA. For
 # diagnosing sound faults, and for hearing what a plain ST plays.
 # (default: true)

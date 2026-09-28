@@ -111,7 +111,9 @@ static void initOptions() {
 	// ways of fitting 224 lines on the screen
 	g_options.overscan = false;
 	g_options.screen = kScreenFit;
-	g_options.music = false;
+	// on: the tracks come from the player's own disks, and with no
+	// MUSIC\ folder the game is simply quiet
+	g_options.music = true;
 	// 70% puts the chip music level with the sampled effects, which
 	// a tester once called crazy loud against full YM output. The
 	// figure was 60 while the STE voice mixer reserved a quarter of
