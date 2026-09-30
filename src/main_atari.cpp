@@ -127,10 +127,10 @@ static void initOptions() {
 	g_options.music_volume = 50;
 	g_options.refresh_rate = 0;       // the rate the machine booted at
 	g_options.music_mod = true;       // music=true: the modules where they can play
-	// Hidden, both of them, until they have earned a line in RS.CFG:
-	// sound_quality=normal|high, and experimental=true to show work in
-	// progress - for now the Options menu's Sound Quality line.
 	g_options.sound_quality = kSoundNormal;
+	// Hidden, and out of RS.CFG on purpose: experimental=true shows work
+	// in progress, to be tried without it reaching everyone. Nothing is
+	// behind it at the moment.
 	g_options.experimental = false;
 	g_options.cheats = 0;
 	g_options.log_fps = false;

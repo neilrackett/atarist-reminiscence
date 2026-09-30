@@ -174,8 +174,8 @@ struct Options {
 	bool ste_sound;        // ST port: open the STE sample device at all
 	int refresh_rate;      // ST port: 50 or 60Hz; the machine's own if neither
 	bool music_mod;        // ST port: with music on, the .mod tracks where the STE can play them
-	int sound_quality;     // ST port, hidden: the STE voice device's rate, a SoundQuality
-	bool experimental;     // ST port, hidden: show work in progress (Options' Sound Quality)
+	int sound_quality;     // ST port: the STE voice device's rate, a SoundQuality
+	bool experimental;     // ST port, hidden: show work in progress
 };
 
 // ST port: the four screen modes, in the order the menu cycles them

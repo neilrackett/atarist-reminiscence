@@ -655,10 +655,9 @@ void Game::displayTitleScreenAmiga() {
 #ifdef ATARIST
 	optItems[optCount++] = kMusicOpt;
 	optItems[optCount++] = kVolumeOpt;
-	if (g_options.experimental && STDL_VoicesOpen()) {
+	if (STDL_VoicesOpen()) {
 		// the rate of the STE's sampled sound; nothing to choose on a
-		// plain ST, or with ste_sound=false. Work in progress, so only
-		// with experimental=true.
+		// plain ST, or with ste_sound=false
 		optItems[optCount++] = kQualityOpt;
 	}
 	optItems[optCount++] = kHzOpt;

@@ -71,10 +71,11 @@ through the ones on disk, starting with the most recent, and fire loads it.
 A level's save point is listed along with the slots saved with Ctrl+S or
 from the in-game menu.
 
-**Options** holds the skill level, the screen mode, the
-refresh rate, the music and its volume: left, right or fire changes a
-setting, and Back (or Escape) returns to the menu. Changes last for the
-current run; `RS.CFG` sets where they start (see [Configuration](docs/configuration.md)).
+**Options** holds the skill level, the screen mode, the refresh rate,
+the music and its volume, and on an STE the sound quality: left, right
+or fire changes a setting, and Back (or Escape) returns to the menu.
+Changes last for the current run; `RS.CFG` sets where they start (see
+[Configuration](docs/configuration.md)).
 
 At 60Hz most monitors draw the picture taller, so Fit comes close to the
 height the overscan modes give. The overscan modes themselves always run at
@@ -115,6 +116,11 @@ the two; `music=ym` in `RS.CFG` starts with the YM versions, and
 The modules are not free on an STE: mixing four sampled voices takes
 about a quarter of the machine, so cutscenes slow down with them more
 than with the YM versions.
+
+Sound Quality under Options (`sound_quality=high` in `RS.CFG`) mixes
+the modules and effects at twice the rate, 12.5kHz rather than 6.3kHz.
+It sounds clearer, but cutscenes on an STE take about 40% longer, and a
+Mega STE drops more of their frames, so Normal is the default.
 
 Without a `MUSIC` folder the game simply runs silent; with one, a
 missing track is noted once in `RS.LOG` (with `logging=true`).

@@ -83,6 +83,14 @@
 # title menu sets it in tens for the current run. (default: 50)
 #music_volume=100
 
+# The rate an STE or Mega STE mixes its sampled sound at, the modules
+# and the effects alike: normal (6258Hz) or high (12517Hz). High is
+# clearer, but costs more of the machine: with the modules playing,
+# cutscenes on an STE take about 40% longer, and a Mega STE drops more
+# of their frames. Options on the title menu switches it for the
+# current run. (default: normal)
+#sound_quality=high
+
 # Use the .PRF music files rather than the .STM ones. (default: false)
 #use_prf_music=true
 
