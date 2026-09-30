@@ -13,6 +13,8 @@
 	- cutscenes ignore keys pressed while loading or in their first
 	  second, and start with a black palette buffer rather than the
 	  previous scene's colours.
+	- a SystemStub::rumble() hook, called when Conrad takes a hit
+	  (does nothing unless a platform implements it).
 	- the previous level's .SPC data is freed instead of leaked.
 	- builds without zlib (plain save files) or an Ogg decoder.
 	- SDL: RS_DUMP=<dir> saves every 25th frame as a BMP.

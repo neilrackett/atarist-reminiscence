@@ -120,6 +120,9 @@ struct SystemStub {
 	// ST port: Fill has one window for play and another, centred, for
 	// the menu and cutscenes. The caller repaints after a change.
 	virtual void useFillWindow(bool game) {}
+	// ST port: pulse the gamepad's heavy (low) and light (high) motors,
+	// 0-255 each, for ms milliseconds; nothing without a pad that has them.
+	virtual void rumble(int low, int high, int ms) {}
 	virtual void setPalette(const uint8_t *pal, int n) = 0;
 	virtual void getPalette(uint8_t *pal, int n) = 0;
 	virtual void setPaletteEntry(int i, const Color *c) = 0;

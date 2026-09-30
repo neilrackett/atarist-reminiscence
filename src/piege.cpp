@@ -357,6 +357,8 @@ int Game::pge_execute(LivePGE *live_pge, const InitPGE *init_pge, const Object *
 		--live_pge->life;
 		if (init_pge->object_type == kObjectTypeConrad) {
 			_pge_deathAck = true;
+			// ST port: a short thump on a gamepad when Conrad is hit
+			_stub->rumble(200, 100, 200);
 			if (_cheats & kCheatLifeCounter) {
 				++live_pge->life;
 			}

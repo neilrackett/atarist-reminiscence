@@ -110,6 +110,7 @@ struct SystemStub_STDL : SystemStub {
 	virtual int setScreenMode(int mode);
 	virtual int panScreen(int delta);
 	virtual void useFillWindow(bool game);
+	virtual void rumble(int low, int high, int ms) { STDL_PadRumble(low, high, ms); }
 	void buildFillTable();
 	void applyFillTop(int top);
 	int _mode;                 // the ScreenMode in effect

@@ -56,6 +56,7 @@ You can control Conrad with the keyboard, a joystick in port 1, or a gamepad:
 
 Gamepads are supported via [Xpad](https://downloads.neilrackett.com/atarist-xpad)
 providers, including [MD/Sidepad](https://downloads.neilrackett.com/md-sidepad).
+A pad with rumble motors gives a short thump whenever Conrad takes a hit.
 
 Save, load, quit and the state-slot keys stay on the keyboard: they are
 Ctrl combinations, and a pad button emulates a single key.
