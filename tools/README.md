@@ -83,6 +83,34 @@ Note the CAPS structs are `#pragma pack(1)` — the converter's local
 declarations mirror that (without it the library silently returns
 empty tracks).
 
+## make-unpacked.py
+
+```
+tools/make-unpacked.py                      # dist/DATA -> dist/UNPACKED
+tools/make-unpacked.py DATA_DIR [OUT_DIR]   # OUT_DIR defaults to UNPACKED beside DATA_DIR
+```
+
+Writes **`dist/UNPACKED/`**: the packed files in `DATA`, unpacked
+ahead of time. The game reads a file from there in place of unpacking
+it, which on an 8MHz ST was most of the wait for a cutscene, the title
+or a level, and falls back to `DATA` for anything missing.
+
+Only what is unpacked as something loads: cutscenes (`.CMP`), the
+title picture (`PRESENT.CMP`), sprites (`.SPM`), level graphics
+(`.SGD`), objects (`.OBC`) and collision data (`.CT`). Room data
+(`.LEV`) and sprite banks (`.MBK`) stay packed: the game keeps those
+whole in memory, which a 2.5MB machine cannot spare unpacked. Each file
+keeps its `DATA` name and holds `RXU1`, a BE32 stream count, a BE32
+size per stream, then the streams - two for a cutscene (polygons, then
+commands), one for everything else. `Resource::ST_openUnpacked` checks
+that the sizes add up before trusting a file.
+
+RExtract writes the same folder. The decoder here is a transcription
+of `src/unpack.cpp`'s C version, and its output was checked byte for
+byte against that decoder and against RExtract's on the real disks.
+A file that will not unpack is reported and left out, so the game
+unpacks that one itself. No dependencies beyond Python 3.
+
 ## make-music.sh
 
 The Amiga score is sampled music the ST cannot play: there is no DMA

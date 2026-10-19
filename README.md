@@ -28,7 +28,7 @@ So, just three decades after the original was released...
 
 1. Copy `FLASHBAK.TOS` (and optionally `RS.CFG`) to your ST's hard disk.
 2. Extract the data files from your Amiga installation disks using the [RExtract online tool](https://labs.neilrackett.com/web-rextract/).
-3. Copy the `DATA` and `MUSIC` folders into the same folder as `FLASHBAK.TOS`.
+3. Copy the `DATA`, `MUSIC` and `UNPACKED` folders into the same folder as `FLASHBAK.TOS`.
 4. Run `FLASHBAK.TOS`.
 
 If you would prefer to extract the data manually, see
@@ -91,6 +91,20 @@ in the correct format is to use the [RExtract online tool](https://labs.neilrack
 
 To extract them by hand instead, see
 [Extracting the files manually](docs/extracting-files.md).
+
+### Faster loading
+
+Most of the Amiga data is packed, and on an 8MHz ST unpacking it is
+most of the wait for a cutscene, the title or a level. RExtract also
+writes an `UNPACKED` folder: the same files with the unpacking already
+done, which the game reads instead of unpacking `DATA` itself. On a
+plain ST it takes the start of level 1 from 3.7 seconds to 1.5, and
+the wait before the intro from 3.5 to 2.3.
+
+It is optional: without it, or for anything missing from it, the game
+unpacks `DATA` as before. By hand, `tools/make-unpacked.py` makes it
+from a `DATA` folder (see [tools/README.md](tools/README.md)). Copy it
+next to `FLASHBAK.TOS`, alongside `DATA\`.
 
 ### Music
 

@@ -12,6 +12,9 @@
 #include "unpack.h"
 #include "video_st.h"
 #include "util.h"
+#ifdef ATARIST
+#include <mint/osbind.h>
+#endif
 
 static const bool kCalculateAudioPeak = false;
 
@@ -391,6 +394,19 @@ void Resource::load_PAL_menu(const char *fileName, uint8_t *dstPtr) {
 
 void Resource::load_CMP_menu(const char *fileName) {
 	File f;
+#ifdef ATARIST
+	uint32_t unpacked;
+	if (_type == kResourceTypeAmiga && ST_openUnpacked(&f, fileName, &unpacked, 1)) {
+		if (unpacked <= (uint32_t)kScratchBufferSize) {
+			f.read(_scratchBuffer, unpacked);
+			if (f.ioErr()) {
+				error("I/O error when reading 'UNPACKED\\%s'", fileName);
+			}
+			return;
+		}
+		f.close();
+	}
+#endif
 	if (f.open(fileName, "rb", _fs)) {
 		const uint32_t size = f.readUint32BE();
 		uint8_t *tmp = (uint8_t *)malloc(size);
@@ -794,6 +810,11 @@ void Resource::load(const char *objName, int objType, const char *ext) {
 	if (ext) {
 		snprintf(_entryName, sizeof(_entryName), "%s.%s", objName, ext);
 	}
+#ifdef ATARIST
+	if (ST_loadUnpacked(objType)) {
+		return;
+	}
+#endif
 	File f;
 	if (f.open(_entryName, "rb", _fs)) {
 		assert(loadProc);
@@ -1384,8 +1405,22 @@ void Resource::load_BNQ(File *f) {
 	}
 }
 
+static const uint32_t kPersoDatSize = 178647;
+
+// The sprite table: Conrad's from PERSO's own buffer, the monsters'
+// from the shared one
+void Resource::setSprData() {
+	for (int i = 0; i < NUM_SPRITES; ++i) {
+		const uint32_t offset = _spmOffsetsTable[i];
+		if (offset >= kPersoDatSize) {
+			_sprData[i] = _sprm + offset - kPersoDatSize;
+		} else {
+			_sprData[i] = _spr1 + offset;
+		}
+	}
+}
+
 void Resource::load_SPM(File *f) {
-	static const int kPersoDatSize = 178647;
 	const int len = f->size();
 	f->seek(len - 4);
 	const uint32_t size = f->readUint32BE();
@@ -1415,16 +1450,126 @@ void Resource::load_SPM(File *f) {
 			error("Bad CRC for SPM data");
 		}
 	}
-	for (int i = 0; i < NUM_SPRITES; ++i) {
-		const uint32_t offset = _spmOffsetsTable[i];
-		if (offset >= kPersoDatSize) {
-			_sprData[i] = _sprm + offset - kPersoDatSize;
-		} else {
-			_sprData[i] = _spr1 + offset;
-		}
-	}
+	setSprData();
 	free(tmp);
 }
+
+#ifdef ATARIST
+/*
+ * UNPACKED\, beside DATA\: the data's bytekiller streams already
+ * unpacked, as RExtract and tools/make-unpacked.py write them. They are
+ * read straight into place - no unpacking, which cost an 8MHz ST 3.6s
+ * for Conrad's sprites, 1.2s for the intro and 2.3s for level 1, and
+ * no packed copy held beside the result. Optional and derived, so
+ * kept out of DATA\ like MUSIC\; anything missing or odd here falls
+ * back to DATA\ as before.
+ *
+ * A file keeps its DATA\ name and holds "RXU1", a BE32 stream count,
+ * a BE32 size per stream, then the streams as the unpacker would
+ * write them: two for a cutscene (polygons, then commands), one for
+ * everything else.
+ */
+static int g_stUnpacked = -1;        // the folder is there: -1 not looked yet
+
+bool Resource::ST_openUnpacked(File *f, const char *name, uint32_t *sizes, int count) {
+	if (g_stUnpacked < 0) {
+		_DTA dta;
+		_DTA *saved = Fgetdta();
+		Fsetdta(&dta);
+		g_stUnpacked = (Fsfirst("UNPACKED\\*.*", 0) == 0) ? 1 : 0;
+		Fsetdta(saved);
+		if (g_stUnpacked) {
+			info("Unpacked data in UNPACKED\\");
+		}
+	}
+	if (!g_stUnpacked || !f->open(name, "rb", "UNPACKED")) {
+		return false;
+	}
+	const uint32_t len = f->size();
+	uint32_t total = 8 + 4 * count;
+	if (len >= total && f->readUint32BE() == 0x52585531 && f->readUint32BE() == (uint32_t)count) {
+		for (int i = 0; i < count; ++i) {
+			sizes[i] = f->readUint32BE();
+			total += sizes[i];
+		}
+		if (total == len && !f->ioErr()) {
+			return true;
+		}
+	}
+	warning("UNPACKED\\%s is not what it should be, so DATA\\%s is unpacked instead", name, name);
+	f->close();
+	return false;
+}
+
+// The types that have a copy in UNPACKED\, loaded from it as their
+// load_* functions would leave them; false to load DATA\ instead
+bool Resource::ST_loadUnpacked(int objType) {
+	if (_type != kResourceTypeAmiga
+	    || (objType != OT_SPM && objType != OT_SGD && objType != OT_OBC && objType != OT_CT && objType != OT_CMP)) {
+		return false;
+	}
+	File f;
+	uint32_t sizes[2];
+	if (!ST_openUnpacked(&f, _entryName, sizes, (objType == OT_CMP) ? 2 : 1)) {
+		return false;
+	}
+	switch (objType) {
+	case OT_SPM:
+		if (sizes[0] == kPersoDatSize) {
+			_spr1 = (uint8_t *)malloc(sizes[0]);
+			if (!_spr1) {
+				error("Unable to allocate SPR1 buffer");
+			}
+			f.read(_spr1, sizes[0]);
+		} else {
+			if (sizes[0] > sizeof(_sprm)) {
+				return false;
+			}
+			f.read(_sprm, sizes[0]);
+		}
+		setSprData();
+		break;
+	case OT_SGD:
+		_sgd = (uint8_t *)malloc(sizes[0]);
+		if (!_sgd) {
+			error("Unable to allocate SGD buffer");
+		}
+		f.read(_sgd, sizes[0]);
+		break;
+	case OT_OBC: {
+			uint8_t *tmp = (uint8_t *)malloc(sizes[0]);
+			if (!tmp) {
+				error("Unable to allocate OBC temporary buffer 2");
+			}
+			f.read(tmp, sizes[0]);
+			decodeOBJ(tmp, sizes[0]);
+			free(tmp);
+		}
+		break;
+	case OT_CT:
+		if (sizes[0] > sizeof(_ctData)) {
+			return false;
+		}
+		f.read(_ctData, sizes[0]);
+		break;
+	case OT_CMP:
+		free(_pol);
+		free(_cmd);
+		_pol = (uint8_t *)malloc(sizes[0]);
+		_cmd = (uint8_t *)malloc(sizes[1]);
+		if (!_pol || !_cmd) {
+			error("Unable to allocate cutscene buffers");
+		}
+		f.read(_pol, sizes[0]);
+		f.read(_cmd, sizes[1]);
+		break;
+	}
+	if (f.ioErr()) {
+		error("I/O error when reading 'UNPACKED\\%s'", _entryName);
+	}
+	return true;
+}
+#endif
 
 void Resource::clearBankData() {
 #ifdef ATARIST

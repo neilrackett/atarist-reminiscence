@@ -24,6 +24,10 @@ The extracted files all go into a `DATA\` folder next to `FLASHBAK.TOS`,
 and must be renamed to have uppercase 8.3 ST-friendly names, e.g. `replicant.spm`
 becomes `REPLICAN.SPM`.
 
+For faster loading, `tools/make-unpacked.py` then writes the
+`UNPACKED\` folder that goes beside `DATA\` (see
+[Faster loading](../README.md#faster-loading)).
+
 You can run `tools/check-names.sh` after extracting the files and it will tell
 you about any name too long, not uppercase, or quietly colliding with another.
 Add `--fix` and it renames the ones it can do safely, listing anything that

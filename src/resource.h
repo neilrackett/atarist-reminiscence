@@ -254,6 +254,11 @@ struct Resource {
 	void load_SGD(File *pf);
 	void load_BNQ(File *pf);
 	void load_SPM(File *f);
+	void setSprData();
+#ifdef ATARIST
+	bool ST_openUnpacked(File *f, const char *name, uint32_t *sizes, int count);
+	bool ST_loadUnpacked(int objType);
+#endif
 	const uint8_t *getAniData(int num) const {
 		if (_type == kResourceTypeMac) {
 			const int count = READ_BE_UINT16(_ani);
