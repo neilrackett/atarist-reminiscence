@@ -373,6 +373,8 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 	}
 }
 
+static int ST_ramK();
+
 void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int widescreenMode, bool maximized, const ScalerParameters *scalerParameters, int outputRate) {
 	memset(&_pi, 0, sizeof(_pi));
 	_palLocked = false;
@@ -445,7 +447,11 @@ void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int
 	} else {
 		g_options.refresh_rate = STDL_SetRefresh(-1);
 	}
-	setScreenMode(g_options.screen);
+	// what the screen IS, which is what Options shows: overscan can be
+	// out of reach (kOverscanMinK, a 60Hz display) whatever RS.CFG
+	// asked for. The RAM goes in the log either way, for bug reports.
+	ST_ramK();
+	g_options.screen = setScreenMode(g_options.screen);
 	setScreenSize(w, h);
 	// black screen until the first frame arrives
 	clearScreen();
@@ -547,11 +553,56 @@ int ST_textRow(int y) {
 	return best;
 }
 
+// The least RAM, in K, on which the overscan modes are offered (0: on
+// any machine). Overscan needs a screen page of its own, 44K of ST RAM,
+// where Fit and Fill draw on the screen TOS already has. That page is
+// what failed level 5 on a 2MB STE with music ("Unable to allocate SPM
+// temporary buffer" in Overscan Full, 136K free in Fit). 2MB is below
+// what the game supports, so the limit sits at 2.5MB and only gives an
+// unsupported machine a better chance - on 2.5MB level 5 still has
+// 463K free in Overscan Full. Raise it (4096 was the first thought) if
+// optimising ever leaves a supported machine short; a real machine has
+// about 70K less than the emulator, for its hard disk driver. Alt-RAM
+// counts: the game's own allocations go there when a machine has some.
+// Deliberately not in the docs or RS.CFG.template.
+static const int kOverscanMinK = 2560;
+
+static int g_ramK = -1;           // ST RAM and alt-RAM, in K, once looked at
+
+static int ST_ramK() {
+	if (g_ramK < 0) {
+		const uint32_t st = *(volatile uint32_t *)0x42EUL;             // phystop
+		uint32_t alt = 0;
+		if (*(volatile uint32_t *)0x5A8UL == 0x1357BD13UL              // ramvalid
+		    && *(volatile uint32_t *)0x5A4UL > 0x01000000UL) {         // ramtop
+			alt = *(volatile uint32_t *)0x5A4UL - 0x01000000UL;
+		} else {
+			// the largest free block, where TOS keeps no record; -32
+			// from a GEMDOS without Mxalloc, which has none to give
+			const long free = Mxalloc(-1L, 1);
+			if (free > 0) {
+				alt = (uint32_t)free;
+			}
+		}
+		g_ramK = (int)((st + alt) >> 10);
+		info("Memory: %dK ST RAM, %dK alt-RAM", (int)(st >> 10), (int)(alt >> 10));
+	}
+	return g_ramK;
+}
+
+bool ST_screenModeAvailable(int mode) {
+	return (mode != kScreenTop && mode != kScreenFull) || ST_ramK() >= kOverscanMinK;
+}
+
 int SystemStub_STDL::setScreenMode(int mode) {
 	if (_ovscOpen) {
 		_ovscOpen = false;
 		STDL_CloseBottomBorder();
 		STDL_CloseTopBorder();
+	}
+	if (!ST_screenModeAvailable(mode)) {
+		warning("Overscan needs %dK of RAM and this machine has %dK, so the screen is fit", kOverscanMinK, ST_ramK());
+		mode = kScreenFit;
 	}
 	int ovscY = 0;   // screen row the first source line goes to
 	if (mode == kScreenTop || mode == kScreenFull) {

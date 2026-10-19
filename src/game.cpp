@@ -885,7 +885,14 @@ void Game::displayTitleScreenAmiga() {
 				case kScreenOpt: {
 						// Each border transition reshapes the surface, so the
 						// whole picture goes back up, not just the line.
-						const int want = (g_options.screen + kScreenModes + step) % kScreenModes;
+						int want = (g_options.screen + kScreenModes + step) % kScreenModes;
+#ifdef ATARIST
+						// skipping modes this machine lacks the RAM for
+						// (kOverscanMinK)
+						while (!ST_screenModeAvailable(want)) {
+							want = (want + kScreenModes + step) % kScreenModes;
+						}
+#endif
 						g_options.screen = _stub->setScreenMode(want);
 						shown = -1;
 						_stub->copyRect(0, 0, kW, kH, buf, kW);

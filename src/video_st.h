@@ -315,6 +315,7 @@ void ST_releaseSpriteCache();
 
 // with logging on, the largest block malloc can still hand out
 void ST_logFreeMemory(const char *where);
+bool ST_screenModeAvailable(int mode);   // see kOverscanMinK
 
 // 8x8 glyph from a 16-byte-stride chunky source (AMIGA_decodeIcn
 // output): nonzero source pixels painted in colour8
