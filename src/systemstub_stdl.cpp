@@ -71,6 +71,7 @@ struct SystemStub_STDL : SystemStub {
 	// (for the shadow-effect hw->hw lookup)
 	uint8_t _cutsceneRep[16];
 	bool _palLocked;        // fixed cutscene mapping, see video_st.h
+	bool _cutPending;       // a new mapping's first page is still to go up
 	void quantiseClusters(uint16_t *col, uint16_t *cnt, int n, uint8_t *alias, uint8_t *slotOf, bool perceptual);
 	bool _hwDirty;          // hardware registers need reprogramming
 	int _fade;              // 256 = full brightness (uniform scale)
@@ -196,6 +197,41 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 	if (_palDirty) {
 		buildRemap();
 	}
+	if (_cutPending && !_dblBuf) {
+		// A cutscene's cut: a new part's first page, under a new
+		// mapping and new colours, onto a screen still showing the
+		// last part. The two cannot change at the same instant -
+		// the copy takes longer than the blanking, and on an STE
+		// playing a module the VBL's mixing leaves the beam 30-45
+		// lines into the picture before any copy can start - so
+		// whichever goes first, a frame showed one picture in the
+		// other's colours (the intro's corridor in brown, its
+		// jungle in red). Black between them instead: the registers
+		// go black, the page goes up, and its colours follow at the
+		// next VBL. One black frame at a cut.
+		_cutPending = false;
+		STDL_Colour black[16];
+		memset(black, 0, sizeof(black));
+		// with a border open STDL holds palette writes for the next
+		// VBL's blanking, so they go in before the wait (as below)
+		if (!_ovscOpen) {
+			STDL_WaitVBL();
+		}
+		STDL_SetColours(_screen, black, 0, 16);
+		if (_ovscOpen) {
+			STDL_WaitVBL();
+		}
+		_hwDirty = false;               // not before the page
+		copyRectPlanar(x, y, w, h, layer);
+		if (!_ovscOpen) {
+			STDL_WaitVBL();
+		}
+		writeHwPalette();
+		if (_ovscOpen) {
+			STDL_WaitVBL();
+		}
+		return;
+	}
 	const int gx0 = x >> 4;
 	int gx1 = (x + w + 15) >> 4;
 	if (gx1 > kSTLayerW / 16) {
@@ -212,7 +248,7 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 	if (_dblBuf) {
 		damageSource(y, h, gx0 + (_xOffset >> 4), gx1 + (_xOffset >> 4));
 	}
-	// Large copies (full refreshes, room loads) go through
+	// Large copies to a hidden page (double buffering) go through
 	// STDL_BlitSurface so a BLiTTER can take the aligned runs (same
 	// 16px phase, unmasked; runs break where the 224->200 squash
 	// drops a line). Small per-frame dirty runs stay on the word
@@ -223,6 +259,15 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 	// every blit in hog mode and places it from the beam so it ends
 	// before a border ISR window (or splits it around one), so it
 	// neither shares the bus nor delays the flip.
+	// Never to the shown screen, though: the BLiTTER moves one plane
+	// per pass, and the beam shows the page between passes - planes
+	// 0-2 new over an old plane 3 are other colours. That put the
+	// Delphine logo up in magenta and green for a frame before its
+	// fade, and flashed patches of the intro red, on every STE and
+	// Mega STE. The CPU puts a group's four planes down together.
+	// Measured in one binary: STE gameplay and cutscenes unchanged,
+	// Mega STE intro work +2.5%, level 1's opening +8%, both still
+	// inside their budgets.
 	const bool fullPage = h >= kSTLayerH - 8 && !_dblBuf;
 	if (fullPage && (_ovscOpen || _hwDirty)) {
 		// Beam race: with a border open the display starts
@@ -254,7 +299,7 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 			writeHwPalette();
 		}
 	}
-	if (h >= 32 && groups >= 8 && _srcW == kSTLayerW
+	if (_dblBuf && h >= 32 && groups >= 8 && _srcW == kSTLayerW
 	    && STDL_GetMachineInfo()->has_blitter) {
 		STDL_Surface *bare = ST_layerSurfaceBare((uint8_t *)layer);
 		if (bare) {
@@ -331,6 +376,7 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int widescreenMode, bool maximized, const ScalerParameters *scalerParameters, int outputRate) {
 	memset(&_pi, 0, sizeof(_pi));
 	_palLocked = false;
+	_cutPending = false;
 	_remapStale = true;
 	_customPal = false;
 	memset(_customMap, 0xFF, sizeof(_customMap));
@@ -1371,12 +1417,14 @@ void ST_cutscenePalLock(int part) {
 	}
 	++g_remapGen;
 	stub->_palLocked = true;
+	stub->_cutPending = true;
 	stub->_remapStale = false;
 	stub->_palDirty = true;
 }
 
 void ST_cutscenePalUnlock() {
 	g_stub->_palLocked = false;
+	g_stub->_cutPending = false;
 	g_stub->_remapStale = true;
 	g_stub->_palDirty = true;
 }
