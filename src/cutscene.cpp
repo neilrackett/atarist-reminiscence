@@ -783,7 +783,6 @@ const void *Cutscene::stBakeShape(uint16_t key, const uint8_t *shapeData, uint16
 	}
 	return e;
 }
-#endif
 
 // Bake queued shapes in the time a frame would otherwise sleep: a
 // machine with time to spare pays for no bake inside a frame, where
@@ -808,6 +807,7 @@ void Cutscene::stIdleBake(int32_t ms) {
 		stBakeShape(key, shapeData + 2, count, verticesOffsetTable, verticesDataTable);
 	}
 }
+#endif
 
 void Cutscene::checkShape(uint16_t shapeOffset) {
 	_isConcavePolygonShape = _res->isMac() && _id == kCineLogos && (shapeOffset & 0x7FF) == 2;
