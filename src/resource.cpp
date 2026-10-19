@@ -280,6 +280,27 @@ static void normalizeSPL(SoundFx *sfx) {
 	static const int kGain = 2;
 
 	sfx->peak = kCalculateAudioPeak ? ABS(sfx->data[0]) : 0;
+#ifdef ATARIST
+	// By table, through locals: written as below, gcc 4.6 reloads the
+	// pointer and the length after every store (a byte store may alias
+	// them) and spent ~115 cycles a sample - 2.1s of an STE's start of
+	// level 1, whose effects are 145K.
+	if (!kCalculateAudioPeak) {
+		static int8_t half[256];
+		static bool halfReady;
+		if (!halfReady) {
+			for (int i = 0; i < 256; ++i) {
+				half[i] = (int8_t)((int8_t)i / kGain);
+			}
+			halfReady = true;
+		}
+		uint8_t *p = sfx->data + 1;
+		for (int n = sfx->len - 1; n > 0; --n, ++p) {
+			*p = (uint8_t)half[*p];
+		}
+		return;
+	}
+#endif
 	for (int i = 1; i < sfx->len; ++i) {
 		const int8_t sample = sfx->data[i];
 		if (kCalculateAudioPeak && ABS(sample) > sfx->peak) {
@@ -1369,16 +1390,22 @@ void Resource::load_SPM(File *f) {
 	f->seek(len - 4);
 	const uint32_t size = f->readUint32BE();
 	f->seek(0);
+	// The sprites before the packed copy, so that freeing the copy
+	// leaves its hole at the top of the heap rather than under the
+	// sprites: loaded behind the Atari's start-up splash, the hole
+	// under them cost the title 40K of its largest free block.
+	if (size == kPersoDatSize) {
+		_spr1 = (uint8_t *)malloc(size);
+		if (!_spr1) {
+			error("Unable to allocate SPR1 buffer");
+		}
+	}
 	uint8_t *tmp = (uint8_t *)malloc(len);
 	if (!tmp) {
 		error("Unable to allocate SPM temporary buffer");
 	}
 	f->read(tmp, len);
 	if (size == kPersoDatSize) {
-		_spr1 = (uint8_t *)malloc(size);
-		if (!_spr1) {
-			error("Unable to allocate SPR1 buffer");
-		}
 		if (!bytekiller_unpack(_spr1, size, tmp, len)) {
 			error("Bad CRC for SPM data");
 		}

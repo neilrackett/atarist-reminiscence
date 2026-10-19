@@ -141,6 +141,8 @@ struct Game {
 	void loadLevelData();
 #ifdef ATARIST
 	void ST_unloadLevel();
+	void ST_loadGlobals();
+	bool _stGlobalsLoaded;
 	bool _stLogMemRoom;
 	char _stPaletteMsg[24];
 	uint8_t _stPaletteMsgCounter;

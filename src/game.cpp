@@ -296,7 +296,16 @@ static void ST_splash(Game *g) {
 	}
 	STDL_SetColours(screen, cols, 0, 16);
 
-	g->_stub->sleep(3000);
+	// The global sprites load behind the splash rather than after the
+	// intro, where they were a black screen before the title: Conrad's
+	// alone take three and a half seconds to unpack on an 8MHz ST. The
+	// splash stays up for at least its three seconds.
+	const uint32_t t0 = g->_stub->getTimeStamp();
+	g->ST_loadGlobals();
+	const int32_t left = 3000 - (int32_t)(g->_stub->getTimeStamp() - t0);
+	if (left > 0) {
+		g->_stub->sleep(left);
+	}
 	memset(g->_vid._frontLayer, 0, g->_vid._layerSize);
 	g->_vid.fullRefresh();
 	g->_vid.updateScreen();
@@ -318,6 +327,7 @@ Game::Game(SystemStub *stub, FileSystem *fs, const char *savePath, int level, Re
 	_rewindLen = 0;
 	_cheats = cheats;
 #ifdef ATARIST
+	_stGlobalsLoaded = false;
 	_stLogMemRoom = false;
 	_stPaletteMsgCounter = 0;
 	_stPaletteReloaded = false;
@@ -396,9 +406,13 @@ void Game::run() {
 	// global resources
 	switch (_res._type) {
 	case kResourceTypeAmiga:
+#ifdef ATARIST
+		ST_loadGlobals();       // done already, behind the splash, unless it had no screen
+#else
 		_res.load("ICONE", Resource::OT_ICN, "SPR");
 		_res.load("ICON", Resource::OT_ICN, "SPR");
 		_res.load("PERSO", Resource::OT_SPM);
+#endif
 		break;
 	case kResourceTypeDOS:
 	case kResourceTypePC98:
@@ -691,10 +705,23 @@ void Game::displayTitleScreenAmiga() {
 	uint16_t changed = 0;     // lines whose text changed
 	bool quitSelected = false;
 	MenuConfirm confirm;
+	uint32_t wipeDue = 0;     // when the wipe's next step is due
 	while (1) {
-		if (h <= kH / 2) {
-			const int y = kH / 2 - h;
-			_stub->copyRect(0, y, kW, h * 2, buf, kW);
+		const bool wipeStep = (h <= kH / 2);
+		if (wipeStep) {
+			if (h == 0) {
+				wipeDue = _stub->getTimeStamp();
+			}
+			// The picture opens from the middle and stays still as it
+			// does, so each step puts up only the two rows it gains at
+			// either end. Copying the whole open band every time put
+			// 28 screens' worth of rows through the ST's conversion,
+			// unchanged ones included, and stretched the wipe from
+			// under two seconds to seven.
+			if (h > 0) {
+				_stub->copyRect(0, kH / 2 - h, kW, 2, buf, kW);
+				_stub->copyRect(0, kH / 2 + h - 2, kW, 2, buf, kW);
+			}
 			_stub->updateScreen(0);
 			h += 2;
 		} else {
@@ -983,7 +1010,18 @@ void Game::displayTitleScreenAmiga() {
 			quitSelected = (selected == kQuitItem);
 			break;
 		}
-		_stub->sleep(30);
+		if (wipeStep) {
+			// the steps 30ms apart whatever one takes to draw: a plain
+			// ST's conversion added a third to the wipe on top of its
+			// sleeps
+			wipeDue += 30;
+			const int32_t left = (int32_t)(wipeDue - _stub->getTimeStamp());
+			if (left > 0) {
+				_stub->sleep(left);
+			}
+		} else {
+			_stub->sleep(30);
+		}
 	}
 	free(bands);
 	if (quitSelected) {
@@ -2658,6 +2696,17 @@ void Game::loadLevelRoom() {
 }
 
 #ifdef ATARIST
+// The Amiga data's global sprites, once: the icons and Conrad
+void Game::ST_loadGlobals() {
+	if (_stGlobalsLoaded) {
+		return;
+	}
+	_stGlobalsLoaded = true;
+	_res.load("ICONE", Resource::OT_ICN, "SPR");
+	_res.load("ICON", Resource::OT_ICN, "SPR");
+	_res.load("PERSO", Resource::OT_SPM);
+}
+
 // Leaving a level for the title: nothing the level loaded is needed
 // until the next one loads it again, and the title needs a 70K block
 // for its picture - which a 2MB machine did not have with level 5 or

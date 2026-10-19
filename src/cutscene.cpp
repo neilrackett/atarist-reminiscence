@@ -996,13 +996,16 @@ void Cutscene::op_setPalette() {
 	copyPalette(p, palNum ^ 1);
 #ifdef ATARIST
 	if (_stPrescan) {
-		Color c32[32];
+		// the colours as AMIGA_convertColor reads them, kept at four
+		// bits a channel
+		uint16_t pal[32];
+		const bool bgr = _res->isSega();
 		const uint8_t *q = _palBuf;
 		for (int i = 0; i < 32; ++i) {
-			const uint16_t colour = READ_BE_UINT16(q); q += 2;
-			c32[i] = Video::AMIGA_convertColor(colour, _res->isSega());
+			const uint16_t c = READ_BE_UINT16(q); q += 2;
+			pal[i] = bgr ? (uint16_t)(((c & 0xF) << 8) | (c & 0xF0) | ((c >> 8) & 0xF)) : (uint16_t)(c & 0xFFF);
 		}
-		ST_cutscenePalCollect(c32, 32);
+		ST_cutscenePalCollect(pal);
 		_paletteNum = num;
 		return;
 	}

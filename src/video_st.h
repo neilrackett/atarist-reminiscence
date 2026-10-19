@@ -134,7 +134,7 @@ bool ST_cutscenePalMode();
 // fades - become writes to the 16 hardware registers.
 void ST_cutscenePalReset();
 void ST_cutscenePalPart(int part);
-void ST_cutscenePalCollect(const Color *entries, int n);
+void ST_cutscenePalCollect(const uint16_t *packed);   // 32 colours, 0x0RGB
 void ST_cutscenePalLock(int part);
 void ST_cutscenePalUnlock();
 

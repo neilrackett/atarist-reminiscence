@@ -639,6 +639,67 @@ void Video::DOS_decodeSpm(const uint8_t *dataPtr, uint8_t *dst) {
 	} while (src < end);
 }
 
+#ifdef ATARIST
+// Planes to chunky four pixels at a time: g_spread[p][n] puts the four
+// bits of nibble n at bit p of four bytes, leftmost pixel in the
+// first, so a plane's share of four pixels is one lookup. Testing a
+// bit at a time cost ~700 cycles a pixel on a 68000 - the title
+// picture took over six seconds to decode on an 8MHz ST.
+static uint32_t g_spread[5][16];
+
+// a long store where the 68000 allows one (big-endian, an even
+// address: the sprite and icon buffers make no promise)
+static inline void storeBE32(uint8_t *p, uint32_t v, bool aligned) {
+#ifdef __m68k__
+	if (aligned) {
+		*(uint32_t *)p = v;
+		return;
+	}
+#endif
+	p[0] = v >> 24; p[1] = v >> 16; p[2] = v >> 8; p[3] = v;
+}
+
+static void AMIGA_planar16(uint8_t *dst, int w, int h, int depth, const uint8_t *src) {
+	if (g_spread[0][15] == 0) {
+		for (int p = 0; p < 5; ++p) {
+			for (int n = 0; n < 16; ++n) {
+				uint32_t v = 0;
+				for (int i = 0; i < 4; ++i) {
+					if (n & (8 >> i)) {
+						v |= 1u << (8 * (3 - i) + p);
+					}
+				}
+				g_spread[p][n] = v;
+			}
+		}
+	}
+	const int pitch = w * 16;
+	const int planarSize = w * 2 * h;
+	const bool aligned = ((uintptr_t)dst & 1) == 0;   // pitch keeps every row the same
+	for (int y = 0; y < h; ++y) {
+		uint8_t *d = dst;
+		for (int x = 0; x < w; ++x) {
+			uint32_t q0 = 0, q1 = 0, q2 = 0, q3 = 0;
+			const uint8_t *s = src;
+			for (int bit = 0; bit < depth; ++bit, s += planarSize) {
+				const uint32_t *t = g_spread[bit];
+				const uint8_t hi = s[0], lo = s[1];
+				q0 |= t[hi >> 4];
+				q1 |= t[hi & 15];
+				q2 |= t[lo >> 4];
+				q3 |= t[lo & 15];
+			}
+			storeBE32(d, q0, aligned);
+			storeBE32(d + 4, q1, aligned);
+			storeBE32(d + 8, q2, aligned);
+			storeBE32(d + 12, q3, aligned);
+			d += 16;
+			src += 2;
+		}
+		dst += pitch;
+	}
+}
+#else
 static void AMIGA_planar16(uint8_t *dst, int w, int h, int depth, const uint8_t *src) {
 	const int pitch = w * 16;
 	const int planarSize = w * 2 * h;
@@ -659,6 +720,7 @@ static void AMIGA_planar16(uint8_t *dst, int w, int h, int depth, const uint8_t 
 		dst += pitch;
 	}
 }
+#endif
 
 static void AMIGA_planar8(uint8_t *dst, int w, int h, const uint8_t *src) {
 	assert((w & 7) == 0);

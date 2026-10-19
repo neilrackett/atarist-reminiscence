@@ -1158,21 +1158,19 @@ void ST_cutscenePalPart(int part) {
 	g_collectPart = (part < kCutParts) ? part : (kCutParts - 1);
 }
 
-void ST_cutscenePalCollect(const Color *entries, int n) {
-	if (n > 32) {
-		n = 32;
-	}
+// |a - b| for nibbles a and b, at a * 16 + b
+static uint8_t g_absd[256];
+
+void ST_cutscenePalCollect(const uint16_t *packed) {
 	const int part = g_collectPart;
-	uint16_t packed[kCutEntries];
-	memset(packed, 0, sizeof(packed));
-	for (int i = 0; i < n; ++i) {
-		packed[i] = pack4(entries[i]);
-	}
 	// Only pairs with an entry that differs from the part's previous
 	// palette can raise a distance; a cutscene palette step usually
-	// touches a few entries (and often none), so this cuts the pair
-	// scan - the bulk of the prescan - to a fraction.
-	bool changed[kCutEntries];
+	// touches a few entries (and often none), so each changed entry is
+	// walked against the rest and nothing else. Scanning all 496 pairs
+	// to find them, and building the table below every time, made
+	// each palette 18ms on an 8MHz ST: three seconds of the intro's
+	// wait before its first frame.
+	uint8_t list[kCutEntries];
 	int nChanged = 0;
 	uint16_t *last = g_partLast[part];
 	if (!g_partUsed[part]) {
@@ -1180,53 +1178,53 @@ void ST_cutscenePalCollect(const Color *entries, int n) {
 		memset(g_partDist[part], 0, sizeof(g_partDist[part]));
 		memset(g_partRep[part], 0, sizeof(g_partRep[part]));
 		for (int i = 0; i < kCutEntries; ++i) {
-			changed[i] = true;
+			list[nChanged++] = (uint8_t)i;
 		}
-		nChanged = kCutEntries;
 	} else {
 		for (int i = 0; i < kCutEntries; ++i) {
-			changed[i] = packed[i] != last[i];
-			nChanged += changed[i];
+			if (packed[i] != last[i]) {
+				list[nChanged++] = (uint8_t)i;
+			}
 		}
 	}
 	if (nChanged == 0) {
 		return;
 	}
-	memcpy(last, packed, sizeof(packed));
-	uint8_t (*dm)[kCutEntries] = g_partDist[part];
-	uint16_t *rep = g_partRep[part];
-	// component nibbles, the row side pre-shifted for the |a-b| table
-	uint8_t r[kCutEntries], g[kCutEntries], b[kCutEntries];
-	uint8_t rh[kCutEntries], gh[kCutEntries], bh[kCutEntries];
-	uint8_t absd[256];
-	for (int i = 0; i < 16; ++i) {
-		for (int j = 0; j < 16; ++j) {
-			absd[i * 16 + j] = (uint8_t)(i > j ? i - j : j - i);
+	if (g_absd[0x10] == 0) {
+		for (int i = 0; i < 16; ++i) {
+			for (int j = 0; j < 16; ++j) {
+				g_absd[i * 16 + j] = (uint8_t)(i > j ? i - j : j - i);
+			}
 		}
 	}
+	for (int i = 0; i < kCutEntries; ++i) {
+		last[i] = packed[i];
+	}
+	uint8_t (*dm)[kCutEntries] = g_partDist[part];
+	uint16_t *rep = g_partRep[part];
+	// component nibbles, the changed entry's side shifted up for the
+	// |a-b| table
+	uint8_t r[kCutEntries], g[kCutEntries], b[kCutEntries];
 	for (int i = 0; i < kCutEntries; ++i) {
 		r[i] = (packed[i] >> 8) & 15;
 		g[i] = (packed[i] >> 4) & 15;
 		b[i] = packed[i] & 15;
-		rh[i] = r[i] << 4;
-		gh[i] = g[i] << 4;
-		bh[i] = b[i] << 4;
-		if (changed[i] && dist4(packed[i], 0) > dist4(rep[i], 0)) {
+	}
+	for (int k = 0; k < nChanged; ++k) {
+		const int i = list[k];
+		if (dist4(packed[i], 0) > dist4(rep[i], 0)) {
 			rep[i] = packed[i];
 		}
-	}
-	for (int i = 0; i < kCutEntries; ++i) {
-		const int ri = rh[i], gi = gh[i], bi = bh[i];
-		const bool ci = changed[i];
-		uint8_t *row = dm[i] + i + 1;
-		for (int j = i + 1; j < kCutEntries; ++j, ++row) {
-			if (!ci && !changed[j]) {
-				continue;
-			}
+		const int ri = r[i] << 4, gi = g[i] << 4, bi = b[i] << 4;
+		uint8_t *row = dm[i];
+		// every j: the diagonal gives 0 and can never raise it, and a
+		// pair of two changed entries comes round twice to the same
+		// answer, both cheaper than testing for them
+		for (int j = 0; j < kCutEntries; ++j) {
 			// max component sum is 15 + 30 + 15, so no clamp needed
-			const int d = absd[ri | r[j]] + 2 * absd[gi | g[j]] + absd[bi | b[j]];
-			if (d > *row) {
-				*row = dm[j][i] = (uint8_t)d;
+			const int d = g_absd[ri | r[j]] + 2 * g_absd[gi | g[j]] + g_absd[bi | b[j]];
+			if (d > row[j]) {
+				row[j] = dm[j][i] = (uint8_t)d;
 			}
 		}
 	}
@@ -1794,6 +1792,45 @@ void SystemStub_STDL::writeHwPalette() {
 	_hwDirty = false;
 }
 
+// Chunky to planar by table: g_c2p[c] holds the four plane bits of
+// the slot colour c maps to, one at the bottom of each byte with
+// plane 0 in the top one, so eight pixels shift into a long whose
+// bytes are their plane bytes, and movep lays those into the four
+// plane words. Building each word a bit at a time cost ~200 cycles a
+// pixel: a whole 320x224 screen took 1.8s on an 8MHz ST, and the
+// title's black clear and its wipe were seconds of its delay.
+static uint32_t g_c2p[256];
+static uint32_t g_c2pRemap[64];         // the remap g_c2p was built from
+static bool g_c2pValid;
+
+static const uint32_t *c2pTable(const uint8_t *remap) {
+	const uint32_t *r = (const uint32_t *)remap;
+	if (g_c2pValid) {
+		int i = 0;
+		while (i < 64 && r[i] == g_c2pRemap[i]) {
+			++i;
+		}
+		if (i == 64) {
+			return g_c2p;
+		}
+	}
+	for (int i = 0; i < 64; ++i) {
+		g_c2pRemap[i] = r[i];
+	}
+	for (int c = 0; c < 256; ++c) {
+		const uint32_t v = remap[c];
+		g_c2p[c] = ((v & 1) << 24) | ((v & 2) << 15) | ((v & 4) << 6) | ((v >> 3) & 1);
+	}
+	g_c2pValid = true;
+	return g_c2p;
+}
+
+// hi's bytes are a group's four plane bytes for its left eight
+// pixels, lo's for its right eight
+static inline void storePlanes(uint16_t *dst, uint32_t hi, uint32_t lo) {
+	__asm__ volatile("movep.l %1,0(%0)\n\tmovep.l %2,1(%0)" : : "a"(dst), "d"(hi), "d"(lo) : "memory");
+}
+
 // Convert a chunky region to the planar screen. x/w are widened to
 // 16-pixel group boundaries (buf is the whole layer, so neighbouring
 // pixels are always available). With useShadow, groups whose 16
@@ -1811,7 +1848,7 @@ void SystemStub_STDL::convertRegion(int x, int y, int w, int h, const uint8_t *b
 	if (groups <= 0) {
 		return;
 	}
-	const uint8_t *remap = _remap;
+	const uint32_t *tab = c2pTable(_remap);
 	if (_dblBuf && h > 0) {
 		damageSource(y, h, (x0 + _xOffset) >> 4, (x1 + _xOffset) >> 4);
 	}
@@ -1833,22 +1870,26 @@ void SystemStub_STDL::convertRegion(int x, int y, int w, int h, const uint8_t *b
 					continue;
 				}
 			}
-			sh[0] = s32[0];
+			const uint32_t w0 = s32[0];
+			sh[0] = w0;
 			sh[1] = s32[1];
 			sh[2] = s32[2];
 			sh[3] = s32[3];
-			uint16_t p0 = 0, p1 = 0, p2 = 0, p3 = 0;
-			for (int i = 0; i < 16; ++i) {
-				const uint8_t v = remap[src[i]];
-				p0 += p0 + (v & 1);
-				p1 += p1 + ((v >> 1) & 1);
-				p2 += p2 + ((v >> 2) & 1);
-				p3 += p3 + ((v >> 3) & 1);
+			uint32_t hi, lo;
+			if (w0 == s32[1] && w0 == s32[2] && w0 == s32[3] && ((w0 << 8) | (w0 >> 24)) == w0) {
+				// sixteen pixels of one colour (a black clear, the
+				// title's surround): each plane byte is all set or
+				// clear, and a byte of 1 times 255 is 0xFF
+				const uint32_t u = tab[w0 & 0xFF];
+				hi = lo = (u << 8) - u;
+			} else {
+				hi = lo = 0;
+				for (int i = 0; i < 8; ++i) {
+					hi = (hi << 1) | tab[src[i]];
+					lo = (lo << 1) | tab[src[i + 8]];
+				}
 			}
-			dst[0] = p0;
-			dst[1] = p1;
-			dst[2] = p2;
-			dst[3] = p3;
+			storePlanes(dst, hi, lo);
 			src += 16;
 			sh += 4;
 			dst += 4;
