@@ -17,27 +17,28 @@ import sys
 RUNS = "tmp/bench/runs"
 
 
-def done_line(tag, machine, scen):
-    path = f"{RUNS}/{tag}_{machine}_{scen}/RS.LOG"
+def log_lines(tag, machine, scen):
+    """The run's RS.LOG, a line at a time; nothing if it is missing."""
     try:
-        for line in open(path, errors="replace"):
-            if "REPLAY done" in line:
-                return line
+        with open(f"{RUNS}/{tag}_{machine}_{scen}/RS.LOG", errors="replace") as f:
+            return f.readlines()
     except OSError:
-        pass
+        return []
+
+
+def done_line(tag, machine, scen):
+    for line in log_lines(tag, machine, scen):
+        if "REPLAY done" in line:
+            return line
     return None
 
 
 def window_hashes(tag, machine, scen):
-    path = f"{RUNS}/{tag}_{machine}_{scen}/RS.LOG"
     out = []
-    try:
-        for line in open(path, errors="replace"):
-            m = re.search(r"REPLAY window \d+ .* hash ([0-9a-f]+)", line)
-            if m:
-                out.append(m.group(1))
-    except OSError:
-        pass
+    for line in log_lines(tag, machine, scen):
+        m = re.search(r"REPLAY window \d+ .* hash ([0-9a-f]+)", line)
+        if m:
+            out.append(m.group(1))
     return out
 
 

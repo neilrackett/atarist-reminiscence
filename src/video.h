@@ -93,7 +93,6 @@ struct Video {
 	void ST_backChanged(int x, int y, int w, int h);
 	uint16_t _blkForce[kBlockRows];    // blocks the next listed frame must redraw
 	bool _dlOn;
-	bool _dlFull;                      // ... all of them
 	uint16_t _dlBackGen;               // _stBackGen the front layer was last rebuilt from
 	void ST_restoreBlocks(const uint16_t *blk, const uint16_t *prio);
 	uint16_t _prioDirty[kBlockRows];   // blocks whose priority plane may differ from the room's

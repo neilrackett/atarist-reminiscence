@@ -269,7 +269,7 @@ struct Resource {
 	void load_SPM(File *f);
 	void setSprData();
 #ifdef ATARIST
-	bool ST_openUnpacked(File *f, const char *name, uint32_t *sizes, int count);
+	bool ST_openUnpacked(File *f, const char *name, uint32_t *sizes, int maxCount, int *count = 0);
 	bool ST_loadUnpacked(int objType);
 	// Each monster's sprites in a buffer of their own for the level,
 	// rather than all four taking turns in _sprm (see
@@ -281,15 +281,18 @@ struct Resource {
 	// monster buffers freed (see ST_sprDraw)
 	uint32_t _stBankEpoch;
 	uint32_t _stMonsterEpoch;
-	// room data and banks from UNPACKED\, where the RAM allows
+	// the bank arena's two sizes (see the constructor)
+	enum { kStArenaSmall = 0x7000, kStArenaBig = 384 * 1024 };
+	// room data and banks from UNPACKED\, where the RAM allows: the
+	// banks at the start of the bank arena, _stMbkUEnd bytes of it
 	uint8_t *_stLevU;
 	uint32_t _stLevUOff[64], _stLevUSize[64];
-	uint8_t *_stMbkU;            // the start of the bank arena when they are there
 	int _stMbkUCount;
-	uint32_t _stMbkUEnd;         // the arena's bytes they take
+	uint32_t _stMbkUEnd;
 	uint32_t _stMbkUOff[256], _stMbkUSize[256];
-	bool ST_readUnpackedTable(const char *name, int maxCount, uint8_t *dst, uint32_t dstSize, uint8_t **data, uint32_t *offs, uint32_t *sizes, int *count);
+	uint8_t *ST_readUnpackedTable(const char *name, int maxCount, uint8_t *dst, uint32_t dstSize, uint32_t *offs, uint32_t *sizes, int *count);
 	void ST_loadUnpackedResident(int objType);
+	void ST_dropResidentBanks();
 	// a room's data from UNPACKED\ into dst; false to unpack DATA\'s
 	bool ST_unpackedRoom(int room, uint8_t *dst) const {
 		if (!_stLevU || room < 0 || room >= 64 || _stLevUSize[room] == 0 || _stLevUSize[room] > kScratchBufferSize) {

@@ -110,10 +110,7 @@ const uint8_t *ST_getRemap();
 // pixels with the mapping already baked in must re-bake when it moves
 uint16_t ST_remapGen();
 
-// maskless STDL surface view of a layer (screen copies, layer
-// copies); returns a cached wrapper
 struct STDL_Surface;
-STDL_Surface *ST_layerSurfaceBare(uint8_t *layer);
 
 // cutscene palette mode: the colour quantisation runs over only the
 // cutscene banks (0xC0-0xDF, scenes use up to 32 colours) plus the
@@ -244,6 +241,12 @@ void ST_prioTouchedRect(int x, int y, int w, int h);
 // OR the blocks whose priority plane was touched since the last call into
 // acc (kSTBlockRows rows of block columns), and forget them
 void ST_takePrioBlocks(uint16_t *acc);
+// ... or let them go, for a taker that has its own record
+void ST_prioDropBlocks();
+void ST_prioDropRect();
+// a row of block columns (16 pixels each): bits for columns [i, 15] and
+// for [0, i], so columns [a, b] are kSTColsFrom[a] & kSTColsTo[b]
+extern const uint16_t kSTColsFrom[16], kSTColsTo[16];
 void ST_prioTouched();
 bool ST_takePrioRect(int *x0, int *y0, int *x1, int *y1);
 
@@ -375,6 +378,9 @@ typedef bool (*STSprDecodeFn)(void *ctx, int kind, const uint8_t *data, int w, i
 // packCellsAsm itself (video_st.cpp)
 const uint32_t *ST_spreadTable();
 const uint8_t *ST_bitrevTable();
+const uint32_t *ST_repTable();           // a byte in all four bytes of a long
+// STDL_BlitIndexed8's flags for a sprite's x flip and column-major layout
+unsigned ST_i8Flags(unsigned flags);
 extern "C" void packCellsAsm(uint8_t *out, const uint8_t *s0, long planeSize,
 	const uint8_t *mask, long n, const uint32_t *spread, const uint32_t *pair);
 void ST_sprSetDecoder(STSprDecodeFn fn, void *ctx, uint8_t *scratch, uint32_t scratchSize);
@@ -384,7 +390,11 @@ void ST_sprDraw(uint8_t *layer, int kind, const uint8_t *data, uint32_t ident, i
 // is short of room (Game::playCutscene); the next draw asks for it again
 void ST_sprRelease();
 // give back the decoded rooms kept for revisits (Video::AMIGA_decodeLev)
+// and the room tile table
 void ST_roomCacheRelease();
+// both of the above: the caches that take what RAM there is and come
+// back as play needs them
+void ST_releaseRamCaches();
 // the layer as an STDL surface; masked: with the priority plane as its mask
 STDL_Surface *ST_layerView(uint8_t *layer, bool masked);
 // the palette token a sprite in this colour bank would be baked with;
@@ -425,6 +435,18 @@ void ST_dlInvalidate();
 
 // with logging on, the largest block malloc can still hand out
 void ST_logFreeMemory(const char *where);
+// the hashes' step: a 32-bit rotate left by 5
+static inline uint32_t ST_rol5(uint32_t h) {
+	return (h << 5) | (h >> 27);
+}
+
+// the largest free block, in K, as GEMDOS gives it (see ST_logFreeMemory)
+long ST_freeK();
+// the RAM the machine has, as found at start-up (0 before then), for
+// code in user mode; kSTResidentRamK is what a machine needs to keep
+// a level's room data and the big tile table (4MB, with some to spare)
+int ATARIST_ramK();
+enum { kSTResidentRamK = 3584 };
 bool ST_screenModeAvailable(int mode);   // see kOverscanMinK
 
 // 8x8 glyph from a 16-byte-stride chunky source (AMIGA_decodeIcn

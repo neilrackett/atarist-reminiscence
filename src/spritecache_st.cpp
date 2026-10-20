@@ -9,6 +9,7 @@
 
 extern "C" {
 #include <stdl/stdl.h>
+#include <stdl/stdl_math.h>
 }
 #include <mint/osbind.h>
 #include "util.h"
@@ -62,6 +63,12 @@ enum { kRecBytes = (sizeof(Rec) + 3) & ~3 };
 
 static inline uint16_t *recPlanes(const Rec *r) {
 	return (uint16_t *)((uint8_t *)r + kRecBytes);
+}
+
+// the mask, after the planes' useG * 4 words a row: a 16-bit multiply,
+// where the two bytes as ints made a library call on every blit
+static inline uint16_t *recMask(const Rec *r) {
+	return recPlanes(r) + STDL_MulU16(r->useG * 4, r->useH);
 }
 
 // --- the ring ---------------------------------------------------------
@@ -155,6 +162,31 @@ static Rec *allocRec(uint32_t bytes, int pinSeg) {
 	return r;
 }
 
+// A record for a bake useG groups by useH rows, lying (offG groups, offY
+// rows) into the whole w x h sprite, keyed and in its bucket: the caller
+// fills the planes and mask (recPlanes, recMask). 0 if the ring has no
+// room; pinSeg as allocRec's.
+static Rec *newRec(const void *key, uint32_t ident, uint16_t tag, int w, int h,
+		int offG, int useG, int offY, int useH, int pinSeg, uint16_t bucket) {
+	const uint32_t bytes = kRecBytes + (uint32_t)(useG * 5) * (uint32_t)useH * 2;
+	Rec *rec = allocRec((bytes + 3) & ~3UL, pinSeg);
+	if (!rec) {
+		return 0;
+	}
+	rec->key = key;
+	rec->ident = ident;
+	rec->tag = tag;
+	rec->w = (uint8_t)w;
+	rec->h = (uint8_t)h;
+	rec->offG = (uint8_t)offG;
+	rec->useG = (uint8_t)useG;
+	rec->offY = (uint8_t)offY;
+	rec->useH = (uint8_t)useH;
+	rec->lastPhase = 0;
+	linkRec(rec, bucket);
+	return rec;
+}
+
 // Sized the first time a sprite is drawn after a level loads: by then
 // the level's data, its first room and its music are in, so what is
 // free is what play has to work with. What is left must cover what
@@ -170,7 +202,7 @@ static bool ringOpen() {
 		return false;
 	}
 	g_tried = true;
-	const long largestK = (long)Malloc(-1) >> 10;
+	const long largestK = ST_freeK();
 	enum { kReserveK = 320, kMinK = 96, kMaxK = 1024, kKeepK = 128 };
 	long ringK = largestK - kReserveK;
 	if (ringK < kMinK) {
@@ -280,7 +312,20 @@ bool ST_sprTokensEnd() {
 	return gen == g_tokGen && !reset;
 }
 
-static void sprPairInvalidate(int i);
+// Pair tables for sprites, as the room decoder's (video_st.cpp): index
+// a pair of pixels' logical colours, left | right << 4, and get their
+// remapped bits in the top two bits of each plane byte. One a colour
+// bank, rebuilt when the bank's palette token changes.
+struct SprPair {
+	uint8_t colMask, token;
+	bool valid;
+	uint32_t t[256];
+};
+static SprPair g_sprPair[8];
+
+static void sprPairInvalidate(int i) {
+	g_sprPair[i].valid = false;
+}
 
 static uint8_t palToken(uint8_t colMask) {
 	if (!g_tokFrozen) {
@@ -359,17 +404,6 @@ static const uint8_t *chunkySource(const uint8_t *buf, int w, int h, unsigned fl
 	return buf;
 }
 
-static unsigned i8Flags(unsigned flags) {
-	unsigned f = 0;
-	if (flags & kSTSpriteXflip) {
-		f |= STDL_I8_XFLIP;
-	}
-	if (flags & kSTSpriteColMajor) {
-		f |= STDL_I8_COLMAJOR;
-	}
-	return f;
-}
-
 static Rec *bakeChunky(const void *key, uint32_t ident, uint16_t tag, int kind, int w, int h, uint8_t colMask, unsigned flags, uint16_t bucket) {
 	g_decode(g_decodeCtx, kind, (const uint8_t *)key, w, h, g_chunky, false);
 	const int groups = (w + 15) >> 4;
@@ -400,7 +434,7 @@ static Rec *bakeChunky(const void *key, uint32_t ident, uint16_t tag, int kind, 
 	ST_buildMap16(colMask, map16);
 	int pitch;
 	const uint8_t *src = chunkySource(g_chunky, w, h, flags, &pitch);
-	STDL_BlitIndexed8(g_scratch, src, pitch, 0, 0, w, h, map16, i8Flags(flags));
+	STDL_BlitIndexed8(g_scratch, src, pitch, 0, 0, w, h, map16, ST_i8Flags(flags));
 	// Trim: a mask word of 0xFFFF is sixteen pixels that draw nothing,
 	// and rows and columns of them sit around most frames. Only what is
 	// drawn is kept, which costs the blit nothing for them afterwards
@@ -431,13 +465,12 @@ static Rec *bakeChunky(const void *key, uint32_t ident, uint16_t tag, int kind, 
 	}
 	const int useG = g1 - g0 + 1;
 	const int useH = y1 - y0 + 1;
-	const uint32_t bytes = kRecBytes + (uint32_t)(useG * 5) * (uint32_t)useH * 2;
-	Rec *rec = allocRec((bytes + 3) & ~3UL, -1);
+	Rec *rec = newRec(key, ident, tag, w, h, g0, useG, y0, useH, -1, bucket);
 	if (!rec) {
 		return 0;
 	}
 	uint16_t *dp = recPlanes(rec);
-	uint16_t *dm = dp + useG * 4 * useH;
+	uint16_t *dm = recMask(rec);
 	const uint16_t *sp = planes + (y0 * groups + g0) * 4;
 	const uint16_t *sm = mask + y0 * groups + g0;
 	for (int r = useH; --r >= 0; ) {
@@ -448,34 +481,8 @@ static Rec *bakeChunky(const void *key, uint32_t ident, uint16_t tag, int kind, 
 		sp += groups * 4;
 		sm += groups;
 	}
-	rec->key = key;
-	rec->ident = ident;
-	rec->tag = tag;
-	rec->w = (uint8_t)w;
-	rec->h = (uint8_t)h;
-	rec->offG = (uint8_t)g0;
-	rec->useG = (uint8_t)useG;
-	rec->offY = (uint8_t)y0;
-	rec->useH = (uint8_t)useH;
-	rec->lastPhase = 0;
-	linkRec(rec, bucket);
 	++g_stPerf.bakeMakes;
 	return rec;
-}
-
-// Pair tables for sprites, as the room decoder's (video_st.cpp): index
-// a pair of pixels' logical colours, left | right << 4, and get their
-// remapped bits in the top two bits of each plane byte. One a colour
-// bank, rebuilt when the bank's palette token changes.
-struct SprPair {
-	uint8_t colMask, token;
-	bool valid;
-	uint32_t t[256];
-};
-static SprPair g_sprPair[8];
-
-static void sprPairInvalidate(int i) {
-	g_sprPair[i].valid = false;
 }
 
 static const uint32_t *sprPair(uint8_t colMask, uint8_t token) {
@@ -511,6 +518,97 @@ static const uint32_t *sprPair(uint8_t colMask, uint8_t token) {
 extern "C" void bakeUnitsAsm(uint8_t *dp, uint8_t *dm, const uint8_t *src, long planeSize,
 	long units, long rows, long step, const uint32_t *spread, const uint32_t *pair,
 	const uint32_t *rep, const uint8_t *bitrev);
+// bakeUnitsAsm a unit at a time: its four plane bytes loaded (through
+// the bit reversal for a flipped sprite, whose rows are walked
+// backwards), then spread, paired, masked and stored at OFF - 0 for the
+// left unit of a group, 1 for the right. E and J are its two labels.
+#define BU_LOADS_N \
+"    moveq #0,%d0\n" \
+"    move.b (%a2),%d0\n" \
+"    moveq #0,%d1\n" \
+"    move.b (%a2,%d7.l),%d1\n" \
+"    moveq #0,%d2\n" \
+"    move.b (%a2,%d6.l),%d2\n" \
+"    moveq #0,%d3\n" \
+"    move.b (%a2,%d5.l),%d3\n" \
+"    addq.l #1,%a2\n"
+#define BU_LOADS_F \
+"    moveq #0,%d0\n" \
+"    move.b (%a2),%d0\n" \
+"    move.b 0(%a6,%d0.w),%d0\n" \
+"    moveq #0,%d1\n" \
+"    move.b (%a2,%d7.l),%d1\n" \
+"    move.b 0(%a6,%d1.w),%d1\n" \
+"    moveq #0,%d2\n" \
+"    move.b (%a2,%d6.l),%d2\n" \
+"    move.b 0(%a6,%d2.w),%d2\n" \
+"    moveq #0,%d3\n" \
+"    move.b (%a2,%d5.l),%d3\n" \
+"    move.b 0(%a6,%d3.w),%d3\n" \
+"    subq.l #1,%a2\n"
+#define BU_PACK(OFF, E, J) \
+"    move.b %d0,%d4\n" \
+"    or.b %d1,%d4\n" \
+"    or.b %d2,%d4\n" \
+"    or.b %d3,%d4\n" \
+"    jbeq " E "\n" \
+"    add.w %d0,%d0\n" \
+"    add.w %d0,%d0\n" \
+"    move.l 0(%a3,%d0.w),%d0\n" \
+"    add.w %d1,%d1\n" \
+"    add.w %d1,%d1\n" \
+"    add.w #1024,%d1\n" \
+"    or.l 0(%a3,%d1.w),%d0\n" \
+"    add.w %d2,%d2\n" \
+"    add.w %d2,%d2\n" \
+"    add.w #2048,%d2\n" \
+"    or.l 0(%a3,%d2.w),%d0\n" \
+"    add.w %d3,%d3\n" \
+"    add.w %d3,%d3\n" \
+"    add.w #3072,%d3\n" \
+"    or.l 0(%a3,%d3.w),%d0\n" \
+"    moveq #0,%d1\n" \
+"    move.b %d0,%d1\n" \
+"    add.w %d1,%d1\n" \
+"    add.w %d1,%d1\n" \
+"    move.l 0(%a4,%d1.w),%d2\n" \
+"    lsr.l #8,%d0\n" \
+"    moveq #0,%d1\n" \
+"    move.b %d0,%d1\n" \
+"    add.w %d1,%d1\n" \
+"    add.w %d1,%d1\n" \
+"    move.l 0(%a4,%d1.w),%d1\n" \
+"    lsr.l #2,%d1\n" \
+"    or.l %d1,%d2\n" \
+"    lsr.l #8,%d0\n" \
+"    moveq #0,%d1\n" \
+"    move.b %d0,%d1\n" \
+"    add.w %d1,%d1\n" \
+"    add.w %d1,%d1\n" \
+"    move.l 0(%a4,%d1.w),%d1\n" \
+"    lsr.l #4,%d1\n" \
+"    or.l %d1,%d2\n" \
+"    lsr.l #8,%d0\n" \
+"    add.w %d0,%d0\n" \
+"    add.w %d0,%d0\n" \
+"    move.l 0(%a4,%d0.w),%d1\n" \
+"    lsr.l #6,%d1\n" \
+"    or.l %d1,%d2\n" \
+"    moveq #0,%d0\n" \
+"    move.b %d4,%d0\n" \
+"    add.w %d0,%d0\n" \
+"    add.w %d0,%d0\n" \
+"    and.l 0(%a5,%d0.w),%d2\n" \
+"    movep.l %d2," OFF "(%a0)\n" \
+"    not.b %d4\n" \
+"    move.b %d4,(%a1)+\n" \
+"    jbra " J "\n" \
+E ":\n" \
+"    moveq #0,%d2\n" \
+"    movep.l %d2," OFF "(%a0)\n" \
+"    st (%a1)+\n" \
+J ":\n"
+
 __asm__(
 "    .text\n"
 "    .even\n"
@@ -540,222 +638,15 @@ __asm__(
 "    move.l %d0,4(%sp)\n"
 "    jbeq ntail\n"
 "npair:\n"
-"    moveq #0,%d0\n"
-"    move.b (%a2),%d0\n"
-"    moveq #0,%d1\n"
-"    move.b (%a2,%d7.l),%d1\n"
-"    moveq #0,%d2\n"
-"    move.b (%a2,%d6.l),%d2\n"
-"    moveq #0,%d3\n"
-"    move.b (%a2,%d5.l),%d3\n"
-"    addq.l #1,%a2\n"
-"    move.b %d0,%d4\n"
-"    or.b %d1,%d4\n"
-"    or.b %d2,%d4\n"
-"    or.b %d3,%d4\n"
-"    jbeq bu1\n"
-"    add.w %d0,%d0\n"
-"    add.w %d0,%d0\n"
-"    move.l 0(%a3,%d0.w),%d0\n"
-"    add.w %d1,%d1\n"
-"    add.w %d1,%d1\n"
-"    add.w #1024,%d1\n"
-"    or.l 0(%a3,%d1.w),%d0\n"
-"    add.w %d2,%d2\n"
-"    add.w %d2,%d2\n"
-"    add.w #2048,%d2\n"
-"    or.l 0(%a3,%d2.w),%d0\n"
-"    add.w %d3,%d3\n"
-"    add.w %d3,%d3\n"
-"    add.w #3072,%d3\n"
-"    or.l 0(%a3,%d3.w),%d0\n"
-"    moveq #0,%d1\n"
-"    move.b %d0,%d1\n"
-"    add.w %d1,%d1\n"
-"    add.w %d1,%d1\n"
-"    move.l 0(%a4,%d1.w),%d2\n"
-"    lsr.l #8,%d0\n"
-"    moveq #0,%d1\n"
-"    move.b %d0,%d1\n"
-"    add.w %d1,%d1\n"
-"    add.w %d1,%d1\n"
-"    move.l 0(%a4,%d1.w),%d1\n"
-"    lsr.l #2,%d1\n"
-"    or.l %d1,%d2\n"
-"    lsr.l #8,%d0\n"
-"    moveq #0,%d1\n"
-"    move.b %d0,%d1\n"
-"    add.w %d1,%d1\n"
-"    add.w %d1,%d1\n"
-"    move.l 0(%a4,%d1.w),%d1\n"
-"    lsr.l #4,%d1\n"
-"    or.l %d1,%d2\n"
-"    lsr.l #8,%d0\n"
-"    add.w %d0,%d0\n"
-"    add.w %d0,%d0\n"
-"    move.l 0(%a4,%d0.w),%d1\n"
-"    lsr.l #6,%d1\n"
-"    or.l %d1,%d2\n"
-"    moveq #0,%d0\n"
-"    move.b %d4,%d0\n"
-"    add.w %d0,%d0\n"
-"    add.w %d0,%d0\n"
-"    and.l 0(%a5,%d0.w),%d2\n"
-"    movep.l %d2,0(%a0)\n"
-"    not.b %d4\n"
-"    move.b %d4,(%a1)+\n"
-"    jbra bu2\n"
-"bu1:\n"
-"    moveq #0,%d2\n"
-"    movep.l %d2,0(%a0)\n"
-"    st (%a1)+\n"
-"bu2:\n"
-"    moveq #0,%d0\n"
-"    move.b (%a2),%d0\n"
-"    moveq #0,%d1\n"
-"    move.b (%a2,%d7.l),%d1\n"
-"    moveq #0,%d2\n"
-"    move.b (%a2,%d6.l),%d2\n"
-"    moveq #0,%d3\n"
-"    move.b (%a2,%d5.l),%d3\n"
-"    addq.l #1,%a2\n"
-"    move.b %d0,%d4\n"
-"    or.b %d1,%d4\n"
-"    or.b %d2,%d4\n"
-"    or.b %d3,%d4\n"
-"    jbeq bu3\n"
-"    add.w %d0,%d0\n"
-"    add.w %d0,%d0\n"
-"    move.l 0(%a3,%d0.w),%d0\n"
-"    add.w %d1,%d1\n"
-"    add.w %d1,%d1\n"
-"    add.w #1024,%d1\n"
-"    or.l 0(%a3,%d1.w),%d0\n"
-"    add.w %d2,%d2\n"
-"    add.w %d2,%d2\n"
-"    add.w #2048,%d2\n"
-"    or.l 0(%a3,%d2.w),%d0\n"
-"    add.w %d3,%d3\n"
-"    add.w %d3,%d3\n"
-"    add.w #3072,%d3\n"
-"    or.l 0(%a3,%d3.w),%d0\n"
-"    moveq #0,%d1\n"
-"    move.b %d0,%d1\n"
-"    add.w %d1,%d1\n"
-"    add.w %d1,%d1\n"
-"    move.l 0(%a4,%d1.w),%d2\n"
-"    lsr.l #8,%d0\n"
-"    moveq #0,%d1\n"
-"    move.b %d0,%d1\n"
-"    add.w %d1,%d1\n"
-"    add.w %d1,%d1\n"
-"    move.l 0(%a4,%d1.w),%d1\n"
-"    lsr.l #2,%d1\n"
-"    or.l %d1,%d2\n"
-"    lsr.l #8,%d0\n"
-"    moveq #0,%d1\n"
-"    move.b %d0,%d1\n"
-"    add.w %d1,%d1\n"
-"    add.w %d1,%d1\n"
-"    move.l 0(%a4,%d1.w),%d1\n"
-"    lsr.l #4,%d1\n"
-"    or.l %d1,%d2\n"
-"    lsr.l #8,%d0\n"
-"    add.w %d0,%d0\n"
-"    add.w %d0,%d0\n"
-"    move.l 0(%a4,%d0.w),%d1\n"
-"    lsr.l #6,%d1\n"
-"    or.l %d1,%d2\n"
-"    moveq #0,%d0\n"
-"    move.b %d4,%d0\n"
-"    add.w %d0,%d0\n"
-"    add.w %d0,%d0\n"
-"    and.l 0(%a5,%d0.w),%d2\n"
-"    movep.l %d2,1(%a0)\n"
-"    not.b %d4\n"
-"    move.b %d4,(%a1)+\n"
-"    jbra bu4\n"
-"bu3:\n"
-"    moveq #0,%d2\n"
-"    movep.l %d2,1(%a0)\n"
-"    st (%a1)+\n"
-"bu4:\n"
+BU_LOADS_N BU_PACK("0", "bu1", "bu2")
+BU_LOADS_N BU_PACK("1", "bu3", "bu4")
 "    addq.l #8,%a0\n"
 "    subq.l #1,4(%sp)\n"
 "    jbne npair\n"
 "ntail:\n"
 "    btst #0,75(%sp)\n"
 "    jbeq nend\n"
-"    moveq #0,%d0\n"
-"    move.b (%a2),%d0\n"
-"    moveq #0,%d1\n"
-"    move.b (%a2,%d7.l),%d1\n"
-"    moveq #0,%d2\n"
-"    move.b (%a2,%d6.l),%d2\n"
-"    moveq #0,%d3\n"
-"    move.b (%a2,%d5.l),%d3\n"
-"    addq.l #1,%a2\n"
-"    move.b %d0,%d4\n"
-"    or.b %d1,%d4\n"
-"    or.b %d2,%d4\n"
-"    or.b %d3,%d4\n"
-"    jbeq bu5\n"
-"    add.w %d0,%d0\n"
-"    add.w %d0,%d0\n"
-"    move.l 0(%a3,%d0.w),%d0\n"
-"    add.w %d1,%d1\n"
-"    add.w %d1,%d1\n"
-"    add.w #1024,%d1\n"
-"    or.l 0(%a3,%d1.w),%d0\n"
-"    add.w %d2,%d2\n"
-"    add.w %d2,%d2\n"
-"    add.w #2048,%d2\n"
-"    or.l 0(%a3,%d2.w),%d0\n"
-"    add.w %d3,%d3\n"
-"    add.w %d3,%d3\n"
-"    add.w #3072,%d3\n"
-"    or.l 0(%a3,%d3.w),%d0\n"
-"    moveq #0,%d1\n"
-"    move.b %d0,%d1\n"
-"    add.w %d1,%d1\n"
-"    add.w %d1,%d1\n"
-"    move.l 0(%a4,%d1.w),%d2\n"
-"    lsr.l #8,%d0\n"
-"    moveq #0,%d1\n"
-"    move.b %d0,%d1\n"
-"    add.w %d1,%d1\n"
-"    add.w %d1,%d1\n"
-"    move.l 0(%a4,%d1.w),%d1\n"
-"    lsr.l #2,%d1\n"
-"    or.l %d1,%d2\n"
-"    lsr.l #8,%d0\n"
-"    moveq #0,%d1\n"
-"    move.b %d0,%d1\n"
-"    add.w %d1,%d1\n"
-"    add.w %d1,%d1\n"
-"    move.l 0(%a4,%d1.w),%d1\n"
-"    lsr.l #4,%d1\n"
-"    or.l %d1,%d2\n"
-"    lsr.l #8,%d0\n"
-"    add.w %d0,%d0\n"
-"    add.w %d0,%d0\n"
-"    move.l 0(%a4,%d0.w),%d1\n"
-"    lsr.l #6,%d1\n"
-"    or.l %d1,%d2\n"
-"    moveq #0,%d0\n"
-"    move.b %d4,%d0\n"
-"    add.w %d0,%d0\n"
-"    add.w %d0,%d0\n"
-"    and.l 0(%a5,%d0.w),%d2\n"
-"    movep.l %d2,0(%a0)\n"
-"    not.b %d4\n"
-"    move.b %d4,(%a1)+\n"
-"    jbra bu6\n"
-"bu5:\n"
-"    moveq #0,%d2\n"
-"    movep.l %d2,0(%a0)\n"
-"    st (%a1)+\n"
-"bu6:\n"
+BU_LOADS_N BU_PACK("0", "bu5", "bu6")
 "    moveq #0,%d2\n"
 "    movep.l %d2,1(%a0)\n"
 "    st (%a1)+\n"
@@ -771,234 +662,15 @@ __asm__(
 "    move.l %d0,4(%sp)\n"
 "    jbeq ftail\n"
 "fpair:\n"
-"    moveq #0,%d0\n"
-"    move.b (%a2),%d0\n"
-"    move.b 0(%a6,%d0.w),%d0\n"
-"    moveq #0,%d1\n"
-"    move.b (%a2,%d7.l),%d1\n"
-"    move.b 0(%a6,%d1.w),%d1\n"
-"    moveq #0,%d2\n"
-"    move.b (%a2,%d6.l),%d2\n"
-"    move.b 0(%a6,%d2.w),%d2\n"
-"    moveq #0,%d3\n"
-"    move.b (%a2,%d5.l),%d3\n"
-"    move.b 0(%a6,%d3.w),%d3\n"
-"    subq.l #1,%a2\n"
-"    move.b %d0,%d4\n"
-"    or.b %d1,%d4\n"
-"    or.b %d2,%d4\n"
-"    or.b %d3,%d4\n"
-"    jbeq bu7\n"
-"    add.w %d0,%d0\n"
-"    add.w %d0,%d0\n"
-"    move.l 0(%a3,%d0.w),%d0\n"
-"    add.w %d1,%d1\n"
-"    add.w %d1,%d1\n"
-"    add.w #1024,%d1\n"
-"    or.l 0(%a3,%d1.w),%d0\n"
-"    add.w %d2,%d2\n"
-"    add.w %d2,%d2\n"
-"    add.w #2048,%d2\n"
-"    or.l 0(%a3,%d2.w),%d0\n"
-"    add.w %d3,%d3\n"
-"    add.w %d3,%d3\n"
-"    add.w #3072,%d3\n"
-"    or.l 0(%a3,%d3.w),%d0\n"
-"    moveq #0,%d1\n"
-"    move.b %d0,%d1\n"
-"    add.w %d1,%d1\n"
-"    add.w %d1,%d1\n"
-"    move.l 0(%a4,%d1.w),%d2\n"
-"    lsr.l #8,%d0\n"
-"    moveq #0,%d1\n"
-"    move.b %d0,%d1\n"
-"    add.w %d1,%d1\n"
-"    add.w %d1,%d1\n"
-"    move.l 0(%a4,%d1.w),%d1\n"
-"    lsr.l #2,%d1\n"
-"    or.l %d1,%d2\n"
-"    lsr.l #8,%d0\n"
-"    moveq #0,%d1\n"
-"    move.b %d0,%d1\n"
-"    add.w %d1,%d1\n"
-"    add.w %d1,%d1\n"
-"    move.l 0(%a4,%d1.w),%d1\n"
-"    lsr.l #4,%d1\n"
-"    or.l %d1,%d2\n"
-"    lsr.l #8,%d0\n"
-"    add.w %d0,%d0\n"
-"    add.w %d0,%d0\n"
-"    move.l 0(%a4,%d0.w),%d1\n"
-"    lsr.l #6,%d1\n"
-"    or.l %d1,%d2\n"
-"    moveq #0,%d0\n"
-"    move.b %d4,%d0\n"
-"    add.w %d0,%d0\n"
-"    add.w %d0,%d0\n"
-"    and.l 0(%a5,%d0.w),%d2\n"
-"    movep.l %d2,0(%a0)\n"
-"    not.b %d4\n"
-"    move.b %d4,(%a1)+\n"
-"    jbra bu8\n"
-"bu7:\n"
-"    moveq #0,%d2\n"
-"    movep.l %d2,0(%a0)\n"
-"    st (%a1)+\n"
-"bu8:\n"
-"    moveq #0,%d0\n"
-"    move.b (%a2),%d0\n"
-"    move.b 0(%a6,%d0.w),%d0\n"
-"    moveq #0,%d1\n"
-"    move.b (%a2,%d7.l),%d1\n"
-"    move.b 0(%a6,%d1.w),%d1\n"
-"    moveq #0,%d2\n"
-"    move.b (%a2,%d6.l),%d2\n"
-"    move.b 0(%a6,%d2.w),%d2\n"
-"    moveq #0,%d3\n"
-"    move.b (%a2,%d5.l),%d3\n"
-"    move.b 0(%a6,%d3.w),%d3\n"
-"    subq.l #1,%a2\n"
-"    move.b %d0,%d4\n"
-"    or.b %d1,%d4\n"
-"    or.b %d2,%d4\n"
-"    or.b %d3,%d4\n"
-"    jbeq bu9\n"
-"    add.w %d0,%d0\n"
-"    add.w %d0,%d0\n"
-"    move.l 0(%a3,%d0.w),%d0\n"
-"    add.w %d1,%d1\n"
-"    add.w %d1,%d1\n"
-"    add.w #1024,%d1\n"
-"    or.l 0(%a3,%d1.w),%d0\n"
-"    add.w %d2,%d2\n"
-"    add.w %d2,%d2\n"
-"    add.w #2048,%d2\n"
-"    or.l 0(%a3,%d2.w),%d0\n"
-"    add.w %d3,%d3\n"
-"    add.w %d3,%d3\n"
-"    add.w #3072,%d3\n"
-"    or.l 0(%a3,%d3.w),%d0\n"
-"    moveq #0,%d1\n"
-"    move.b %d0,%d1\n"
-"    add.w %d1,%d1\n"
-"    add.w %d1,%d1\n"
-"    move.l 0(%a4,%d1.w),%d2\n"
-"    lsr.l #8,%d0\n"
-"    moveq #0,%d1\n"
-"    move.b %d0,%d1\n"
-"    add.w %d1,%d1\n"
-"    add.w %d1,%d1\n"
-"    move.l 0(%a4,%d1.w),%d1\n"
-"    lsr.l #2,%d1\n"
-"    or.l %d1,%d2\n"
-"    lsr.l #8,%d0\n"
-"    moveq #0,%d1\n"
-"    move.b %d0,%d1\n"
-"    add.w %d1,%d1\n"
-"    add.w %d1,%d1\n"
-"    move.l 0(%a4,%d1.w),%d1\n"
-"    lsr.l #4,%d1\n"
-"    or.l %d1,%d2\n"
-"    lsr.l #8,%d0\n"
-"    add.w %d0,%d0\n"
-"    add.w %d0,%d0\n"
-"    move.l 0(%a4,%d0.w),%d1\n"
-"    lsr.l #6,%d1\n"
-"    or.l %d1,%d2\n"
-"    moveq #0,%d0\n"
-"    move.b %d4,%d0\n"
-"    add.w %d0,%d0\n"
-"    add.w %d0,%d0\n"
-"    and.l 0(%a5,%d0.w),%d2\n"
-"    movep.l %d2,1(%a0)\n"
-"    not.b %d4\n"
-"    move.b %d4,(%a1)+\n"
-"    jbra bu10\n"
-"bu9:\n"
-"    moveq #0,%d2\n"
-"    movep.l %d2,1(%a0)\n"
-"    st (%a1)+\n"
-"bu10:\n"
+BU_LOADS_F BU_PACK("0", "bu7", "bu8")
+BU_LOADS_F BU_PACK("1", "bu9", "bu10")
 "    addq.l #8,%a0\n"
 "    subq.l #1,4(%sp)\n"
 "    jbne fpair\n"
 "ftail:\n"
 "    btst #0,75(%sp)\n"
 "    jbeq fend\n"
-"    moveq #0,%d0\n"
-"    move.b (%a2),%d0\n"
-"    move.b 0(%a6,%d0.w),%d0\n"
-"    moveq #0,%d1\n"
-"    move.b (%a2,%d7.l),%d1\n"
-"    move.b 0(%a6,%d1.w),%d1\n"
-"    moveq #0,%d2\n"
-"    move.b (%a2,%d6.l),%d2\n"
-"    move.b 0(%a6,%d2.w),%d2\n"
-"    moveq #0,%d3\n"
-"    move.b (%a2,%d5.l),%d3\n"
-"    move.b 0(%a6,%d3.w),%d3\n"
-"    subq.l #1,%a2\n"
-"    move.b %d0,%d4\n"
-"    or.b %d1,%d4\n"
-"    or.b %d2,%d4\n"
-"    or.b %d3,%d4\n"
-"    jbeq bu11\n"
-"    add.w %d0,%d0\n"
-"    add.w %d0,%d0\n"
-"    move.l 0(%a3,%d0.w),%d0\n"
-"    add.w %d1,%d1\n"
-"    add.w %d1,%d1\n"
-"    add.w #1024,%d1\n"
-"    or.l 0(%a3,%d1.w),%d0\n"
-"    add.w %d2,%d2\n"
-"    add.w %d2,%d2\n"
-"    add.w #2048,%d2\n"
-"    or.l 0(%a3,%d2.w),%d0\n"
-"    add.w %d3,%d3\n"
-"    add.w %d3,%d3\n"
-"    add.w #3072,%d3\n"
-"    or.l 0(%a3,%d3.w),%d0\n"
-"    moveq #0,%d1\n"
-"    move.b %d0,%d1\n"
-"    add.w %d1,%d1\n"
-"    add.w %d1,%d1\n"
-"    move.l 0(%a4,%d1.w),%d2\n"
-"    lsr.l #8,%d0\n"
-"    moveq #0,%d1\n"
-"    move.b %d0,%d1\n"
-"    add.w %d1,%d1\n"
-"    add.w %d1,%d1\n"
-"    move.l 0(%a4,%d1.w),%d1\n"
-"    lsr.l #2,%d1\n"
-"    or.l %d1,%d2\n"
-"    lsr.l #8,%d0\n"
-"    moveq #0,%d1\n"
-"    move.b %d0,%d1\n"
-"    add.w %d1,%d1\n"
-"    add.w %d1,%d1\n"
-"    move.l 0(%a4,%d1.w),%d1\n"
-"    lsr.l #4,%d1\n"
-"    or.l %d1,%d2\n"
-"    lsr.l #8,%d0\n"
-"    add.w %d0,%d0\n"
-"    add.w %d0,%d0\n"
-"    move.l 0(%a4,%d0.w),%d1\n"
-"    lsr.l #6,%d1\n"
-"    or.l %d1,%d2\n"
-"    moveq #0,%d0\n"
-"    move.b %d4,%d0\n"
-"    add.w %d0,%d0\n"
-"    add.w %d0,%d0\n"
-"    and.l 0(%a5,%d0.w),%d2\n"
-"    movep.l %d2,0(%a0)\n"
-"    not.b %d4\n"
-"    move.b %d4,(%a1)+\n"
-"    jbra bu12\n"
-"bu11:\n"
-"    moveq #0,%d2\n"
-"    movep.l %d2,0(%a0)\n"
-"    st (%a1)+\n"
-"bu12:\n"
+BU_LOADS_F BU_PACK("0", "bu11", "bu12")
 "    moveq #0,%d2\n"
 "    movep.l %d2,1(%a0)\n"
 "    st (%a1)+\n"
@@ -1012,21 +684,15 @@ __asm__(
 "    addq.l #8,%sp\n"
 "    movem.l (%sp)+,%d2-%d7/%a2-%a6\n"
 "    rts\n"
-
 );
-
-// a byte in all four bytes of a long: what is drawn of a unit, per plane
-static uint32_t g_rep[256];
+#undef BU_LOADS_N
+#undef BU_LOADS_F
+#undef BU_PACK
 
 static Rec *bakePlanar(const void *key, uint32_t ident, uint16_t tag, int kind, int w, int h, uint8_t colMask, unsigned flags, uint16_t bucket) {
 	uint8_t *planes = g_chunky;                       // four planes fit where a chunky frame would
 	if (!g_decode(g_decodeCtx, kind, (const uint8_t *)key, w, h, planes, true)) {
 		return 0;
-	}
-	if (g_rep[1] == 0) {
-		for (int i = 0; i < 256; ++i) {
-			g_rep[i] = (uint32_t)i * 0x01010101UL;
-		}
 	}
 	const int n = w >> 3;                             // units a row
 	const int planeSize = n * h;
@@ -1072,13 +738,12 @@ static Rec *bakePlanar(const void *key, uint32_t ident, uint16_t tag, int kind, 
 	const int g0 = u0 >> 1;
 	const int useG = (u1 >> 1) - g0 + 1;
 	const int useH = y1 - y0 + 1;
-	const uint32_t bytes = kRecBytes + (uint32_t)(useG * 5) * (uint32_t)useH * 2;
-	Rec *rec = allocRec((bytes + 3) & ~3UL, -1);
+	Rec *rec = newRec(key, ident, tag, w, h, g0, useG, y0, useH, -1, bucket);
 	if (!rec) {
 		return 0;
 	}
 	uint16_t *dp = recPlanes(rec);
-	uint16_t *dm = dp + useG * 4 * useH;
+	uint16_t *dm = recMask(rec);
 	const int ua = g0 * 2;                            // first unit kept, drawing order
 	int units = n - ua;                               // the kept units the sprite has: one short
 	if (units > useG * 2) {                           // of the groups when its width is odd
@@ -1087,18 +752,7 @@ static Rec *bakePlanar(const void *key, uint32_t ident, uint16_t tag, int kind, 
 	const uint8_t *src = planes + y0 * n + (flip ? n - 1 - ua : ua);
 	bakeUnitsAsm((uint8_t *)dp, (uint8_t *)dm, src, planeSize, units, useH,
 		flip ? n + units : n - units, ST_spreadTable(), sprPair(colMask, (uint8_t)(tag >> 8)),
-		g_rep, flip ? ST_bitrevTable() : 0);
-	rec->key = key;
-	rec->ident = ident;
-	rec->tag = tag;
-	rec->w = (uint8_t)w;
-	rec->h = (uint8_t)h;
-	rec->offG = (uint8_t)g0;
-	rec->useG = (uint8_t)useG;
-	rec->offY = (uint8_t)y0;
-	rec->useH = (uint8_t)useH;
-	rec->lastPhase = 0;
-	linkRec(rec, bucket);
+		ST_repTable(), flip ? ST_bitrevTable() : 0);
 	++g_stPerf.bakeMakes;
 	++g_stPerf.bakePlanar;
 	return rec;
@@ -1123,17 +777,16 @@ static Rec *bake(const void *key, uint32_t ident, uint16_t tag, int kind, int w,
 static Rec *buildShifted(Rec *base, int phase, uint16_t tag, uint16_t bucket) {
 	const int sg = base->useG + 1;
 	const int rows = base->useH;
-	const uint32_t bytes = kRecBytes + (uint32_t)(sg * 5) * (uint32_t)rows * 2;
-	Rec *s = allocRec((bytes + 3) & ~3UL, base->seg);
+	Rec *s = newRec(base->key, base->ident, tag, base->w, base->h, base->offG, sg, base->offY, rows, base->seg, bucket);
 	if (!s) {
 		++g_stPerf.shRefused;
 		return 0;
 	}
 	const int last = base->useG;
 	const uint16_t *sp = recPlanes(base);
-	const uint16_t *sm = sp + last * 4 * rows;
+	const uint16_t *sm = recMask(base);
 	uint16_t *dp = recPlanes(s);
-	uint16_t *dm = dp + sg * 4 * rows;
+	uint16_t *dm = recMask(s);
 	// The first group has nothing on its left and the last nothing on its
 	// right, so they are done apart and the groups between test nothing:
 	// a test for each neighbour on every plane word cost more than the
@@ -1161,17 +814,6 @@ static Rec *buildShifted(Rec *base, int phase, uint16_t tag, uint16_t bucket) {
 		sp += last * 4;
 		sm += last;
 	}
-	s->key = base->key;
-	s->ident = base->ident;
-	s->tag = tag;
-	s->w = base->w;
-	s->h = base->h;
-	s->offG = base->offG;
-	s->useG = (uint8_t)sg;
-	s->offY = base->offY;
-	s->useH = base->useH;
-	s->lastPhase = 0;
-	linkRec(s, bucket);
 	++g_stPerf.shBuilds;
 	return s;
 }
@@ -1279,7 +921,7 @@ static void blitRec(uint8_t *layer, Rec *r, int x, int y, bool respectPrio, bool
 	static STDL_Surface *view;
 	if (!view) {
 		view = STDL_CreateSurfaceFrom((uint8_t *)recPlanes(r), r->useG * 16, r->useH, r->useG * 8,
-		                              (uint8_t *)(recPlanes(r) + r->useG * 4 * r->useH), r->useG * 2);
+		                              (uint8_t *)recMask(r), r->useG * 2);
 		if (!view) {
 			return;
 		}
@@ -1313,7 +955,7 @@ static void blitRec(uint8_t *layer, Rec *r, int x, int y, bool respectPrio, bool
 	view->w = (int16_t)(src->useG * 16);
 	view->h = (int16_t)src->useH;
 	view->stride = (uint16_t)(src->useG * 8);
-	view->mask = (uint8_t *)(planes + src->useG * 4 * src->useH);
+	view->mask = (uint8_t *)recMask(src);
 	view->maskstride = (uint16_t)(src->useG * 2);
 	STDL_Rect dr;
 	dr.x = (int16_t)dstX;

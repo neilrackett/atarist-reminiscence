@@ -407,12 +407,12 @@ void Game::pge_prepare() {
 			pge = pge->next_PGE_in_room;
 		}
 	}
-	// Only the slots in use (see stepLogic): preparing one can start
-	// another further on, which this walk must still reach.
+#ifdef ATARIST
+	// only the slots in use, the byte read again after each object (see
+	// Game::pge_firstLive): preparing one can start another further on
 	{
 		const uint8_t room = _currentRoom;
 		const int pgeNum = _res._pgeNum;
-#ifdef ATARIST
 		for (int b = 0; b < pgeNum; b += 8) {
 			unsigned bits = _pge_liveBits[b >> 3];
 			while (bits) {
@@ -427,19 +427,23 @@ void Game::pge_prepare() {
 				bits = _pge_liveBits[b >> 3] & (0x7F >> k);
 			}
 		}
+	}
 #else
-		for (int b = 0; b < pgeNum; b += 8) {
-			LivePGE **p = &_pge_liveTable2[b];
-			const int end = (b + 8 < pgeNum) ? b + 8 : pgeNum;
-			for (int n = end - b; --n >= 0; ++p) {
-				LivePGE *pge = *p;
-				if (pge && room != pge->room_location) {
-					col_preparePiegeState(pge);
-				}
+	// A walking pointer and a counter in registers: as an indexed
+	// loop over a member count, gcc 4.6 reloaded both the table
+	// address and the count every iteration, and this runs over
+	// every piege in the level once a frame.
+	{
+		LivePGE **p = _pge_liveTable2;
+		const uint8_t room = _currentRoom;
+		for (int n = _res._pgeNum; --n >= 0; ++p) {
+			LivePGE *pge = *p;
+			if (pge && room != pge->room_location) {
+				col_preparePiegeState(pge);
 			}
 		}
-#endif
 	}
+#endif
 }
 
 void Game::pge_setupDefaultAnim(LivePGE *pge) {

@@ -149,11 +149,25 @@ static uint16_t g_prioBlk[kSTBlockRows];
 // a sixth of the build
 static bool g_prioAllRect, g_prioAllBlk;
 
+const uint16_t kSTColsFrom[16] = {
+	0xFFFF, 0x7FFF, 0x3FFF, 0x1FFF, 0x0FFF, 0x07FF, 0x03FF, 0x01FF,
+	0x00FF, 0x007F, 0x003F, 0x001F, 0x000F, 0x0007, 0x0003, 0x0001
+};
+const uint16_t kSTColsTo[16] = {
+	0x8000, 0xC000, 0xE000, 0xF000, 0xF800, 0xFC00, 0xFE00, 0xFF00,
+	0xFF80, 0xFFC0, 0xFFE0, 0xFFF0, 0xFFF8, 0xFFFC, 0xFFFE, 0xFFFF
+};
+
 void ST_takePrioBlocks(uint16_t *acc) {
 	for (int j = 0; j < kSTBlockRows; ++j) {
 		acc[j] |= g_prioBlk[j];
 		g_prioBlk[j] = 0;
 	}
+	g_prioAllBlk = false;
+}
+
+void ST_prioDropBlocks() {
+	memset(g_prioBlk, 0, sizeof(g_prioBlk));
 	g_prioAllBlk = false;
 }
 
@@ -169,7 +183,7 @@ void ST_prioTouchedRect(int x, int y, int w, int h) {
 		const int by0 = (y < 0) ? 0 : (y >> 3);
 		const int by1 = (y1 >= kSTLayerH) ? kSTBlockRows - 1 : (y1 >> 3);
 		if (bx0 <= bx1) {
-			const uint16_t m = (uint16_t)((0xFFFFu >> bx0) & (0xFFFFu << (15 - bx1)));
+			const uint16_t m = (uint16_t)(kSTColsFrom[bx0] & kSTColsTo[bx1]);
 			for (int j = by0; j <= by1; ++j) {
 				g_prioBlk[j] |= m;
 			}
@@ -218,6 +232,12 @@ bool ST_takePrioRect(int *x0, int *y0, int *x1, int *y1) {
 	return true;
 }
 
+void ST_prioDropRect() {
+	g_prioX0 = g_prioY0 = 0;
+	g_prioX1 = g_prioY1 = -1;
+	g_prioAllRect = false;
+}
+
 STDL_Surface *ST_layerView(uint8_t *layer, bool masked) {
 	enum { N = 8 };
 	static uint8_t *keys[2][N];
@@ -249,10 +269,6 @@ STDL_Surface *ST_layerView(uint8_t *layer, bool masked) {
 	lastKey[v] = layer;
 	lastSurf[v] = surfs[v][i];
 	return surfs[v][i];
-}
-
-STDL_Surface *ST_layerSurfaceBare(uint8_t *layer) {
-	return ST_layerView(layer, false);
 }
 
 static inline uint16_t *groupPtr(uint8_t *layer, int x, int y) {
@@ -295,6 +311,7 @@ static inline uint16_t *prioPtr(uint8_t *layer, int x, int y) {
 static uint32_t g_spread[4][256];
 static uint8_t g_bitrev[256];
 static uint32_t g_notRep[256];          // ~b in all four bytes
+static uint32_t g_rep[256];             // b in all four bytes
 static bool g_spreadReady;
 
 static void initSpread() {
@@ -311,7 +328,8 @@ static void initSpread() {
 			g_spread[k][b] = v << k;
 		}
 		g_bitrev[b] = r;
-		g_notRep[b] = ~((uint32_t)b * 0x01010101u);
+		g_rep[b] = (uint32_t)b * 0x01010101u;
+		g_notRep[b] = ~g_rep[b];
 	}
 	g_spreadReady = true;
 }
@@ -321,6 +339,13 @@ const uint32_t *ST_spreadTable() {
 		initSpread();
 	}
 	return g_spread[0];
+}
+
+const uint32_t *ST_repTable() {
+	if (!g_spreadReady) {
+		initSpread();
+	}
+	return g_rep;
 }
 
 const uint8_t *ST_bitrevTable() {
@@ -1220,14 +1245,7 @@ void ST_amigaPlaceCovEnd(uint8_t *layer, uint8_t colour8) {
 	memset(layer + kSTPlaneBytes, 0, kSTPrioRowBytes * kSTLayerH);
 }
 
-void ST_drawSprite(uint8_t *layer, const uint8_t *src, int pitch, int x, int y, int w, int h, const uint8_t *map16, unsigned flags, bool setPrio) {
-	// maskless view unless the priority plane is read or set: see
-	// blitBaked
-	STDL_Surface *s = ST_layerView(layer, (flags & kSTSpriteRespectPrio) != 0 || setPrio);
-	if (!s) {
-		return;
-	}
-	pageTouch(layer, x, x + w, y, y + h);
+unsigned ST_i8Flags(unsigned flags) {
 	unsigned f = 0;
 	if (flags & kSTSpriteXflip) {
 		f |= STDL_I8_XFLIP;
@@ -1235,6 +1253,18 @@ void ST_drawSprite(uint8_t *layer, const uint8_t *src, int pitch, int x, int y, 
 	if (flags & kSTSpriteColMajor) {
 		f |= STDL_I8_COLMAJOR;
 	}
+	return f;
+}
+
+void ST_drawSprite(uint8_t *layer, const uint8_t *src, int pitch, int x, int y, int w, int h, const uint8_t *map16, unsigned flags, bool setPrio) {
+	// maskless view unless the priority plane is read or set: see
+	// blitRec (spritecache_st.cpp)
+	STDL_Surface *s = ST_layerView(layer, (flags & kSTSpriteRespectPrio) != 0 || setPrio);
+	if (!s) {
+		return;
+	}
+	pageTouch(layer, x, x + w, y, y + h);
+	unsigned f = ST_i8Flags(flags);
 	if (flags & kSTSpriteRespectPrio) {
 		f |= STDL_I8_UNDER;
 	}

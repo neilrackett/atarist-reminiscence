@@ -77,16 +77,6 @@ static bool g_warned;
 static void (*g_flushFn)(void *);
 static void *g_flushCtx;
 
-// bits for block columns [i, 15] and [0, i]
-static const uint16_t kColsFrom[16] = {
-	0xFFFF, 0x7FFF, 0x3FFF, 0x1FFF, 0x0FFF, 0x07FF, 0x03FF, 0x01FF,
-	0x00FF, 0x007F, 0x003F, 0x001F, 0x000F, 0x0007, 0x0003, 0x0001
-};
-static const uint16_t kColsTo[16] = {
-	0x8000, 0xC000, 0xE000, 0xF000, 0xF800, 0xFC00, 0xFE00, 0xFF00,
-	0xFF80, 0xFFC0, 0xFFE0, 0xFFF0, 0xFFF8, 0xFFFC, 0xFFFE, 0xFFFF
-};
-
 bool ST_dlRecording(const uint8_t *layer) {
 	return g_rec && layer == g_front;
 }
@@ -105,12 +95,19 @@ void ST_dlBegin(uint8_t *front) {
 	g_tokOpen = false;               // fixed at the first draw: the logic runs first, and may move the colours
 }
 
+// the end of the frame's fixed palette tokens: false if the colours
+// moved under its draws
+static bool closeTokens() {
+	if (!g_tokOpen) {
+		return true;
+	}
+	g_tokOpen = false;
+	return ST_sprTokensEnd();
+}
+
 void ST_dlAbort() {
 	g_rec = false;
-	if (g_tokOpen) {
-		ST_sprTokensEnd();
-		g_tokOpen = false;
-	}
+	closeTokens();
 	g_prevValid = false;             // the front layer is no longer what a list says
 }
 
@@ -147,9 +144,8 @@ bool ST_dlFlushed() {
 // A new entry for something drawn over [x, x+w) x [y, y+h), clipped to
 // the layer: 0 when none of it is on the layer, or when there is no
 // room left - then the list is drawn there and then (ST_dlFlushNow), and
-// ST_dlRecording is false for whoever asked, which draws it directly.
-static DlEntry *newEntry(int x, int y, int w, int h, bool *recorded) {
-	*recorded = true;
+// g_rec is false: whoever asked draws it directly.
+static DlEntry *newEntry(int x, int y, int w, int h) {
 	int x1 = x + w, y1 = y + h;
 	int cx = x, cy = y;
 	if (cx < 0) {
@@ -173,13 +169,12 @@ static DlEntry *newEntry(int x, int y, int w, int h, bool *recorded) {
 			warning("Display list full: a frame drew more than %d things", (int)kDlMax);
 		}
 		ST_dlFlushNow();
-		*recorded = false;
 		return 0;
 	}
 	DlEntry *e = g_next++;
 	e->by0 = (uint8_t)(cy >> 3);
 	e->by1 = (uint8_t)((y1 - 1) >> 3);
-	e->bmask = (uint16_t)(kColsFrom[cx >> 4] & kColsTo[(x1 - 1) >> 4]);
+	e->bmask = (uint16_t)(kSTColsFrom[cx >> 4] & kSTColsTo[(x1 - 1) >> 4]);
 	e->x = (int16_t)x;
 	e->y = (int16_t)y;
 	return e;
@@ -193,13 +188,9 @@ static inline uint16_t entryHash(const DlEntry *e) {
 
 bool ST_dlAddSprite(int kind, const uint8_t *data, uint32_t ident, int w, int h, int x, int y,
                     uint8_t colMask, unsigned flags, bool setPrio) {
-	if (w <= 0 || h <= 0) {
-		return true;
-	}
-	bool recorded;
-	DlEntry *e = newEntry(x, y, w, h, &recorded);
+	DlEntry *e = newEntry(x, y, w, h);  // (ST_sprDraw has turned away an empty size)
 	if (!e) {
-		return recorded;
+		return g_rec;
 	}
 	e->type = 0;
 	e->kind = (uint8_t)kind;
@@ -220,10 +211,9 @@ bool ST_dlAddSprite(int kind, const uint8_t *data, uint32_t ident, int w, int h,
 }
 
 bool ST_dlAddGlyph(const uint8_t *src, int pitch, int x, int y, uint8_t v, bool setPrio) {
-	bool recorded;
-	DlEntry *e = newEntry(x, y, 8, 8, &recorded);
+	DlEntry *e = newEntry(x, y, 8, 8);
 	if (!e) {
-		return recorded;
+		return g_rec;
 	}
 	e->type = 1;
 	e->kind = 0;
@@ -266,10 +256,9 @@ static inline bool hitsBlocks(const uint16_t *R, const DlEntry *e) {
 // every block that is. Entries to redraw are marked for ST_dlReplay.
 void ST_dlEnd(uint16_t *R, bool full) {
 	g_rec = false;
-	if (g_tokOpen && !ST_sprTokensEnd()) {
+	if (!closeTokens()) {
 		full = true;                 // the colours moved under the frame's draws
 	}
-	g_tokOpen = false;
 	DlEntry *C = g_dl[g_cur];
 	g_dlN[g_cur] = (int)(g_next - C);
 	const int nc = g_dlN[g_cur];
@@ -375,10 +364,7 @@ void ST_dlReplay() {
 // and the next frame starts from nothing
 void ST_dlEndFlushed() {
 	g_rec = false;
-	if (g_tokOpen) {
-		ST_sprTokensEnd();
-		g_tokOpen = false;
-	}
+	closeTokens();
 	g_flushed = false;
 	g_prevValid = false;
 }

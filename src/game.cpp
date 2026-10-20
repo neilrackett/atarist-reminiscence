@@ -22,6 +22,15 @@ extern "C" {
 #include <mint/osbind.h>
 #endif
 
+// the input a byte of a .DEM stream stands for (a replay's too)
+static void setKeymask(PlayerInput &pi, int keymask) {
+	pi.dirMask = keymask & 0xF;
+	pi.enter = (keymask & 0x10) != 0;
+	pi.space = (keymask & 0x20) != 0;
+	pi.shift = (keymask & 0x40) != 0;
+	pi.backspace = (keymask & 0x80) != 0;
+}
+
 #ifdef ATARIST
 #define GAME_COPYRECT_FRONT() _stub->copyRectPlanar(0, 0, _vid._w, _vid._h, _vid._frontLayer)
 #else
@@ -106,7 +115,7 @@ static uint32_t g_repLast;              // when the previous frame ended
 static uint32_t g_repFrames, g_repMs, g_repWorst;
 
 static inline uint32_t rotHash(uint32_t h, uint32_t v) {
-	return ((h << 5) | (h >> 27)) ^ v;
+	return ST_rol5(h) ^ v;
 }
 
 // Added, not XORed: a layer is 8960 longs, so a frame's rotations come
@@ -123,9 +132,9 @@ static void ST_replayHashFrame(const uint8_t *layer) {
 	const uint32_t *p = (const uint32_t *)layer;
 	uint32_t h = 0;
 	for (int n = kSTPlaneBytes / 4; --n >= 0; ) {
-		h = ((h << 5) | (h >> 27)) + *p++;
+		h = ST_rol5(h) + *p++;
 	}
-	g_repCur.hash = ((g_repCur.hash << 5) | (g_repCur.hash >> 27)) + h;
+	g_repCur.hash = ST_rol5(g_repCur.hash) + h;
 	if (g_repFrameHash && g_repFrames < g_repFrameHashCap) {
 		g_repFrameHash[g_repFrames] = h;
 	}
@@ -1254,11 +1263,8 @@ bool Game::stepLogic() {
 	uint8_t oldLevel = _currentLevel;
 #ifdef ATARIST
 	{
-		// Only the slots the bitmap says are in use: a level has up
-		// to 256 and a dozen or so are, so the walk was mostly empty
-		// slots. Processing one can start or stop another further on,
-		// and the walk must see that as the table walk did, so the
-		// byte is read again after each one, past it.
+		// only the slots in use, the byte read again after each object
+		// (see pge_firstLive)
 		const int pgeNum = _res._pgeNum;
 		for (int b = 0; b < pgeNum; b += 8) {
 			unsigned bits = _pge_liveBits[b >> 3];
@@ -1456,8 +1462,7 @@ void Game::updateTiming() {
 }
 
 #ifdef ATARIST
-// the next step of the schedule, 6 or 7 ticks of the 200Hz clock:
-// 30, 35, 35ms, which is 20 ticks for three steps
+// the objects live now, for the log_fps line
 int Game::ST_livePges() const {
 	int n = 0;
 	for (int i = 0; i < _res._pgeNum; ++i) {
@@ -1525,12 +1530,7 @@ void Game::ST_recStep() {
 			ST_replayDone();
 			return;
 		}
-		const uint8_t m = _stRecBuf[_stRecPos++];
-		pi.dirMask = m & 0xF;
-		pi.enter = (m & 0x10) != 0;
-		pi.space = (m & 0x20) != 0;
-		pi.shift = (m & 0x40) != 0;
-		pi.backspace = (m & 0x80) != 0;
+		setKeymask(pi, _stRecBuf[_stRecPos++]);
 		return;
 	}
 	if (_stRecPos >= kRecMaxSteps) {
@@ -1670,6 +1670,8 @@ void Game::ST_replayDone() {
 		endHash == _stRecHdr.endHash ? "match" : "DIVERGED");
 }
 
+// the next step of the schedule, 6 or 7 ticks of the 200Hz clock:
+// 30, 35, 35ms, which is 20 ticks for three steps
 int Game::stNextStep() {
 	static const uint8_t kStepMs[3] = { 30, 35, 35 };
 	const int ms = kStepMs[_stStepPhase];
@@ -1688,9 +1690,8 @@ void Game::playCutscene(int id) {
 		// A cutscene takes about 140K for its caches and pages. On a
 		// 2.5MB machine the sprite bakes and kept rooms can leave less
 		// than that: they go, and come back as play needs them.
-		if (((long)Malloc(-1) >> 10) < 200) {
-			ST_sprRelease();
-			ST_roomCacheRelease();
+		if (ST_freeK() < 200) {
+			ST_releaseRamCaches();
 		}
 #endif
 		ToggleWidescreenStack tws(_stub, false);
@@ -3104,8 +3105,7 @@ void Game::loadLevelData() {
 	// the bakes' memory back while the level loads; the first sprite
 	// drawn in it sizes the ring to what is left. The rooms kept for
 	// going back belong to the level that is going.
-	ST_sprRelease();
-	ST_roomCacheRelease();
+	ST_releaseRamCaches();
 #endif
 	info("Loading level %d", _currentLevel + 1);
 #ifdef ATARIST
@@ -3651,12 +3651,7 @@ void Game::inp_update() {
 	}
 #endif
 	if (_demoBin != -1 && _inp_demPos < _res._demLen) {
-		const int keymask = _res._dem[_inp_demPos++];
-		_stub->_pi.dirMask = keymask & 0xF;
-		_stub->_pi.enter = (keymask & 0x10) != 0;
-		_stub->_pi.space = (keymask & 0x20) != 0;
-		_stub->_pi.shift = (keymask & 0x40) != 0;
-		_stub->_pi.backspace = (keymask & 0x80) != 0;
+		setKeymask(_stub->_pi, _res._dem[_inp_demPos++]);
 	}
 }
 

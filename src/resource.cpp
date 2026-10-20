@@ -43,7 +43,7 @@ Resource::Resource(FileSystem *fs, ResourceType ver, Language lang) {
 	// GEMDOS, not read from phystop: this runs before the game is in
 	// supervisor mode, where low memory is out of reach. 4MB has about
 	// 2.9MB free here and 2.5MB about 1.4MB.
-	const int kBankDataSize = ((Malloc(-1) >> 10) >= 2048 && !(g_options.ab & kAbSmallBankArena)) ? 384 * 1024 : 0x7000;
+	const int kBankDataSize = (ST_freeK() >= 2048 && !(g_options.ab & kAbSmallBankArena)) ? kStArenaBig : kStArenaSmall;
 #else
 	static const int kBankDataSize = 0x7000;
 #endif
@@ -54,7 +54,7 @@ Resource::Resource(FileSystem *fs, ResourceType ver, Language lang) {
 	_bankDataTail = _bankData + kBankDataSize;
 	clearBankData();
 #ifdef ATARIST
-	info("Bank arena: %dK (%ldK was free)", kBankDataSize >> 10, (long)Malloc(-1) >> 10);
+	info("Bank arena: %dK (%ldK was free)", kBankDataSize >> 10, ST_freeK());
 #endif
 }
 
@@ -154,12 +154,8 @@ void Resource::clearLevelRes() {
 #ifdef ATARIST
 	ST_freeMonsters();
 	free(_stLevU); _stLevU = 0;
-	if (_stMbkU) {
-		// the banks were the arena's: it is all free again
-		_stMbkU = 0;
-		_stMbkUCount = 0;
-		_stMbkUEnd = 0;
-		clearBankData();
+	if (_stMbkUCount) {
+		ST_dropResidentBanks();              // the banks were the arena's: it is all free again
 	}
 #endif
 	free(_tbn); _tbn = 0;
@@ -1523,19 +1519,27 @@ static bool ST_haveUnpacked() {
 	return g_stUnpacked != 0;
 }
 
-bool Resource::ST_openUnpacked(File *f, const char *name, uint32_t *sizes, int count) {
+// With count, the file may hold 1 to maxCount streams and *count says
+// how many; without, it must hold exactly maxCount.
+bool Resource::ST_openUnpacked(File *f, const char *name, uint32_t *sizes, int maxCount, int *count) {
 	if (!ST_haveUnpacked() || !f->open(name, "rb", "UNPACKED")) {
 		return false;
 	}
 	const uint32_t len = f->size();
-	uint32_t total = 8 + 4 * count;
-	if (len >= total && f->readUint32BE() == 0x52585531 && f->readUint32BE() == (uint32_t)count) {
-		for (int i = 0; i < count; ++i) {
-			sizes[i] = f->readUint32BE();
-			total += sizes[i];
-		}
-		if (total == len && !f->ioErr()) {
-			return true;
+	if (len >= 8 && f->readUint32BE() == 0x52585531) {
+		const uint32_t n = f->readUint32BE();
+		uint32_t total = 8 + 4 * n;
+		if (count ? (n >= 1 && n <= (uint32_t)maxCount) : (n == (uint32_t)maxCount)) {
+			for (uint32_t i = 0; i < n; ++i) {
+				sizes[i] = f->readUint32BE();
+				total += sizes[i];
+			}
+			if (total == len && !f->ioErr()) {
+				if (count) {
+					*count = (int)n;
+				}
+				return true;
+			}
 		}
 	}
 	warning("UNPACKED\\%s is not what it should be, so DATA\\%s is unpacked instead", name, name);
@@ -1557,48 +1561,33 @@ bool Resource::ST_openUnpacked(File *f, const char *name, uint32_t *sizes, int c
 // A file holds a stream per room or per bank; anything missing, odd or
 // out of room and the game unpacks as before. With dst, the streams go
 // there if they fit in dstSize; without, into a block of their own.
-bool Resource::ST_readUnpackedTable(const char *name, int maxCount, uint8_t *dst, uint32_t dstSize, uint8_t **data, uint32_t *offs, uint32_t *sizes, int *count) {
-	enum { kMinRamK = 3584, kSpareK = 1024 };
-	extern int ATARIST_ramK();
-	if ((!dst && ATARIST_ramK() < kMinRamK) || !ST_haveUnpacked()) {
-		return false;
+// Returns where they went, or 0.
+uint8_t *Resource::ST_readUnpackedTable(const char *name, int maxCount, uint8_t *dst, uint32_t dstSize, uint32_t *offs, uint32_t *sizes, int *count) {
+	enum { kSpareK = 1024 };
+	if (!dst && ATARIST_ramK() < kSTResidentRamK) {
+		return 0;
 	}
 	File f;
-	if (!f.open(name, "rb", "UNPACKED")) {
-		return false;
-	}
-	const uint32_t len = f.size();
-	if (len < 8 || f.readUint32BE() != 0x52585531) {
-		warning("UNPACKED\\%s is not what it should be, so DATA\\%s is unpacked instead", name, name);
-		return false;
-	}
-	const uint32_t n = f.readUint32BE();
-	if (n == 0 || n > (uint32_t)maxCount) {
-		warning("UNPACKED\\%s is not what it should be, so DATA\\%s is unpacked instead", name, name);
-		return false;
+	if (!ST_openUnpacked(&f, name, sizes, maxCount, count)) {
+		return 0;
 	}
 	uint32_t total = 0;
-	for (uint32_t i = 0; i < n; ++i) {
-		sizes[i] = f.readUint32BE();
+	for (int i = 0; i < *count; ++i) {
 		offs[i] = total;
 		total += sizes[i];
-	}
-	if (f.ioErr() || 8 + 4 * n + total != len) {
-		warning("UNPACKED\\%s is not what it should be, so DATA\\%s is unpacked instead", name, name);
-		return false;
 	}
 	uint8_t *buf = dst;
 	if (dst) {
 		if (total > dstSize) {
-			return false;
+			return 0;
 		}
 	} else {
-		if (((long)Malloc(-1) >> 10) < (long)(total >> 10) + kSpareK) {
-			return false;                    // a machine without the RAM unpacks as it goes
+		if (ST_freeK() < (long)(total >> 10) + kSpareK) {
+			return 0;                        // a machine without the RAM unpacks as it goes
 		}
 		buf = (uint8_t *)malloc(total + 1);
 		if (!buf) {
-			return false;
+			return 0;
 		}
 	}
 	f.read(buf, total);
@@ -1606,11 +1595,16 @@ bool Resource::ST_readUnpackedTable(const char *name, int maxCount, uint8_t *dst
 		if (!dst) {
 			free(buf);
 		}
-		return false;
+		return 0;
 	}
-	*data = buf;
-	*count = (int)n;
-	return true;
+	return buf;
+}
+
+// the banks read ahead are gone from the arena, which is all free again
+void Resource::ST_dropResidentBanks() {
+	_stMbkUCount = 0;
+	_stMbkUEnd = 0;
+	clearBankData();
 }
 
 void Resource::ST_loadUnpackedResident(int objType) {
@@ -1621,19 +1615,18 @@ void Resource::ST_loadUnpackedResident(int objType) {
 		free(_stLevU);
 		_stLevU = 0;
 		int n;
-		if (ST_readUnpackedTable(_entryName, 64, 0, 0, &_stLevU, _stLevUOff, _stLevUSize, &n) && n != 64) {
+		_stLevU = ST_readUnpackedTable(_entryName, 64, 0, 0, _stLevUOff, _stLevUSize, &n);
+		if (_stLevU && n != 64) {
 			free(_stLevU);
 			_stLevU = 0;
 		}
 	} else {
-		// the arena is about to be written over from its start
-		_stMbkU = 0;
-		_stMbkUCount = 0;
-		_stMbkUEnd = 0;
-		clearBankData();
+		ST_dropResidentBanks();              // the arena is about to be written over from its start
+		if (_bankDataTail - _bankData < kStArenaBig) {
+			return;                          // 28K holds no level's banks (34K the least)
+		}
 		int n;
-		uint8_t *banks;
-		if (!ST_readUnpackedTable(_entryName, 256, _bankData, _bankDataTail - _bankData, &banks, _stMbkUOff, _stMbkUSize, &n)) {
+		if (!ST_readUnpackedTable(_entryName, 256, _bankData, _bankDataTail - _bankData, _stMbkUOff, _stMbkUSize, &n)) {
 			return;
 		}
 		// every bank as big as the packed table says, empty ones included,
@@ -1644,7 +1637,6 @@ void Resource::ST_loadUnpackedResident(int objType) {
 				return;
 			}
 		}
-		_stMbkU = banks;
 		_stMbkUCount = n;
 		_stMbkUEnd = _stMbkUOff[n - 1] + _stMbkUSize[n - 1];
 		clearBankData();                     // anything else goes after them
@@ -1687,7 +1679,7 @@ static void findMonsterRanges(const uint32_t *offsets) {
 // level. A machine without it keeps sharing _sprm, as before.
 bool Resource::ST_keepMonster(int num) {
 	enum { kSpareK = 320 };     // left for music, cutscenes and the rest
-	if (_stSprmSize == 0 || (Malloc(-1) >> 10) < (long)(_stSprmSize >> 10) + kSpareK) {
+	if (_stSprmSize == 0 || ST_freeK() < (long)(_stSprmSize >> 10) + kSpareK) {
 		return false;
 	}
 	uint8_t *buf = (uint8_t *)malloc(_stSprmSize);
@@ -1861,10 +1853,8 @@ uint8_t *Resource::loadBankData(uint16_t num) {
 	if (num < _stMbkUCount && _stMbkUSize[num] != 0) {
 		// unpacked ahead of time and kept for the level at the start of
 		// the arena: no unpacking, and the same address all level long
-		uint8_t *bank = _stMbkU + _stMbkUOff[num];
-		if (num < ARRAYSIZE(_bankPtr)) {
-			_bankPtr[num] = bank;
-		}
+		uint8_t *bank = _bankData + _stMbkUOff[num];
+		_bankPtr[num] = bank;                // num < _stMbkUCount <= 256
 		return bank;
 	}
 #endif

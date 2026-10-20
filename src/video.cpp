@@ -35,7 +35,6 @@ Video::Video(Resource *res, SystemStub *stub, WidescreenMode widescreenMode)
 	_stBackGen = 0;
 	memset(_blkForce, 0, sizeof(_blkForce));
 	_dlOn = false;
-	_dlFull = true;
 	_dlBackGen = 0;
 	memset(_prioDirty, 0xFF, sizeof(_prioDirty));
 #endif
@@ -87,6 +86,42 @@ void Video::ST_rebakeRoom() {
 	ST_copyLayer(_frontLayer, _backLayer);
 }
 
+// Leading zeros of a byte (8 for none): the column of a block row's first
+// set bit in two lookups, and the length of the run it starts in two
+// more, where walking the 16 bits a column at a time was most of what
+// finding a frame's runs cost.
+static uint8_t g_clz8[256];
+
+static inline int clz16(uint16_t m) {
+	return (m >> 8) ? g_clz8[m >> 8] : 8 + g_clz8[m & 0xFF];
+}
+
+// The next run of set columns in m, [*i, *i + *n), taken out of m;
+// false when there are none left
+static inline bool nextRun(uint16_t &m, int *i, int *n) {
+	if (!m) {
+		return false;
+	}
+	const int c = clz16(m);
+	const int len = clz16((uint16_t)~(uint16_t)(m << c));
+	m = (c + len >= 16) ? 0 : (uint16_t)(m & (0xFFFFu >> (c + len)));
+	*i = c;
+	*n = len;
+	return true;
+}
+
+static void initClz8() {
+	if (g_clz8[0] == 0) {
+		for (int b = 0; b < 256; ++b) {
+			int n = 0;
+			while (n < 8 && !(b & (0x80 >> n))) {
+				++n;
+			}
+			g_clz8[b] = (uint8_t)n;
+		}
+	}
+}
+
 // Restore only the screen blocks the last frame drew (anything drawn
 // goes through markBlockAsDirty). Block lifecycle on the ST:
 //
@@ -100,15 +135,6 @@ void Video::ST_rebakeRoom() {
 // (the front layer is clean, the screen never hears about it).
 // Compared with upstream's 2->1->0, blocks restore once instead of
 // twice.
-// bits for columns [i, 15] and for columns [0, i]
-static const uint16_t kColsFrom[16] = {
-	0xFFFF, 0x7FFF, 0x3FFF, 0x1FFF, 0x0FFF, 0x07FF, 0x03FF, 0x01FF,
-	0x00FF, 0x007F, 0x003F, 0x001F, 0x000F, 0x0007, 0x0003, 0x0001
-};
-static const uint16_t kColsTo[16] = {
-	0x8000, 0xC000, 0xE000, 0xF000, 0xF800, 0xFC00, 0xFE00, 0xFF00,
-	0xFF80, 0xFFC0, 0xFFE0, 0xFFF0, 0xFFF8, 0xFFFC, 0xFFFE, 0xFFFF
-};
 
 // The copies live in their own functions on purpose: gcc 4.6 ran
 // out of registers in the walk below and spilled the loop counters
@@ -156,7 +182,7 @@ void Video::ST_restoreDirty() {
 		ST_copyLayer(_frontLayer, _backLayer);
 		return;
 	}
-	const int cols = _w / SCREENBLOCK_W;
+	initClz8();
 	const int rows = _h / SCREENBLOCK_H;
 	// The priority plane is only worth putting back where something
 	// wrote it: sprites mostly read it, and an ordinary frame leaves
@@ -181,36 +207,18 @@ void Video::ST_restoreDirty() {
 		}
 		const int yy = j * SCREENBLOCK_H;
 		const int lines = (j2 - j) * SCREENBLOCK_H;
-		int i = 0;
-		uint16_t bit = 0x8000;
-		while (i < cols) {
-			if ((m & bit) == 0) {
-				++i;
-				bit >>= 1;
+		// SCREENBLOCK_W is 16 here, so a block is exactly a group
+		uint16_t mm = m;
+		int i, groups;
+		while (nextRun(mm, &i, &groups)) {
+			const int off = yy * kSTRowBytes + i * 8;
+			restorePlanes(_frontLayer + off, _backLayer + off, groups, lines);
+			if (j > pby1 || j2 - 1 < pby0 || i > pbx1 || i + groups - 1 < pbx0) {
 				continue;
 			}
-			int i2 = i + 1;
-			uint16_t b2 = (uint16_t)(bit >> 1);
-			while (i2 < cols && (m & b2) != 0) {
-				++i2;
-				b2 >>= 1;
-			}
-			bit = b2;
-			// SCREENBLOCK_W is 16 here, so a block is exactly a group
-			const int gx0 = i;
-			const int groups = i2 - i;
-			{
-				const int off = yy * kSTRowBytes + gx0 * 8;
-				restorePlanes(_frontLayer + off, _backLayer + off, groups, lines);
-				if (j > pby1 || j2 - 1 < pby0 || i > pbx1 || i2 - 1 < pbx0) {
-					i = i2;
-					continue;
-				}
-				const int poff = kSTPlaneBytes + yy * kSTPrioRowBytes + gx0 * 2;
-				restorePrio(_frontLayer + poff, _backLayer + poff, groups, lines,
-					((gx0 & 1) == 0) ? (groups >> 1) : 0);
-			}
-			i = i2;
+			const int poff = kSTPlaneBytes + yy * kSTPrioRowBytes + i * 2;
+			restorePrio(_frontLayer + poff, _backLayer + poff, groups, lines,
+				((i & 1) == 0) ? (groups >> 1) : 0);
 		}
 		j = j2;
 	}
@@ -220,45 +228,6 @@ void Video::ST_restoreDirty() {
 		_blkShown[j] = 0;
 	}
 }
-#endif
-
-#ifdef ATARIST
-// Leading zeros of a byte (8 for none): the column of a block row's first
-// set bit in two lookups, and the length of the run it starts in two
-// more, where walking the 16 bits a column at a time was most of what
-// finding a frame's runs cost.
-static uint8_t g_clz8[256];
-
-static inline int clz16(uint16_t m) {
-	return (m >> 8) ? g_clz8[m >> 8] : 8 + g_clz8[m & 0xFF];
-}
-
-// The next run of set columns in m, [*i, *i + *n), taken out of m;
-// false when there are none left
-static inline bool nextRun(uint16_t &m, int *i, int *n) {
-	if (!m) {
-		return false;
-	}
-	const int c = clz16(m);
-	const int len = clz16((uint16_t)~(uint16_t)(m << c));
-	m = (c + len >= 16) ? 0 : (uint16_t)(m & (0xFFFFu >> (c + len)));
-	*i = c;
-	*n = len;
-	return true;
-}
-
-static void initClz8() {
-	if (g_clz8[0] == 0) {
-		for (int b = 0; b < 256; ++b) {
-			int n = 0;
-			while (n < 8 && !(b & (0x80 >> n))) {
-				++n;
-			}
-			g_clz8[b] = (uint8_t)n;
-		}
-	}
-}
-
 // The blocks set in blk back from the back layer: the planes, and the
 // priority plane where prio says it may differ from the room's - only
 // where a MARK wrote it (an icon, highlighted text), so mostly nowhere.
@@ -304,8 +273,7 @@ void Video::ST_restoreBlocks(const uint16_t *blk, const uint16_t *prio) {
 static void ST_dlFlushLayer(void *ctx) {
 	Video *v = (Video *)ctx;
 	ST_copyLayer(v->_frontLayer, v->_backLayer);
-	uint16_t gone[Video::kBlockRows];
-	ST_takePrioBlocks(gone);             // all of it is the room's again
+	ST_prioDropBlocks();                 // all of it is the room's again
 	memset(v->_prioDirty, 0, sizeof(v->_prioDirty));
 }
 
@@ -327,15 +295,13 @@ void Video::ST_frameEnd() {
 		// drawn whole mid-frame (the list filled, or the banks it named
 		// were about to go): it all goes to the screen
 		ST_dlEndFlushed();
-		int px0, py0, px1, py1;
-		ST_takePrioRect(&px0, &py0, &px1, &py1);
+		ST_prioDropRect();
 		for (int j = 0; j < kBlockRows; ++j) {
 			_blkDirty[j] = 0xFFFF;
 			_blkOwed[j] = 0;
 			_blkShown[j] = 0;
 			_blkForce[j] = 0;
 		}
-		_dlFull = false;
 		_dlBackGen = _stBackGen;
 		return;
 	}
@@ -346,12 +312,10 @@ void Video::ST_frameEnd() {
 	}
 	// a decoded room, a full refresh, anything drawn over the whole
 	// front layer: nothing on it can be trusted, so it is all redrawn
-	const bool full = _fullRefresh || _dlFull || _dlBackGen != _stBackGen;
-	_dlFull = false;
+	const bool full = _fullRefresh || _dlBackGen != _stBackGen;
 	_dlBackGen = _stBackGen;
 	ST_dlEnd(R, full);
-	int px0, py0, px1, py1;
-	ST_takePrioRect(&px0, &py0, &px1, &py1);   // the old restore's record; this one keeps blocks
+	ST_prioDropRect();                         // the old restore's record; this one keeps blocks
 	ST_takePrioBlocks(_prioDirty);             // where the priority plane may now differ from the room's
 	if (full) {
 		ST_copyLayer(_frontLayer, _backLayer);
@@ -373,8 +337,7 @@ void Video::ST_frameEnd() {
 
 void Video::ST_frameAbort() {
 	if (_dlOn) {
-		ST_dlAbort();
-		_dlFull = true;
+		ST_dlAbort();                    // and the next frame is drawn whole
 	}
 }
 
@@ -383,14 +346,14 @@ void Video::ST_backChanged(int x, int y, int w, int h) {
 		markBlockAsDirty(x, y, w, h, _layerScale);
 		return;
 	}
-	const uint16_t m = (uint16_t)(kColsFrom[x / SCREENBLOCK_W] & kColsTo[(x + w - 1) / SCREENBLOCK_W]);
+	const uint16_t m = (uint16_t)(kSTColsFrom[x / SCREENBLOCK_W] & kSTColsTo[(x + w - 1) / SCREENBLOCK_W]);
 	for (int j = y / SCREENBLOCK_H; j <= (y + h - 1) / SCREENBLOCK_H; ++j) {
 		_blkForce[j] |= m;
 	}
 }
 
 bool Video::ST_blocksDirty(int x, int y, int w, int h) const {
-	const uint16_t m = (uint16_t)(kColsFrom[x / SCREENBLOCK_W] & kColsTo[(x + w - 1) / SCREENBLOCK_W]);
+	const uint16_t m = (uint16_t)(kSTColsFrom[x / SCREENBLOCK_W] & kSTColsTo[(x + w - 1) / SCREENBLOCK_W]);
 	for (int j = y / SCREENBLOCK_H; j <= (y + h - 1) / SCREENBLOCK_H; ++j) {
 		if (_blkDirty[j] & m) {
 			return true;
@@ -432,7 +395,7 @@ void Video::markBlockAsDirty(int16_t x, int16_t y, uint16_t w, uint16_t h, int s
 #ifdef ATARIST
 	// one OR a row: the marks are what the two frame walks used to go
 	// looking for, and this is where they were already known
-	const uint16_t m = (uint16_t)(kColsFrom[bx1] & kColsTo[bx2]);
+	const uint16_t m = (uint16_t)(kSTColsFrom[bx1] & kSTColsTo[bx2]);
 	if (_dlOn) {
 		// drawn outside a listed frame - a menu, the inventory - so the
 		// next listed frame must put these blocks back too
@@ -589,7 +552,7 @@ void Video::fullRefresh() {
 	memset(_blkDirty, 0, sizeof(_blkDirty));
 	memset(_blkShown, 0, sizeof(_blkShown));
 	memset(_blkOwed, 0, sizeof(_blkOwed));
-	_dlFull = true;
+	ST_dlInvalidate();
 #endif
 }
 
@@ -1119,12 +1082,11 @@ static void DOS_drawTileMask(uint8_t *dst, int x0, int y0, int w, int h, uint8_t
 // the whole level, keyed on the SGD data and the version of the
 // colours of palette base 0, the only one they are drawn in (a room
 // whose other slots change keeps them): the jungle rooms share most
-// of their scenery, so a
-// second visit or a neighbouring room finds nearly everything
-// ready. The cells live in one pool filled front to back and
-// wrapped; a wrap forgets whatever it overwrites. The pool holds
-// the largest room's set with room to spare, and is released when
-// a level without SGD scenery loads.
+// of their scenery, so a second visit or a neighbouring room finds
+// nearly everything ready. The cells live in one pool filled front
+// to back and wrapped; a wrap forgets whatever it overwrites. The
+// pool holds the largest room's set with room to spare, and is
+// released when a level without SGD scenery loads.
 enum {
 	kSgdPoolSize = 96 * 1024,
 	kSgdSlots = 256                     // more than any SGD has tiles
@@ -1160,8 +1122,7 @@ static void ST_sgdRelease() {
 
 void Video::ST_releaseLevelCaches() {
 	ST_sgdRelease();
-	ST_sprRelease();
-	ST_roomCacheRelease();
+	ST_releaseRamCaches();
 }
 
 // the tile's cells, preparing them if they are not in the pool
@@ -1470,9 +1431,8 @@ static void ST_tilesRelease() {
 static void ST_tilesForRoom(const uint8_t *buf, int count, bool stable, uint32_t epoch) {
 	if (!g_stTileSized) {
 		g_stTileSized = true;
-		extern int ATARIST_ramK();
 		enum { kBlock = kTilesBig * (8 * 8 + sizeof(*g_stTileSrc) + sizeof(*g_stTileVer) + 1) };
-		if (ATARIST_ramK() >= 3584) {
+		if (ATARIST_ramK() >= kSTResidentRamK) {
 			// cells first: 64 bytes each keeps what follows aligned
 			uint8_t *p = (uint8_t *)Malloc(kBlock);
 			if ((long)p > 0) {
@@ -1510,41 +1470,58 @@ static void ST_tilesForRoom(const uint8_t *buf, int count, bool stable, uint32_t
 	ST_prioTouched();
 }
 
-// the cells for one room tile, from the cache or packed into it; flags
-// as the cache keys them: the palette base (0x00, 0x10, 0x80 or 0x90),
-// 1 for an x flip, 2 for a y flip, 4 for colour 0 transparent
-static const uint8_t *ST_tileCells(const uint8_t *src, uint8_t flags) {
-	const int base = ((flags >> 4) & 1) | ((flags >> 6) & 2);
-	const unsigned long n = (unsigned long)((src - g_stTileBuf) >> 5);
-	if (n >= (unsigned long)g_stTileCount) {
-		// past what the room copied (upstream reads the buffer's
-		// leftovers there): drawn, never kept
-		static uint8_t cells[8 * 8];
-		ST_amigaTile8(cells, src, g_stTilePair[base], (flags & 1) != 0, (flags & 2) != 0, (flags & 4) != 0);
-		return cells;
+// Flags as the tile cache keys them: the palette base (0x00, 0x10, 0x80
+// or 0x90), 1 for an x flip, 2 for a y flip, 4 for colour 0 transparent
+static inline int ST_tileBase(uint8_t flags) {
+	return ((flags >> 4) & 1) | ((flags >> 6) & 2);
+}
+
+static void ST_tilePackFlags(uint8_t *cells, int n, uint8_t flags) {
+	ST_amigaTile8(cells, g_stTileBuf + n * 32, g_stTilePair[ST_tileBase(flags)],
+		(flags & 1) != 0, (flags & 2) != 0, (flags & 4) != 0);
+}
+
+// the misses, out of line so a hit pays for none of their registers:
+// tile n packed into way i of the cache, or a tile past what the room
+// copied (upstream reads the buffer's leftovers there), drawn, never kept
+static __attribute__((noinline)) const uint8_t *ST_tileMiss(int n, uint8_t flags, int i, const uint8_t *key, uint16_t ver) {
+	ST_tilePackFlags(g_stTileCells[i], n, flags);
+	g_stTileSrc[i] = key;
+	g_stTileFlags[i] = flags;
+	g_stTileVer[i] = ver;
+	++g_stPerf.tilePreps;
+	return g_stTileCells[i];
+}
+
+static __attribute__((noinline)) const uint8_t *ST_tileStray(int n, uint8_t flags) {
+	static uint8_t cells[8 * 8];
+	ST_tilePackFlags(cells, n, flags);
+	return cells;
+}
+
+// the cells for the room's tile n, from the cache or packed into it
+static inline __attribute__((always_inline)) const uint8_t *ST_tileCells(int n, uint8_t flags) {
+	if ((unsigned)n >= (unsigned)g_stTileCount) {
+		return ST_tileStray(n, flags);
 	}
 	const uint8_t *key = g_stTileOrig[n];
-	const uint16_t ver = g_stTileVerNow[base];
+	const uint16_t ver = g_stTileVerNow[ST_tileBase(flags)];
 	// tiles a bank's width apart would share the low bits: fold the
 	// next ones in (16-bit, constant shifts)
 	const uint16_t h = (uint16_t)((uintptr_t)key >> 5);
 	const int set = (h ^ (h >> 4) ^ flags) & (g_stTileSets - 1);
-	int i = set << 1;
+	const int i = set << 1;
 	if (g_stTileSrc[i] == key && g_stTileFlags[i] == flags && g_stTileVer[i] == ver) {
 		g_stTileNext[set] = 1;
-	} else if (g_stTileSrc[i + 1] == key && g_stTileFlags[i + 1] == flags && g_stTileVer[i + 1] == ver) {
-		++i;
-		g_stTileNext[set] = 0;
-	} else {
-		i += g_stTileNext[set];
-		g_stTileNext[set] ^= 1;
-		ST_amigaTile8(g_stTileCells[i], src, g_stTilePair[base], (flags & 1) != 0, (flags & 2) != 0, (flags & 4) != 0);
-		g_stTileSrc[i] = key;
-		g_stTileFlags[i] = flags;
-		g_stTileVer[i] = ver;
-		++g_stPerf.tilePreps;
+		return g_stTileCells[i];
 	}
-	return g_stTileCells[i];
+	if (g_stTileSrc[i + 1] == key && g_stTileFlags[i + 1] == flags && g_stTileVer[i + 1] == ver) {
+		g_stTileNext[set] = 0;
+		return g_stTileCells[i + 1];
+	}
+	const int way = g_stTileNext[set];
+	g_stTileNext[set] ^= 1;
+	return ST_tileMiss(n, flags, i + way, key, ver);
 }
 
 // decodeLevHelper's two passes for the ST: the 32 x 28 grid of 8x8
@@ -1554,8 +1531,9 @@ static const uint8_t *ST_tileCells(const uint8_t *src, uint8_t flags) {
 // it. The background is drawn with no transparent colour, so its
 // tiles are opaque throughout and take the kernel without the mask
 // tests. The grid words are upstream's: the tile (11 bits), x flip
-// (bit 11), y flip (12), the palette bits (13-15).
-static void ST_decodeLevTiles(uint8_t *dst, const uint8_t *src, int offset10, int offset12, const uint8_t *a5, bool sgdBuf) {
+// (bit 11), y flip (12), the palette bits (13-15). Tile n is the 32
+// bytes at n * 32 in the room's tile buffer (ST_tilesForRoom's).
+static void ST_decodeLevTiles(uint8_t *dst, const uint8_t *src, int offset10, int offset12, bool sgdBuf) {
 	if (offset10 != 0) {
 		const uint8_t *a0 = src + offset10;
 		uint8_t *planes = dst;
@@ -1569,7 +1547,7 @@ static void ST_decodeLevTiles(uint8_t *dst, const uint8_t *src, int offset10, in
 					if ((d3 & 0x8000) != 0) {
 						mask = 0x80 + ((d3 >> 6) & 0x10);
 					}
-					const uint8_t *cells = ST_tileCells(a5 + d0 * 32, (uint8_t)(mask | ((d3 >> 11) & 3)));
+					const uint8_t *cells = ST_tileCells(d0, (uint8_t)(mask | ((d3 >> 11) & 3)));
 					placeTile8OpaqueAsm(planes + ((c >> 1) << 3) + (c & 1), prio + c, cells, (mask & 0x80) ? 0xFF : 0);
 				}
 			}
@@ -1596,7 +1574,7 @@ static void ST_decodeLevTiles(uint8_t *dst, const uint8_t *src, int offset10, in
 							mask = 0x90;
 						}
 					}
-					const uint8_t *cells = ST_tileCells(a5 + d0 * 32, (uint8_t)(mask | ((d3 >> 11) & 3) | 4));
+					const uint8_t *cells = ST_tileCells(d0, (uint8_t)(mask | ((d3 >> 11) & 3) | 4));
 					placeTile8Asm(planes + ((c >> 1) << 3) + (c & 1), prio + c, cells, (mask & 0x80) ? 0xFF : 0);
 				}
 			}
@@ -1694,7 +1672,7 @@ void Video::PC98_decodeMap(int level, int room) {
 // where RAM is to spare (a 4MB machine), and given back with the level.
 struct STRoomCache {
 	uint8_t *layer;             // kSTLayerSize, from GEMDOS; 0 = empty
-	uint32_t remapHash;
+	uint8_t remap[64];          // the colours it was drawn in (ST_roomRemap)
 	uint32_t used;
 	int16_t level, levNum, room;
 	uint8_t hdr[16];            // the room data's header: SGD flag, palette slots
@@ -1704,16 +1682,18 @@ static STRoomCache g_roomCache[kRoomCacheMax];
 static uint32_t g_roomUse;
 
 // What a room is drawn from: its tiles and scenery take their colours
-// from bases 0x00, 0x10, 0x80 and 0x90 and nothing else. Hashing just
-// those keeps a room good when a monster's colours or the text's move.
-static uint32_t ST_remapHash() {
-	const uint32_t *p = (const uint32_t *)ST_getRemap();
-	uint32_t h = 0;
-	for (int n = 32 / 4; --n >= 0; ) {
-		h = ((h << 5) | (h >> 27)) + p[n];
-		h = ((h << 5) | (h >> 27)) + p[(0x80 / 4) + n];
-	}
-	return h;
+// from bases 0x00, 0x10, 0x80 and 0x90 and nothing else. Keeping just
+// those keeps a room good when a monster's colours or the text's move;
+// kept whole, not hashed, so no other mapping can pass for it.
+static void ST_roomRemap(uint8_t *out) {
+	const uint8_t *r = ST_getRemap();
+	memcpy(out, r, 32);
+	memcpy(out + 32, r + 0x80, 32);
+}
+
+static bool ST_roomRemapIs(const uint8_t *k) {
+	const uint8_t *r = ST_getRemap();
+	return memcmp(k, r, 32) == 0 && memcmp(k + 32, r + 0x80, 32) == 0;
 }
 
 void ST_roomCacheRelease() {
@@ -1724,6 +1704,11 @@ void ST_roomCacheRelease() {
 		}
 	}
 	ST_tilesRelease();
+}
+
+void ST_releaseRamCaches() {
+	ST_sprRelease();
+	ST_roomCacheRelease();
 }
 
 static STRoomCache *ST_roomFind(int level, int levNum, int room) {
@@ -1746,7 +1731,7 @@ bool Video::ST_roomFromCache(int level, int room) {
 	}
 	ST_paletteForRoom(level + 1, _res->_levNum, room);
 	AMIGA_setLevelPalettes(level, e->hdr);
-	if (ST_remapHash() != e->remapHash) {
+	if (!ST_roomRemapIs(e->remap)) {
 		++g_stPerf.roomRemap;
 		return false;              // other colours now: drawn afresh, the same setup again
 	}
@@ -1772,7 +1757,7 @@ void Video::ST_roomToCache(int level, int room, const uint8_t *hdr) {
 		for (int i = 0; i < kRoomCacheMax && !e; ++i) {
 			STRoomCache *c = &g_roomCache[i];
 			if (!c->layer) {
-				if (((long)Malloc(-1) >> 10) >= (kSTLayerSize >> 10) + 1 + kRoomCacheSpareK) {
+				if (ST_freeK() >= (kSTLayerSize >> 10) + 1 + kRoomCacheSpareK) {
 					c->layer = (uint8_t *)Malloc(kSTLayerSize);
 					if (c->layer) {
 						e = c;
@@ -1795,7 +1780,7 @@ void Video::ST_roomToCache(int level, int room, const uint8_t *hdr) {
 	e->levNum = (int16_t)_res->_levNum;
 	e->room = (int16_t)room;
 	memcpy(e->hdr, hdr, sizeof(e->hdr));
-	e->remapHash = ST_remapHash();
+	ST_roomRemap(e->remap);
 	e->used = ++g_roomUse;
 	memcpy(e->layer, _frontLayer, kSTLayerSize);
 }
@@ -1823,6 +1808,9 @@ void Video::AMIGA_decodeLev(int level, int room) {
 	const uint16_t offset12 = READ_BE_UINT16(tmp + 12);
 	const uint16_t offset14 = READ_BE_UINT16(tmp + 14);
 	static const int kTempMbkSize = 1024;
+#ifdef ATARIST
+	typedef char TileBufCheck[(kTempMbkSize == kTileBufTiles) ? 1 : -1];   // g_stTileOrig's size
+#endif
 	uint8_t *buf = (uint8_t *)malloc(kTempMbkSize * 32);
 	if (!buf) {
 		error("Unable to allocate mbk temporary buffer");
@@ -1901,7 +1889,7 @@ void Video::AMIGA_decodeLev(int level, int room) {
 		offset10 = 0;
 	}
 #ifdef ATARIST
-	ST_decodeLevTiles(_frontLayer, tmp, offset10, offset12, buf, tmp[1] != 0);
+	ST_decodeLevTiles(_frontLayer, tmp, offset10, offset12, tmp[1] != 0);
 #else
 	DrawTileProc drawTile = _res->isAmiga() ? AMIGA_drawTile : DOS_drawTile;
 	decodeLevHelper(_frontLayer, tmp, offset10, offset12, buf, tmp[1] != 0, drawTile, _res->_readUint16);

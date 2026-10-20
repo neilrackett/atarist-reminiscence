@@ -277,11 +277,20 @@ tools/bench/compare.py --frames TAG_A TAG_B MACHINE SCENARIO...
 
 The first prints steady ms/frame per scenario and the total. Quote the
 total: code layout alone moves a single scenario by a few percent. The
-second compares the frame hashes of two `replay_hash=true` runs, which
-is how an optimisation is shown to draw exactly what it replaced
-(`ab=8` draws every sprite straight from its source, the reference).
-A Mega STE's frame times move with code layout through its cache, so
-compare it inside one binary, using `ab=` to switch features.
+second compares two `replay_hash=true` runs: every frame's picture is
+hashed, the hashes are combined per 64-frame window and logged, and the
+windows must all match. That is how an optimisation is shown to draw
+exactly what it replaced (`ab=8` draws every sprite straight from its
+source, the reference). Hashing costs about 30ms a frame on a plain ST,
+inside the timed frame, so a hash run's times say nothing; time with a
+run of its own. A Mega STE's frame times move with code layout through
+its cache, so compare it inside one binary, using `ab=` to switch
+features.
+
+When two runs part, the run directories say where: `FHASH.BIN` holds
+each frame's own hash (`cmp` two of them for the first frame that
+differs), and `replay_dump=N` in `CFG` writes frame N's layer and
+colours to `DMP.BIN` to look at.
 
 **Saves in busy rooms.** `tools/bench/teleport-save.py SRC.SAV LEVEL ROOM
 X Y OUT_DIR` copies a save made at a level's start with Conrad moved to

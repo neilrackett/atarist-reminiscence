@@ -301,7 +301,7 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 	}
 	if (_dblBuf && h >= 32 && groups >= 8 && _srcW == kSTLayerW
 	    && STDL_GetMachineInfo()->has_blitter) {
-		STDL_Surface *bare = ST_layerSurfaceBare((uint8_t *)layer);
+		STDL_Surface *bare = ST_layerView((uint8_t *)layer, false);
 		if (bare) {
 			int j = 0;
 			while (j < h) {
@@ -838,8 +838,10 @@ void SystemStub_STDL::getPaletteEntry(int i, Color *c) {
 // effect (index |= 8) becomes a plane-3 OR.
 static bool g_cutscenePal;
 
-// Bumped whenever _remap changes. Callers that bake the mapping into
-// planar pixels (the sprite cache) key their entries on this.
+// Bumped whenever _remap changes. What bakes the mapping into planar
+// pixels keys on the colours themselves (palette tokens, the pair
+// tables' versions, the room cache's remap bytes); this only says when
+// to look at them again.
 static uint16_t g_remapGen = 1;
 
 uint16_t ST_remapGen() {
@@ -1097,8 +1099,8 @@ void SystemStub_STDL::quantiseClusters(uint16_t *col, uint16_t *cnt, int n, uint
 	static int memoNext;
 	uint32_t hash = (uint32_t)n * 2 + (perceptual ? 1 : 0);
 	for (int i = 0; i < n; ++i) {
-		hash = ((hash << 5) | (hash >> 27)) + col[i];
-		hash = ((hash << 5) | (hash >> 27)) + cnt[i];
+		hash = ST_rol5(hash) + col[i];
+		hash = ST_rol5(hash) + cnt[i];
 	}
 	for (int k = 0; k < kMemo; ++k) {
 		const Memo &e = memo[k];
@@ -1738,11 +1740,11 @@ void SystemStub_STDL::buildRemap() {
 				isChg[changed[c]] = true;
 			}
 			const bool perceptual = _haveColW && !g_cutscenePal;
-			// Only a slot that actually moved makes the remap new: every
-			// planar bake and every room cell keys on the generation, and
-			// a palette poke that lands each entry where it already was
-			// (a monster's half of the palette set again, unchanged) used
-			// to throw all of them away.
+			// Only a slot that actually moved makes the remap new: the
+			// caches that bake colours in look again at a new generation,
+			// and a palette poke that lands each entry where it already
+			// was (a monster's half of the palette set again, unchanged)
+			// used to throw all of their work away.
 			bool moved = false;
 			for (int c = 0; c < nchg; ++c) {
 				const int i = changed[c];
@@ -2135,7 +2137,11 @@ void ST_logFreeMemory(const char *where) {
 	if (!g_options.logging) {
 		return;
 	}
-	info("Memory at %s: largest free block %ldK", where, (long)Malloc(-1) >> 10);
+	info("Memory at %s: largest free block %ldK", where, ST_freeK());
+}
+
+long ST_freeK() {
+	return (long)Malloc(-1) >> 10;
 }
 
 uint32_t ST_overscanMisses() {
