@@ -280,8 +280,7 @@ total: code layout alone moves a single scenario by a few percent. The
 second compares two `replay_hash=true` runs: every frame's picture is
 hashed, the hashes are combined per 64-frame window and logged, and the
 windows must all match. That is how an optimisation is shown to draw
-exactly what it replaced (`ab=8` draws every sprite straight from its
-source, the reference). Hashing costs about 30ms a frame on a plain ST,
+exactly what it replaced. Hashing costs about 30ms a frame on a plain ST,
 inside the timed frame, so a hash run's times say nothing; time with a
 run of its own. A Mega STE's frame times move with code layout through
 its cache, so compare it inside one binary, using `ab=` to switch
@@ -291,6 +290,28 @@ When two runs part, the run directories say where: `FHASH.BIN` holds
 each frame's own hash (`cmp` two of them for the first frame that
 differs), and `replay_dump=N` in `CFG` writes frame N's layer and
 colours to `DMP.BIN` to look at.
+
+**Checking a change.**
+
+```
+tools/bench/verify.sh TAG [PREV]
+```
+
+Does the lot for `dist/FLASHBAK.TOS`, keeping a copy as
+`tmp/bench/bin/TAG.TOS`: every scenario hashed and compared with the
+reference, its ending checked, then timed and compared with run `PREV`,
+then the time each room took to enter. It exits non-zero when a picture
+or an ending differs. `SCENS=` narrows the scenarios, `MACHINE=`,
+`MEM=` and `UNP=` pass through.
+
+The reference is one `replay_hash=true` run, tag `ref`, of the build
+with every sprite drawn from its source and whole frames redrawn
+(`ab=24`, no bakes and no display list - the drawing nearest upstream's).
+Make it again whenever a scenario is added or recorded again:
+
+```
+CFG="ab=24;replay_hash=true" tools/bench/replay.sh ref st SCENARIO...
+```
 
 **Saves in busy rooms.** `tools/bench/teleport-save.py SRC.SAV LEVEL ROOM
 X Y OUT_DIR` copies a save made at a level's start with Conrad moved to
