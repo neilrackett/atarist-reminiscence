@@ -76,13 +76,13 @@ void Game::col_preparePiegeState(LivePGE *pge) {
 			}
 			LivePGE *temp_pge = ct_slot2->live_pge;
 			if (temp_pge->flags & 0x80) {
-				_pge_liveTable2[temp_pge->index] = temp_pge;
+				pge_setLive(temp_pge->index, temp_pge);
 				temp_pge->flags |= 4;
 			}
 			if (ct_slot2->prev_slot) {
 				temp_pge = ct_slot2->prev_slot->live_pge;
 				if (temp_pge->flags & 0x80) {
-					_pge_liveTable2[temp_pge->index] = temp_pge;
+					pge_setLive(temp_pge->index, temp_pge);
 					temp_pge->flags |= 4;
 				}
 			}

@@ -15,7 +15,8 @@
 	  previous scene's colours.
 	- a SystemStub::rumble() hook, called when Conrad takes a hit
 	  (does nothing unless a platform implements it).
-	- the previous level's .SPC data is freed instead of leaked.
+	- the previous level's .SPC data is freed instead of leaked, and so
+	  is level 2's room data when Conrad crosses into its other half.
 	- PERSO.SPM's sprite buffer is allocated before its packed copy, so
 	  the space the copy frees is not left under the sprites.
 	- builds without zlib (plain save files) or an Ogg decoder.
@@ -29,7 +30,8 @@
 	  and collision grid bands, pge_collideTestByNumber,
 	  pge_op_isInRandomRange and markBlockAsDirty.
 	- READ_BE/LE helpers always inlined; hot resource reads skip the
-	  function pointer, and findBankData remembers its last hit.
+	  function pointer, and findBankData looks a bank up by its number
+	  in a table instead of searching the loaded ones.
 	- the Amiga title's opening wipe copies only the two rows each step
 	  reveals rather than the whole open band, and keeps its steps 30ms
 	  apart whatever one costs to draw: 6.9s -> 1.7s at 8MHz.

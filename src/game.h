@@ -118,6 +118,34 @@ struct Game {
 	uint32_t _stDeadline;
 	uint8_t _stStepPhase;
 	int stNextStep();
+	int ST_livePges() const;   // objects the logic steps, for log_fps
+	void ST_drawCharacterBaked(const uint8_t *dataPtr, int16_t x, int16_t y, uint8_t a, uint8_t b, uint8_t flags);
+	void ST_decodeIcon(uint8_t iconNum, uint8_t *buf);
+	// ST: record=N keeps the input of a session started from a title
+	// Load, one byte per inp_update in the demos' keymask, and writes
+	// it to RECnn.DEM; replay=N plays one back with no pacing and logs
+	// what every frame cost (see ST_recStart)
+	struct STRecHeader {
+		uint32_t tag;             // 'RSRC'
+		uint16_t version;
+		uint8_t level, slot, skill, cheats;   // cheats change what the logic does
+		uint32_t seed;            // _randSeed once the save is loaded
+		uint32_t steps;           // keymask bytes that follow
+		uint32_t startHash;       // ST_stateHash at the start and end
+		uint32_t endHash;
+	};
+	STRecHeader _stRecHdr;
+	uint8_t *_stRecBuf;
+	uint32_t _stRecPos;
+	bool _stRecording;
+	bool _stReplaying;
+	void ST_recStart();
+	void ST_recStep();
+	void ST_recFinish(const char *why);
+	bool ST_replayLoad();
+	void ST_replayFrame();
+	void ST_replayDone();
+	uint32_t ST_stateHash() const;
 	// ST: a save chosen on the title menu, loaded once its level is up
 	// (-1 none)
 	int16_t _stLoadSlot;
@@ -189,6 +217,36 @@ struct Game {
 	MessagePGE *_pge_messagesTable[256]; // indexed by pge number
 	MessagePGE *_pge_nextFreeMessage;
 	LivePGE *_pge_liveTable2[256]; // active pieges list (index = pge number)
+#ifdef ATARIST
+	// ST: a bit a slot of _pge_liveTable2, kept by the two calls below, so
+	// the walks over it once a step skip empty slots eight at a time: a
+	// level has up to 256 slots and a dozen or so in use
+	uint8_t _pge_liveBits[32];
+#endif
+	void pge_setLive(int index, LivePGE *pge) {
+		_pge_liveTable2[index] = pge;
+#ifdef ATARIST
+		static const uint8_t kBit[8] = { 0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01 };
+		if (pge) {
+			_pge_liveBits[index >> 3] |= kBit[index & 7];
+		} else {
+			_pge_liveBits[index >> 3] &= ~kBit[index & 7];
+		}
+#endif
+	}
+	void pge_clearLive() {
+		memset(_pge_liveTable2, 0, sizeof(_pge_liveTable2));
+#ifdef ATARIST
+		memset(_pge_liveBits, 0, sizeof(_pge_liveBits));
+#endif
+	}
+#ifdef ATARIST
+	// the first slot in use in a byte of _pge_liveBits that has one
+	static int pge_firstLive(unsigned bits) {
+		static const uint8_t kLead4[16] = { 4, 3, 2, 2, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0 };
+		return (bits & 0xF0) ? kLead4[bits >> 4] : 4 + kLead4[bits];
+	}
+#endif
 	LivePGE *_pge_liveTable1[256]; // pieges list by room (index = room)
 	LivePGE _pgeLive[256];
 	uint8_t _pge_currentPiegeRoom;

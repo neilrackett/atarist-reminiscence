@@ -140,12 +140,41 @@ static inline __attribute__((always_inline)) void pageTouch(const uint8_t *layer
 // with ST_prioTouched.
 static int16_t g_prioX0, g_prioY0, g_prioX1 = -1, g_prioY1 = -1;
 
+// The same touches as blocks, kept until taken (ST_takePrioBlocks): the
+// display list restores the priority plane only where it may differ from
+// the room's, and a frame's MARKs can stay on the layer for many frames.
+static uint16_t g_prioBlk[kSTBlockRows];
+// the whole layer is marked already, for each of the two takers: a
+// room build marks it a tile at a time, and the blocks' loop made that
+// a sixth of the build
+static bool g_prioAllRect, g_prioAllBlk;
+
+void ST_takePrioBlocks(uint16_t *acc) {
+	for (int j = 0; j < kSTBlockRows; ++j) {
+		acc[j] |= g_prioBlk[j];
+		g_prioBlk[j] = 0;
+	}
+	g_prioAllBlk = false;
+}
+
 void ST_prioTouchedRect(int x, int y, int w, int h) {
 	if (w <= 0 || h <= 0) {
 		return;
 	}
 	const int x1 = x + w - 1;
 	const int y1 = y + h - 1;
+	{
+		const int bx0 = (x < 0) ? 0 : (x >> 4);
+		const int bx1 = (x1 >= kSTLayerW) ? 15 : (x1 >> 4);
+		const int by0 = (y < 0) ? 0 : (y >> 3);
+		const int by1 = (y1 >= kSTLayerH) ? kSTBlockRows - 1 : (y1 >> 3);
+		if (bx0 <= bx1) {
+			const uint16_t m = (uint16_t)((0xFFFFu >> bx0) & (0xFFFFu << (15 - bx1)));
+			for (int j = by0; j <= by1; ++j) {
+				g_prioBlk[j] |= m;
+			}
+		}
+	}
 	if (g_prioX1 < g_prioX0) {
 		g_prioX0 = (int16_t)x;
 		g_prioY0 = (int16_t)y;
@@ -168,7 +197,11 @@ void ST_prioTouchedRect(int x, int y, int w, int h) {
 }
 
 void ST_prioTouched() {
+	if (g_prioAllRect && g_prioAllBlk) {
+		return;
+	}
 	ST_prioTouchedRect(0, 0, kSTLayerW, kSTLayerH);
+	g_prioAllRect = g_prioAllBlk = true;
 }
 
 bool ST_takePrioRect(int *x0, int *y0, int *x1, int *y1) {
@@ -181,10 +214,11 @@ bool ST_takePrioRect(int *x0, int *y0, int *x1, int *y1) {
 	*y1 = g_prioY1;
 	g_prioX0 = g_prioY0 = 0;
 	g_prioX1 = g_prioY1 = -1;
+	g_prioAllRect = false;
 	return true;
 }
 
-static STDL_Surface *layerView(uint8_t *layer, bool masked) {
+STDL_Surface *ST_layerView(uint8_t *layer, bool masked) {
 	enum { N = 8 };
 	static uint8_t *keys[2][N];
 	static STDL_Surface *surfs[2][N];
@@ -218,7 +252,7 @@ static STDL_Surface *layerView(uint8_t *layer, bool masked) {
 }
 
 STDL_Surface *ST_layerSurfaceBare(uint8_t *layer) {
-	return layerView(layer, false);
+	return ST_layerView(layer, false);
 }
 
 static inline uint16_t *groupPtr(uint8_t *layer, int x, int y) {
@@ -282,15 +316,32 @@ static void initSpread() {
 	g_spreadReady = true;
 }
 
+const uint32_t *ST_spreadTable() {
+	if (!g_spreadReady) {
+		initSpread();
+	}
+	return g_spread[0];
+}
+
+const uint8_t *ST_bitrevTable() {
+	if (!g_spreadReady) {
+		initSpread();
+	}
+	return g_bitrev;
+}
+
 // Pair tables: index = left pixel | right pixel << 4 (logical colours
 // within a palette slot), value = the two pixels' hardware colour
 // bits in the leftmost two bits of each plane byte, planes 0..3 from
 // the most significant byte down. Pair q of a unit is the same table
 // shifted right 2q. One table per palette base the room decoder
-// uses (0x00, 0x10, 0x80, 0x90), rebuilt when the remap moves.
+// uses (0x00, 0x10, 0x80, 0x90), rebuilt when the remap moves its
+// colours; ver changes with it, and only then.
 struct PairMap {
 	uint16_t gen;
 	uint8_t pal;
+	uint16_t ver;
+	uint8_t map16[16];
 	uint32_t t[256];
 };
 static PairMap g_pairMaps[4];
@@ -303,26 +354,47 @@ static const uint32_t *pairMap(uint8_t pal) {
 	}
 	uint8_t map16[16];
 	ST_buildMap16(pal, map16);
-	for (int i = 0; i < 256; ++i) {
-		const uint8_t a = map16[i & 15];
-		const uint8_t b = map16[i >> 4];
-		uint32_t v = 0;
-		for (int k = 0; k < 4; ++k) {
-			const uint32_t bits = (((a >> k) & 1) << 7) | (((b >> k) & 1) << 6);
-			v |= bits << (24 - 8 * k);
-		}
-		m.t[i] = v;
+	if (m.gen != 0 && m.pal == pal && memcmp(map16, m.map16, sizeof(map16)) == 0) {
+		m.gen = ST_remapGen();          // the remap moved, but not these colours
+		return m.t;
 	}
+	memcpy(m.map16, map16, sizeof(map16));
+	if (++m.ver == 0) {
+		m.ver = 1;
+	}
+	ST_buildPairTable(map16, m.t);
 	m.gen = ST_remapGen();
 	m.pal = pal;
 	return m.t;
 }
 
-// n units of four planes (plane k at s0 + k * planeSize, one byte
-// per unit) and their mask bytes -> n cells at out (even address:
-// empty cells are cleared with long stores)
-extern "C" void packCellsAsm(uint8_t *out, const uint8_t *s0, long planeSize,
-	const uint8_t *mask, long n, const uint32_t *spread, const uint32_t *pair);
+// A pair entry is its left pixel's hardware colour bits, one at the top
+// of each plane byte, ORed with its right pixel's a bit lower: two
+// sixteen-entry tables and an OR. Built a bit at a time, through
+// variable shifts, it cost a sixth of a room build on a plain ST.
+void ST_buildPairTable(const uint8_t *map16, uint32_t *t) {
+	uint32_t left[16], right[16];
+	for (int c = 0; c < 16; ++c) {
+		const uint8_t a = map16[c];
+		const uint32_t v = ((uint32_t)(a & 1) << 31) | ((uint32_t)((a >> 1) & 1) << 23)
+			| ((uint32_t)((a >> 2) & 1) << 15) | ((uint32_t)((a >> 3) & 1) << 7);
+		left[c] = v;
+		right[c] = v >> 1;
+	}
+	for (int i = 0; i < 256; ++i) {
+		t[i] = left[i & 15] | right[i >> 4];
+	}
+}
+
+uint16_t ST_tilePalette(uint8_t pal, const uint32_t **pair) {
+	*pair = pairMap(pal);
+	return g_pairMaps[((pal >> 4) & 1) | ((pal >> 6) & 2)].ver;
+}
+
+// packCellsAsm (declared in video_st.h): n units of four planes (plane
+// k at s0 + k * planeSize, one byte per unit) and their mask bytes ->
+// n cells at out (even address: empty cells are cleared with long
+// stores)
 
 // rows of n cells into the layer: d is the plane byte of the first
 // unit, pr its priority byte, odd whether that unit is the right
@@ -333,9 +405,6 @@ extern "C" void packCellsAsm(uint8_t *out, const uint8_t *s0, long planeSize,
 extern "C" void placeCellsAsm(uint8_t *d, uint8_t *pr, const uint8_t *cells,
 	long n, long odd, long prio, long rows, long stride);
 
-// placeCellsAsm for one 8-row column of cells (a room tile): rows
-// unrolled, nothing to step
-extern "C" void placeTile8Asm(uint8_t *d, uint8_t *pr, const uint8_t *cells, long prio);
 
 // one 8x8 tile (plane k at tile + k * 8) into 32 contiguous bytes
 // of the same shape at t plus its eight mask bytes at m: rows are
@@ -355,6 +424,7 @@ extern "C" void gatherTile8Asm(uint8_t *t, uint8_t *m, const uint8_t *tile,
 __asm__(
 "    .text\n"
 "    .even\n"
+"    .globl _packCellsAsm\n"            /* the sprite bakes use it too (spritecache_st.cpp) */
 "_packCellsAsm:\n"
 "    movem.l %d2-%d7/%a2-%a6,-(%sp)\n"
 "    move.l 48(%sp),%a0\n"           /* out       */
@@ -557,6 +627,7 @@ __asm__(
 __asm__(
 "    .text\n"
 "    .even\n"
+"    .globl _placeTile8Asm\n"
 "_placeTile8Asm:\n"
 "    movem.l %d2-%d4/%a2,-(%sp)\n"
 "    move.l 20(%sp),%a1\n"           /* d      */
@@ -575,6 +646,35 @@ TILE_ROW("56","896","224")
 "    rts\n"
 );
 #undef TILE_ROW
+
+// placeTile8OpaqueAsm: every row's mask is 0xFF, so nothing to test
+#define TILE_ROW_OPAQUE(K, D, P) \
+"    movep.l " K "(%a0),%d2\n" \
+"    movep.l %d2," D "(%a1)\n" \
+"    move.b %d1," P "(%a2)\n"
+
+__asm__(
+"    .text\n"
+"    .even\n"
+"    .globl _placeTile8OpaqueAsm\n"
+"_placeTile8OpaqueAsm:\n"
+"    movem.l %d2/%a2,-(%sp)\n"
+"    move.l 12(%sp),%a1\n"           /* d      */
+"    move.l 16(%sp),%a2\n"           /* pr     */
+"    move.l 20(%sp),%a0\n"           /* cells  */
+"    move.l 24(%sp),%d1\n"           /* prio   */
+TILE_ROW_OPAQUE("0","0","0")
+TILE_ROW_OPAQUE("8","128","32")
+TILE_ROW_OPAQUE("16","256","64")
+TILE_ROW_OPAQUE("24","384","96")
+TILE_ROW_OPAQUE("32","512","128")
+TILE_ROW_OPAQUE("40","640","160")
+TILE_ROW_OPAQUE("48","768","192")
+TILE_ROW_OPAQUE("56","896","224")
+"    movem.l (%sp)+,%d2/%a2\n"
+"    rts\n"
+);
+#undef TILE_ROW_OPAQUE
 
 // gatherTile8Asm: a copy loop with the flips folded in; the C loop
 // it replaces cost more than the packing of the tile
@@ -699,6 +799,10 @@ extern "C" void placeTile8Asm(uint8_t *d, uint8_t *pr, const uint8_t *cells, lon
 	placeCellsAsm(d, pr, cells, 1, 0, prio, 8, 8);
 }
 
+extern "C" void placeTile8OpaqueAsm(uint8_t *d, uint8_t *pr, const uint8_t *cells, long prio) {
+	placeCellsAsm(d, pr, cells, 1, 0, prio, 8, 8);
+}
+
 extern "C" void gatherTile8Asm(uint8_t *t, uint8_t *m, const uint8_t *tile,
 		long step, const uint8_t *bitrev, long opaque) {
 	for (int y = 0; y < 8; ++y, tile += step) {
@@ -725,7 +829,7 @@ void ST_amigaPrepare(uint8_t *out, const uint8_t *planes, int planeSize, int uni
 	packCellsAsm(out, planes, planeSize, mask, (long)units * rows, g_spread[0], pairMap(pal));
 }
 
-void ST_amigaTile8(uint8_t *out, const uint8_t *tile, uint8_t pal, bool xflip, bool yflip, bool keyZero) {
+void ST_amigaTile8(uint8_t *out, const uint8_t *tile, const uint32_t *pair, bool xflip, bool yflip, bool keyZero) {
 	if (!g_spreadReady) {
 		initSpread();
 	}
@@ -734,15 +838,7 @@ void ST_amigaTile8(uint8_t *out, const uint8_t *tile, uint8_t pal, bool xflip, b
 	uint8_t t[32], m[8];
 	gatherTile8Asm(t, m, yflip ? tile + 7 : tile, yflip ? -1 : 1,
 		xflip ? g_bitrev : 0, keyZero ? 0 : 0xFF);
-	packCellsAsm(out, t, 8, m, 8, g_spread[0], pairMap(pal));
-}
-
-void ST_amigaPlaceTile8(uint8_t *layer, int x, int y, const uint8_t *prep, bool setPrio) {
-	ST_prioTouched();
-	const int bx = x >> 3;
-	placeTile8Asm(layer + y * kSTRowBytes + ((bx >> 1) << 3) + (bx & 1),
-		layer + kSTPlaneBytes + y * kSTPrioRowBytes + bx,
-		prep, setPrio ? 0xFF : 0);
+	packCellsAsm(out, t, 8, m, 8, g_spread[0], pair);
 }
 
 void ST_amigaPlace(uint8_t *layer, int x, int y, const uint8_t *prep, int units, int rows, bool setPrio) {
@@ -1127,7 +1223,7 @@ void ST_amigaPlaceCovEnd(uint8_t *layer, uint8_t colour8) {
 void ST_drawSprite(uint8_t *layer, const uint8_t *src, int pitch, int x, int y, int w, int h, const uint8_t *map16, unsigned flags, bool setPrio) {
 	// maskless view unless the priority plane is read or set: see
 	// blitBaked
-	STDL_Surface *s = layerView(layer, (flags & kSTSpriteRespectPrio) != 0 || setPrio);
+	STDL_Surface *s = ST_layerView(layer, (flags & kSTSpriteRespectPrio) != 0 || setPrio);
 	if (!s) {
 		return;
 	}
@@ -1149,552 +1245,27 @@ void ST_drawSprite(uint8_t *layer, const uint8_t *src, int pitch, int x, int y, 
 	STDL_BlitIndexed8(s, src, pitch, x, y, w, h, map16, f);
 }
 
-// --- planar sprite cache -------------------------------------------
-//
-// Drawing from chunky costs a per-pixel gather every frame: the
-// source byte is mapped, then scattered a bit at a time into four
-// plane words. The same frame, colour bank, flags and palette always
-// produce the same plane words, so bake them once and afterwards
-// just move words into the layer.
-//
-// The bake goes through STDL_BlitIndexed8 into a scratch surface,
-// which already owns the flip, column-major and palette-map rules -
-// there is no second copy of that logic here. STDL_I8_MARK gives the
-// scratch mask a set bit under every drawn pixel, which is exactly
-// the "opaque" mask the blit below wants.
+// What the gameplay sprite path did since the last log line (see
+// STPerf); the bakes themselves live in spritecache_st.cpp.
+STPerf g_stPerf;
 
-// Two ways per set, 64 entries as before. Direct-mapped, the hash is
-// the source pointer, and two sprites drawn every frame whose pointers
-// land in one slot then evict each other every frame - a re-bake each,
-// where a bake costs about what a chunky draw costs. Whether that
-// happens is decided by the heap layout, so it appeared and vanished
-// on unrelated changes: a submodule bump cost 6 fps on an STE and a
-// spare word of malloc gave it back. A second way makes a pair of
-// colliding sprites a hit instead of a thrash.
-enum { kSprSets = 32, kSprWays = 2, kSprSlots = kSprSets * kSprWays };
-enum { kSprMaxW = 128, kSprMaxH = 160 };
-
-struct SprEntry {
-	const uint8_t *src;
-	uint16_t gen;
-	uint8_t colMask;
-	uint8_t flags;
-	uint8_t w, h;
-	int groups;
-	uint16_t *block;        // allocation base (guard words first)
-	uint16_t *planes;       // groups*4 words per row
-	uint16_t *mask;         // groups words per row
-	int cap;                // usable words at planes
-	// the bake trimmed to what is actually drawn: cels carry
-	// transparent margins, and a masked-off word still costs the
-	// blit its shift and its read-modify-write
-	uint8_t offG, useG;     // groups skipped at the left, groups kept
-	uint8_t offY, useH;     // rows skipped at the top, rows kept
-	// the same trim as word offsets into planes and mask: computed
-	// once here rather than as a 32-bit multiply on every blit
-	uint16_t offWords, offMaskWords;
-	uint32_t shUse;         // draw tick of the last blit (pool LRU)
-	// A sprite that stays where it is gets a copy shifted into its
-	// destination phase, so the blit runs aligned: the shift chain
-	// costs an extra ~120 cycles a group-row over an aligned merge,
-	// and a sprite that has not moved pays it every frame.
-	uint16_t *shBlock;      // allocation base (guard words first)
-	uint16_t *shPlanes;     // (useG + 1) * 4 words per row
-	uint16_t *shMask;       // (useG + 1) words per row
-	int shCap;              // usable words at shPlanes
-	uint8_t shPhase;        // phase the copy holds, 0 = none
-	uint8_t shG;            // groups in the copy
-	uint8_t lastPhase;      // phase the bake was last drawn at
-};
-
-// Pre-shifted copies are only worth their memory for the handful of
-// sprites on screen at once, so the pool is small and a slot only
-// takes one when it has been drawn at the same phase twice.
-enum { kShMax = 12 };
-static int g_shCount;
-static uint32_t g_drawTick;
-
-static SprEntry g_spr[kSprSlots];
-// which way of each set to overwrite next; a hit points it at the other
-static uint8_t g_sprNext[kSprSets];
-
-// Bake on the second sighting (see below): remembers sources seen
-// once, so a bake is only spent on frames that repeat.
-enum { kSeen = 48 };
-static const uint8_t *g_seenSrc[kSeen];
-static uint8_t g_seenMask[kSeen];
-static int g_seenPos;
-
-// [g_bakeLo, g_bakeHi]: bounds of every source address the bake and
-// seen tables have referenced. Most recycled slabs never fed a bake,
-// so the common invalidation is two compares instead of a 112-entry
-// scan. Bounds only grow; the full flush resets them.
-static const uint8_t *g_bakeLo = (const uint8_t *)~(uintptr_t)0;
-static const uint8_t *g_bakeHi;
-
-static inline void bakeBoundsAdd(const uint8_t *p) {
-	if (p < g_bakeLo) g_bakeLo = p;
-	if (p > g_bakeHi) g_bakeHi = p;
-}
-
-void ST_flushSpriteCache() {
-	for (int i = 0; i < kSprSlots; ++i) {
-		g_spr[i].src = 0;
-		free(g_spr[i].shBlock);
-		g_spr[i].shBlock = 0;
-		g_spr[i].shCap = 0;
-		g_spr[i].shPhase = 0;
-	}
-	g_shCount = 0;
-	for (int i = 0; i < kSeen; ++i) {
-		g_seenSrc[i] = 0;
-	}
-	g_bakeLo = (const uint8_t *)~(uintptr_t)0;
-	g_bakeHi = 0;
-}
-
-void ST_releaseSpriteCache() {
-	ST_flushSpriteCache();
-	for (int i = 0; i < kSprSlots; ++i) {
-		free(g_spr[i].block);
-		g_spr[i].block = 0;
-		g_spr[i].planes = 0;
-		g_spr[i].mask = 0;
-		g_spr[i].cap = 0;
-	}
-}
-
-// The planar cache keys on source pointers, and everything those
-// pointers reach through gets recycled under it: the decode caches
-// reuse their slabs, and the resource bank arena resets wholesale
-// when it fills mid-game (Resource::clearBankData). The same
-// address then holds a different sprite, so each recycler reports
-// its range here and the bakes keyed inside it die with the old
-// content - without this, a stale bake keeps being drawn (seen as
-// confetti fireflies after a room entry, when the bank arena
-// wrapped between a fly's two sightings). Ranges, not single
-// pointers: draw calls pass clip- and mirror-adjusted pointers
-// into the middle of these buffers.
-void ST_invalidateBakedRange(const uint8_t *p, uint32_t len) {
-	if (p > g_bakeHi || p + len <= g_bakeLo) {
-		return;
-	}
-	for (int i = 0; i < kSprSlots; ++i) {
-		if ((uint32_t)(g_spr[i].src - p) < len) {
-			g_spr[i].src = 0;
-		}
-	}
-	for (int i = 0; i < kSeen; ++i) {
-		if ((uint32_t)(g_seenSrc[i] - p) < len) {
-			g_seenSrc[i] = 0;
-		}
-	}
-}
-
-static bool bakeSprite(SprEntry *e, const uint8_t *src, int pitch, int w, int h, const uint8_t *map16, unsigned f) {
-	const int groups = (w + 15) >> 4;
-	const int planeWords = groups * 4 * h;
-	const int words = planeWords + groups * h;
-	// The unaligned blit path reads one group either side of the
-	// rows, so the block carries guard words at both ends: borrowed
-	// blocks owe the same slack library surfaces have (see
-	// STDL_CreateSurfaceFrom). A leading read is masked off by the
-	// edge mask, but the contract asks for the room regardless.
-	enum { kGuard = 4 };
-	if (e->cap < words) {
-		// grow only: a slot large enough for one frame is large
-		// enough for the next one that lands in it, so after warm-up
-		// a miss costs no allocation at all
-		free(e->block);
-		e->block = (uint16_t *)malloc((words + 2 * kGuard) * sizeof(uint16_t));
-		e->cap = e->block ? words : 0;
-	}
-	if (!e->block) {
-		e->planes = 0;
-		return false;
-	}
-	e->planes = e->block + kGuard;
-	e->mask = e->planes + planeWords;
-	e->groups = groups;
-	// STDL's source-mask convention is bit set = destination
-	// preserved, so the mask starts opaque-everywhere and
-	// BlitIndexed8's default maintenance clears a bit under each
-	// pixel it draws.
-	memset(e->mask, 0xFF, groups * h * sizeof(uint16_t));
-
-	// One scratch header, reused: STDL_CreateSurfaceFrom per bake was
-	// a malloc/free pair on the miss path.
-	static STDL_Surface *scratch;
-	if (!scratch) {
-		scratch = STDL_CreateSurfaceFrom((uint8_t *)e->planes,
-			groups * 16, h, groups * 8, (uint8_t *)e->mask, groups * 2);
-		if (!scratch) {
-			return false;
-		}
-	}
-	scratch->pixels = (uint8_t *)e->planes;
-	scratch->w = (int16_t)(groups * 16);
-	scratch->h = (int16_t)h;
-	scratch->stride = (uint16_t)(groups * 8);
-	scratch->mask = (uint8_t *)e->mask;
-	scratch->maskstride = (uint16_t)(groups * 2);
-	scratch->clip.x = 0;
-	scratch->clip.y = 0;
-	scratch->clip.w = (uint16_t)(groups * 16);
-	scratch->clip.h = (uint16_t)h;
-	STDL_BlitIndexed8(scratch, src, pitch, 0, 0, w, h, map16, f);
-	memset(e->block, 0, kGuard * sizeof(uint16_t));
-	memset(e->planes + words, 0, kGuard * sizeof(uint16_t));
-	// Trim: a mask word of 0xFFFF is a group of sixteen pixels that
-	// draws nothing, and rows and columns of those sit around most
-	// cels. Finding them costs one pass over the mask, once per
-	// bake; the blit then skips them every time it runs.
-	{
-		int y0 = h, y1 = -1, g0 = groups, g1 = -1;
-		const uint16_t *m = e->mask;
-		for (int r = 0; r < h; ++r, m += groups) {
-			for (int g = 0; g < groups; ++g) {
-				if (m[g] == 0xFFFF) {
-					continue;
-				}
-				if (r < y0) {
-					y0 = r;
-				}
-				y1 = r;
-				if (g < g0) {
-					g0 = g;
-				}
-				if (g > g1) {
-					g1 = g;
-				}
-			}
-		}
-		if (y1 < 0) {          // nothing drawn at all
-			y0 = y1 = 0;
-			g0 = g1 = 0;
-		}
-		e->offG = (uint8_t)g0;
-		e->useG = (uint8_t)(g1 - g0 + 1);
-		e->offY = (uint8_t)y0;
-		e->useH = (uint8_t)(y1 - y0 + 1);
-		e->offWords = (uint16_t)(y0 * groups * 4 + g0 * 4);
-		e->offMaskWords = (uint16_t)(y0 * groups + g0);
-	}
-	e->shPhase = 0;
-	e->lastPhase = 0;
-	return true;
-}
-
-// Present one baked frame through STDL. The layer's mask is the
-// game's priority plane, so UNDER passes the sprite behind marked
-// foreground and MARK claims it - the same semantics the chunky path
-// gets from STDL_BlitIndexed8.
-// Shift the trimmed bake right by `phase` into its own copy, one
-// group wider so the pixels pushed out of the last group have
-// somewhere to land. Output pixel i of group g is source pixel
-// 16g + i - phase, which is the top of a 32-bit window over the two
-// neighbouring source words; the mask shifts the same way with
-// transparent fill at both ends.
-static bool buildShifted(SprEntry *e, int phase) {
-	const int sg = e->useG + 1;
-	const int rows = e->useH;
-	const int words = sg * 4 * rows + sg * rows;
-	enum { kGuard = 4 };
-	if (e->shCap < words) {
-		if (!e->shBlock && g_shCount >= kShMax) {
-			// The pool is full: take the block from the slot drawn
-			// longest ago. It used to be first come, first served
-			// for the whole level, so the first room's scenery kept
-			// all twelve and Conrad standing still in every later
-			// room paid the shift chain each frame.
-			SprEntry *victim = 0;
-			for (int i = 0; i < kSprSlots; ++i) {
-				SprEntry *c = &g_spr[i];
-				if (c->shBlock && (!victim || (int32_t)(c->shUse - victim->shUse) < 0)) {
-					victim = c;
-				}
-			}
-			if (!victim) {
-				return false;
-			}
-			free(victim->shBlock);
-			victim->shBlock = 0;
-			victim->shCap = 0;
-			victim->shPhase = 0;
-			--g_shCount;
-		}
-		if (!e->shBlock) {
-			++g_shCount;
-		}
-		free(e->shBlock);
-		e->shBlock = (uint16_t *)malloc((words + 2 * kGuard) * sizeof(uint16_t));
-		if (!e->shBlock) {
-			e->shCap = 0;
-			--g_shCount;
-			return false;
-		}
-		e->shCap = words;
-	}
-	e->shPlanes = e->shBlock + kGuard;
-	e->shMask = e->shPlanes + sg * 4 * rows;
-	e->shG = (uint8_t)sg;
-	const uint16_t *sp = e->planes + e->offWords;
-	const uint16_t *sm = e->mask + e->offMaskWords;
-	uint16_t *dp = e->shPlanes;
-	uint16_t *dm = e->shMask;
-	const int last = e->useG;
-	for (int row = rows; --row >= 0; ) {
-		for (int g = 0; g < sg; ++g) {
-			const uint16_t *l = (g == 0) ? 0 : sp + (g - 1) * 4;
-			const uint16_t *r = (g < last) ? sp + g * 4 : 0;
-			for (int pl = 0; pl < 4; ++pl) {
-				const uint32_t hi = l ? l[pl] : 0;
-				const uint32_t lo = r ? r[pl] : 0;
-				dp[g * 4 + pl] = (uint16_t)(((hi << 16) | lo) >> phase);
-			}
-			const uint32_t hm = (g == 0) ? 0xFFFF : sm[g - 1];
-			const uint32_t lm = (g < last) ? sm[g] : 0xFFFF;
-			dm[g] = (uint16_t)(((hm << 16) | lm) >> phase);
-		}
-		sp += e->groups * 4;
-		sm += e->groups;
-		dp += sg * 4;
-		dm += sg;
-	}
-	memset(e->shBlock, 0, kGuard * sizeof(uint16_t));
-	memset(e->shPlanes + words, 0, kGuard * sizeof(uint16_t));
-	e->shPhase = (uint8_t)phase;
-	return true;
-}
-
-// OR of N priority words a row over h rows, unrolled: the looped
-// form spent more on its counters than on the reads
-template <int N> static uint16_t orPrio(const uint16_t *row, int h) {
-	uint16_t any = 0;
-	for (int y = h; --y >= 0; row += kSTPrioRowBytes / 2) {
-		any |= row[0];
-		if (N > 1) any |= row[1];
-		if (N > 2) any |= row[2];
-		if (N > 3) any |= row[3];
-		if (N > 4) any |= row[4];
-		if (N > 5) any |= row[5];
-	}
-	return any;
-}
-
-// Is any priority bit set under groups [g0, g1] of rows [y0, y1)? A
-// sprite drawn "under" the foreground only differs from a plain draw
-// where there is foreground, and most of the time there is none under
-// Conrad or an enemy: the check is a few hundred word reads, where the
-// UNDER blit is STDL's per-pixel CPU route - 4.9ms a character on an
-// STE, measured, against the BLiTTER or the aligned copy without it.
-static bool prioUnder(const uint8_t *layer, int g0, int g1, int y0, int y1) {
-	if (y0 < 0) y0 = 0;
-	if (y1 > kSTLayerH) y1 = kSTLayerH;
-	if (g0 < 0) g0 = 0;
-	if (g1 > kSTLayerW / 16 - 1) g1 = kSTLayerW / 16 - 1;
-	if (y0 >= y1 || g0 > g1) {
-		return false;
-	}
-	const uint16_t *row = (const uint16_t *)(layer + kSTPlaneBytes + y0 * kSTPrioRowBytes) + g0;
-	const int n = g1 - g0 + 1;
-	if (n <= 6) {
-		// eight rows at a time: foreground under a sprite's head
-		// need not wait for a scan of its feet
-		for (int y = y0; y < y1; y += 8, row += 8 * kSTPrioRowBytes / 2) {
-			const int h = (y1 - y < 8) ? y1 - y : 8;
-			uint16_t any;
-			switch (n) {
-			case 1: any = orPrio<1>(row, h); break;
-			case 2: any = orPrio<2>(row, h); break;
-			case 3: any = orPrio<3>(row, h); break;
-			case 4: any = orPrio<4>(row, h); break;
-			case 5: any = orPrio<5>(row, h); break;
-			default: any = orPrio<6>(row, h); break;
-			}
-			if (any) {
-				return true;
-			}
-		}
-		return false;
-	}
-	const int h = y1 - y0;
-	for (int y = h; --y >= 0; row += kSTPrioRowBytes / 2) {
-		for (int i = 0; i < n; ++i) {
-			if (row[i]) {
-				return true;
-			}
-		}
-	}
-	return false;
-}
-
-static void blitBaked(uint8_t *layer, SprEntry *e, int x, int y, bool respectPrio, bool setPrio) {
-	const int dx = x + e->offG * 16;
-	const int dy = y + e->offY;
-	if (respectPrio && !setPrio) {
-		respectPrio = prioUnder(layer, dx >> 4, (dx + e->useG * 16 - 1) >> 4, dy, dy + e->useH);
-	}
-	// A draw that neither reads nor sets the priority plane goes to
-	// the maskless view: on the masked one STDL's default upkeep
-	// cleared the plane's bits under every opaque pixel, and nothing
-	// restored them - the room's foreground marks under a door were
-	// gone until the next full copy.
-	STDL_Surface *dst = layerView(layer, respectPrio || setPrio);
-	if (!dst) {
-		return;
-	}
-	e->shUse = ++g_drawTick;
-	static STDL_Surface *view;
-	if (!view) {
-		view = STDL_CreateSurfaceFrom((uint8_t *)e->planes,
-			e->groups * 16, e->h, e->groups * 8,
-			(uint8_t *)e->mask, e->groups * 2);
-		if (!view) {
-			return;
-		}
-		// STDL_TRANSPARENT: use the bake's mask as-is. A numeric
-		// key would rebuild the mask by scanning the plane words,
-		// and a bake's fully-masked words are uninitialised - the
-		// first entry through here had its mask clobbered from
-		// garbage, and that sprite drew as confetti ever after.
-		STDL_SetColourKey(view, 1, STDL_TRANSPARENT);
-	}
-	// The view starts at the first group and row that draw anything;
-	// the stride still steps whole bake rows. Where a pre-shifted
-	// copy is held for this phase the blit runs from that instead,
-	// landing on a group boundary: the same pixels, no shift chain.
-	const int phase = dx & 15;
-	int useW, stride, maskStride, dstX;
-	const uint16_t *planes, *mask;
-	if (phase != 0 && (e->shPhase == phase
-	    || (e->lastPhase == phase && buildShifted(e, phase)))) {
-		useW = e->shG * 16;
-		stride = e->shG * 8;
-		maskStride = e->shG * 2;
-		planes = e->shPlanes;
-		mask = e->shMask;
-		dstX = dx & ~15;
-	} else {
-		e->lastPhase = (uint8_t)phase;
-		useW = e->useG * 16;
-		stride = e->groups * 8;
-		maskStride = e->groups * 2;
-		planes = e->planes + e->offWords;
-		mask = e->mask + e->offMaskWords;
-		dstX = dx;
-	}
-	view->pixels = (uint8_t *)planes;
-	view->w = (int16_t)useW;
-	view->h = (int16_t)e->useH;
-	view->stride = (uint16_t)stride;
-	view->mask = (uint8_t *)mask;
-	view->maskstride = (uint16_t)maskStride;
-	// clip is never read for a source, and a NULL source rect already
-	// means the whole surface; the destination rect's w/h are written
-	// by the blit, not read from it. Ten stores a sprite, all dead.
-	STDL_Rect dr;
-	dr.x = (int16_t)dstX;
-	dr.y = (int16_t)dy;
-	unsigned f = 0;
-	if (respectPrio) {
-		f |= STDL_BLIT_UNDER;
-	}
-	if (setPrio) {
-		f |= STDL_BLIT_MARK;
-		ST_prioTouchedRect(dstX, dy, useW, e->useH);
-	}
-	STDL_BlitSurfaceEx(view, NULL, dst, &dr, f);
-}
-
-void ST_drawSpriteCached(uint8_t *layer, const uint8_t *src, int pitch, int x, int y, int w, int h, uint8_t colMask, unsigned flags, bool setPrio) {
-
-	if (w <= 0 || h <= 0 || w > kSprMaxW || h > kSprMaxH
-	    || x >= kSTLayerW || y >= kSTLayerH || x + w <= 0 || y + h <= 0) {
-		if (w > kSprMaxW || h > kSprMaxH) {
-			uint8_t map16[16];
-			ST_buildMap16(colMask, map16);
-			ST_drawSprite(layer, src, pitch, x, y, w, h, map16, flags, setPrio);
-		}
-		return;
-	}
-	const unsigned bakeFlags = flags & (kSTSpriteXflip | kSTSpriteColMajor);
-	const uint16_t gen = ST_remapGen();
-	// direct-mapped: scanning every slot cost more than the blit it
-	// was there to save
-	const int set = (int)((((unsigned long)src >> 4) ^ colMask) & (kSprSets - 1));
-	SprEntry *e = 0;
-	for (int way = 0; way < kSprWays; ++way) {
-		SprEntry *c = &g_spr[set * kSprWays + way];
-		if (c->src == src && c->gen == gen && c->colMask == colMask
-		    && c->flags == (uint8_t)bakeFlags && c->w == (uint8_t)w
-		    && c->h == (uint8_t)h) {
-			e = c;
-			g_sprNext[set] = (uint8_t)(kSprWays - 1 - way);
-			break;
-		}
-	}
-	if (!e) {
-		// Baking costs about what one chunky draw costs, so a frame
-		// drawn once would pay for a bake it never reuses. Bake on the
-		// second sighting: one-off frames cost exactly what they did
-		// before, repeated ones (every animation cycle) go fast.
-		{
-			int slot = -1;
-			for (int i = 0; i < kSeen; ++i) {
-				if (g_seenSrc[i] == src && g_seenMask[i] == colMask) {
-					slot = i;
-					break;
-				}
-			}
-			if (slot < 0) {
-				g_seenSrc[g_seenPos] = src;
-				g_seenMask[g_seenPos] = colMask;
-				bakeBoundsAdd(src);
-				if (++g_seenPos == kSeen) {   // 48 is no power of two:
-					g_seenPos = 0;            // % would be a __modsi3
-				}
-				uint8_t map16[16];
-				ST_buildMap16(colMask, map16);
-				ST_drawSprite(layer, src, pitch, x, y, w, h, map16, flags, setPrio);
-				return;
-			}
-		}
-		e = &g_spr[set * kSprWays + g_sprNext[set]];
-		g_sprNext[set] = (uint8_t)(kSprWays - 1 - g_sprNext[set]);
-		uint8_t map16[16];
-		ST_buildMap16(colMask, map16);
-		unsigned f = 0;
-		if (bakeFlags & kSTSpriteXflip) {
-			f |= STDL_I8_XFLIP;
-		}
-		if (bakeFlags & kSTSpriteColMajor) {
-			f |= STDL_I8_COLMAJOR;
-		}
-		if (!bakeSprite(e, src, pitch, w, h, map16, f)) {
-			// Out of memory for the bake. Draw it the slow way rather
-			// than not at all: this used to return, and the sprite
-			// simply was not there. Conrad kept taking input and kept
-			// being solid, so he read as having vanished - and it
-			// happened when the most was going on, which is exactly
-			// when the heap is tightest and when it is least welcome.
-			e->src = 0;
-			ST_drawSprite(layer, src, pitch, x, y, w, h, map16, flags, setPrio);
-			return;
-		}
-		e->src = src;
-		bakeBoundsAdd(src);
-		e->gen = gen;
-		e->colMask = colMask;
-		e->flags = (uint8_t)bakeFlags;
-		e->w = (uint8_t)w;
-		e->h = (uint8_t)h;
-	}
-	blitBaked(layer, e, x, y, (flags & kSTSpriteRespectPrio) != 0, setPrio);
+void ST_perfFormat(const STPerf &p, char *buf, int len) {
+	snprintf(buf, len, "room %u/%u/%u/%u dl %u/%u blit u%u/%u p%u/%u bake %u/%u(%u)/%u sh %u/%u ring %u/%u/%u p8 %luK mon %u bank %u/%u/%luK",
+		(unsigned)p.roomHits, (unsigned)p.roomRemap, (unsigned)p.roomDecodes, (unsigned)p.tilePreps,
+		(unsigned)p.dlDrawn, (unsigned)p.dlKept,
+		(unsigned)p.blitUnderAl, (unsigned)p.blitUnderSh, (unsigned)p.blitPlainAl, (unsigned)p.blitPlainSh,
+		(unsigned)p.bakeHits, (unsigned)p.bakeMakes, (unsigned)p.bakePlanar, (unsigned)p.chunky,
+		(unsigned)p.shBuilds, (unsigned)p.shRefused,
+		(unsigned)p.promotes, (unsigned)p.segFlush, (unsigned)p.unused,
+		(unsigned long)(p.planar8Px >> 10), (unsigned)p.monsterLoads,
+		(unsigned)p.bankLoads, (unsigned)p.bankClears, (unsigned long)(p.bankBytes >> 10));
 }
 
 void ST_drawGlyph(uint8_t *layer, const uint8_t *src, int pitch, int x, int y, uint8_t colour8) {
 	const uint8_t v = ST_getRemap()[colour8];
+	if (ST_dlRecording(layer) && ST_dlAddGlyph(src, pitch, x, y, v, (colour8 & 0x80) != 0)) {
+		return;
+	}
 	uint8_t map16[16];
 	memset(map16, v, sizeof(map16));
 	ST_drawSprite(layer, src, pitch, x, y, 8, 8, map16, 0, (colour8 & 0x80) != 0);

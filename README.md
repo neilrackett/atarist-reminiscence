@@ -99,7 +99,9 @@ most of the wait for a cutscene, the title or a level. RExtract also
 writes an `UNPACKED` folder: the same files with the unpacking already
 done, which the game reads instead of unpacking `DATA` itself. On a
 plain ST it takes the start of level 1 from 3.7 seconds to 1.5, and
-the wait before the intro from 3.5 to 2.3.
+the wait before the intro from 3.5 to 2.3. On a machine with 4MB the
+game also keeps each level's room data and object banks from it, which
+takes a tenth to a quarter off the pause as Conrad first enters a room.
 
 It is optional: without it, or for anything missing from it, the game
 unpacks `DATA` as before. By hand, `tools/make-unpacked.py` makes it

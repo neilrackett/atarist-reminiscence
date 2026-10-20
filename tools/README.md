@@ -95,15 +95,22 @@ ahead of time. The game reads a file from there in place of unpacking
 it, which on an 8MHz ST was most of the wait for a cutscene, the title
 or a level, and falls back to `DATA` for anything missing.
 
-Only what is unpacked as something loads: cutscenes (`.CMP`), the
-title picture (`PRESENT.CMP`), sprites (`.SPM`), level graphics
-(`.SGD`), objects (`.OBC`) and collision data (`.CT`). Room data
-(`.LEV`) and sprite banks (`.MBK`) stay packed: the game keeps those
-whole in memory, which a 2.5MB machine cannot spare unpacked. Each file
-keeps its `DATA` name and holds `RXU1`, a BE32 stream count, a BE32
-size per stream, then the streams - two for a cutscene (polygons, then
-commands), one for everything else. `Resource::ST_openUnpacked` checks
-that the sizes add up before trusting a file.
+What is unpacked as something loads: cutscenes (`.CMP`), the title
+picture (`PRESENT.CMP`), sprites (`.SPM`), level graphics (`.SGD`),
+objects (`.OBC`) and collision data (`.CT`). And what is unpacked on
+entering a room: the room data (`.LEV`) and the object and tile banks
+(`.MBK`). The game keeps those two whole for a level, so it reads them
+from here only where there is room: the banks go into the bank arena,
+which on a 4MB machine holds a whole level's, and the room data (71-143K
+a level) needs 3.5MB of RAM. A 2.5MB machine unpacks them room by room
+from `DATA` as before.
+
+Each file keeps its `DATA` name and holds `RXU1`, a BE32 stream count,
+a BE32 size per stream, then the streams - two for a cutscene
+(polygons, then commands), 64 for room data (a room with no data is an
+empty stream), one per bank entry for banks (an empty entry likewise),
+one for everything else. The game checks that the sizes add up before
+trusting a file, and that every bank is the size `DATA`'s table says.
 
 RExtract writes the same folder. The decoder here is a transcription
 of `src/unpack.cpp`'s C version, and its output was checked byte for
@@ -227,3 +234,58 @@ tools/gen-palette-tables.py path/to/DUMP dist/DATA > src/palette_tables.h
 ```
 
 Needs Python 3 with Pillow.
+
+## bench/
+
+Gameplay benchmarks that play. `bench=true` times an idle Conrad in a
+room whose sprites are all cached already, which is the one case that
+never shows a slow frame. These replay real sessions instead.
+
+**Recording.** Put `record=1` in `RS.CFG`, choose Load on the title and
+play: running, fighting, rooms changing. Escape, a death, a cutscene or
+a new level ends the recording, and `REC01.DEM` is written beside the
+game. It holds the save it started from (level and slot), the seed and
+one byte of input per game step. Play with fast-forward off. Ctrl keys
+and menus are not recorded, so leave them alone while recording.
+
+A scenario is a directory holding the save and its `REC01.DEM`. Keep
+them in `tmp/bench/scenarios/` (they come from your own game data, so
+they stay out of git).
+
+**Replaying.**
+
+```
+tools/bench/replay.sh TAG MACHINE SCENARIO...
+```
+
+This plays each scenario in Hatari (cycle-exact, one emulator per
+scenario, side by side) with `replay=1`. The game runs with no pacing,
+logs what every 64 frames cost and what the sprite caches did, and ends
+with `REPLAY done: ... ms/frame, steady ..., worst ..., hash ... match`.
+`match` means the game ended in exactly the state the recording did, so
+the logic ran the same. `PROG=` picks another binary, `MEM=2560` a 2.5MB
+machine, and `CFG=` adds `RS.CFG` lines, for example `ab=16` to switch
+one optimisation off (the `kAb*` bits in `src/intern.h`) or
+`replay_hash=true` to hash every frame's picture.
+
+**Comparing.**
+
+```
+tools/bench/compare.py TAG_A TAG_B MACHINE SCENARIO...
+tools/bench/compare.py --frames TAG_A TAG_B MACHINE SCENARIO...
+```
+
+The first prints steady ms/frame per scenario and the total. Quote the
+total: code layout alone moves a single scenario by a few percent. The
+second compares the frame hashes of two `replay_hash=true` runs, which
+is how an optimisation is shown to draw exactly what it replaced
+(`ab=8` draws every sprite straight from its source, the reference).
+A Mega STE's frame times move with code layout through its cache, so
+compare it inside one binary, using `ab=` to switch features.
+
+**Saves in busy rooms.** `tools/bench/teleport-save.py SRC.SAV LEVEL ROOM
+X Y OUT_DIR` copies a save made at a level's start with Conrad moved to
+another room, named `RS<level>_<room>.SAV`, so a room full of enemies is
+one title Load away for testing on hardware. Y is one of Conrad's
+floors (70, 142, 214); try the save in Hatari first, as a spot inside a
+wall or over a drop kills him.

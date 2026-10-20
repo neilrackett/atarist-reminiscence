@@ -133,6 +133,9 @@ static void initOptions() {
 	// behind it at the moment.
 	g_options.experimental = false;
 	g_options.cheats = 0;
+	g_options.record = -1;
+	g_options.replay = -1;
+	g_options.replay_hash = false;
 	g_options.log_fps = false;
 	g_options.bench = false;
 	g_options.logging = false;
@@ -200,6 +203,7 @@ static void initOptions() {
 		{ "palette_custom", &g_options.palette_custom },
 		{ "palette_hue", &g_options.palette_hue },
 		{ "ste_sound", &g_options.ste_sound },
+		{ "replay_hash", &g_options.replay_hash },
 		{ 0, 0 }
 	};
 	// options that take a number rather than true/false
@@ -215,6 +219,13 @@ static void initOptions() {
 		// hit, 4 his life never goes down. Add them up, or say
 		// true for all three. Nothing is on unless asked for.
 		{ "cheats", &g_options.cheats, 0, 7 },
+		// Benchmarking, deliberately undocumented: record=N keeps the
+		// input of a session started from a title Load in RECnn.DEM,
+		// replay=N plays it back untimed and logs what it cost.
+		{ "record", &g_options.record, 0, 99 },
+		{ "replay", &g_options.replay, 0, 99 },
+		{ "ab", &g_options.ab, 0, 0xFFFF },
+		{ "replay_dump", &g_options.replay_dump, 0, 32767 },
 		{ 0, 0, 0, 0 }
 	};
 	bool screenSet = false;
@@ -329,8 +340,8 @@ static void initOptions() {
 		}
 		fclose(fp);
 	}
-	// the two options whose whole output is the log
-	if (g_options.log_fps || g_options.bench) {
+	// the options whose whole output is the log
+	if (g_options.log_fps || g_options.bench || g_options.record >= 0 || g_options.replay >= 0) {
 		g_options.logging = true;
 	}
 	if (g_options.bench) {

@@ -14,6 +14,7 @@
 #include "systemstub.h"
 #include "util.h"
 #include "video_st.h"
+#include <stddef.h>
 #ifdef ATARIST
 extern "C" {
 #include <stdl/stdl.h>
@@ -28,133 +29,142 @@ extern "C" {
 #endif
 
 #ifdef ATARIST
-// Cache of RLE-decoded sprite frames, keyed on the source pointer.
-// The engine decodes every sprite frame on every displayed frame,
-// which dominates the 8MHz frame budget; idle/looping animations hit
-// the cache instead. Flushed whenever the underlying resource
-// buffers are reloaded (level data, per-room monster SPM).
-struct SpriteCache {
-	// Sixteen entries were fewer than one moving scene needs, and a
-	// miss does not just re-decode: it hands the frame a NEW buffer
-	// address, which invalidates the planar cache keyed on it. The
-	// frames of a walk cycle have to stay put to be worth baking.
-	enum { N = 64, H = 256 };
-	const uint8_t *key[N];
-	uint8_t *buf[N];
-	int cap[N];
-	int pos;
-	// A direct-mapped hint in front of the scan: slot + 1, 0 for
-	// none. The scan was ~1000 cycles a sprite piece, every frame
-	// (average 32 of 64 compares for a hit), 2-3ms a frame in a
-	// busy room. A wrong hint costs one compare and falls back.
-	uint8_t hint[H];
+// The sprite decoder the planar bakes call on a miss (ST_sprDraw): a
+// frame is only decoded when it has to be baked, into the bakes'
+// scratch buffer, never per draw.
+static bool stDecode(void *ctx, int kind, const uint8_t *data, int w, int h, uint8_t *dst, bool planes) {
+	Game *g = (Game *)ctx;
+	if (planes) {
+		return g->_vid.ST_amigaPlanes(kind, data, w, h, dst);
+	}
+	switch (kind) {
+	case kSprKindSPM:
+		g->_vid.AMIGA_decodeSpm(data, dst);
+		break;
+	case kSprKindSPC:
+		g->_vid.AMIGA_decodeSpc(data, w, h, dst);
+		break;
+	case kSprKindIcon:
+		g->ST_decodeIcon((uint8_t)((uintptr_t)data - 1), dst);
+		break;
+	}
+	return true;
+}
 
-	static int hashOf(const uint8_t *p) {
-		const uintptr_t v = (uintptr_t)p;
-		return (int)((v >> 3) ^ (v >> 11)) & (H - 1);
+// the part of a sprite on the layer, for the dirty blocks
+static void stMarkClipped(Video &vid, int x, int y, int w, int h) {
+	if (vid.ST_dlOn() && ST_dlRecording(vid._frontLayer)) {
+		return;                      // the display list keeps its own marks
 	}
-	// Round-robin over a scanned table rather than direct-mapped:
-	// hashing on the frame address collides, and a collision evicts a
-	// frame that is still on screen - which then re-decodes into a new
-	// buffer and invalidates its baked planar copy too.
-	uint8_t *lookup(const uint8_t *p) {
-		const int h = hashOf(p);
-		const int s = hint[h];
-		if (s != 0 && key[s - 1] == p) {
-			return buf[s - 1];
-		}
-		for (int i = 0; i < N; ++i) {
-			if (key[i] == p) {
-				hint[h] = (uint8_t)(i + 1);
-				return buf[i];
-			}
-		}
-		return 0;
+	int x1 = x + w, y1 = y + h;
+	if (x < 0) {
+		x = 0;
 	}
-	uint8_t *insert(const uint8_t *p, int size) {
-		const int i = pos;
-		pos = (pos + 1) & (N - 1);
-		hint[hashOf(p)] = (uint8_t)(i + 1);
-		if (cap[i] < size) {   // grow only: no free/malloc per miss
-			// Before it goes, not after: a bake keyed into this slab
-			// outlives the free otherwise, and malloc hands the same
-			// address to the next sprite that asks for one. The bake
-			// then matches a pointer holding somebody else's pixels,
-			// which is how a room a few screens in starts drawing
-			// fragments of the room before it.
-			if (buf[i]) {
-				ST_invalidateBakedRange(buf[i], (uint32_t)cap[i]);
-			}
-			::free(buf[i]);
-			buf[i] = (uint8_t *)malloc(size);
-			cap[i] = buf[i] ? size : 0;
-		}
-		if (buf[i]) {
-			// this slab is about to hold a different sprite: any
-			// planar bake keyed into it must go with the old one
-			ST_invalidateBakedRange(buf[i], (uint32_t)cap[i]);
-		}
-		key[i] = buf[i] ? p : 0;
-		return buf[i];
+	if (y < 0) {
+		y = 0;
 	}
-	void flush() {
-		for (int i = 0; i < N; ++i) {
-			key[i] = 0;
-		}
-		memset(hint, 0, sizeof(hint));
+	if (x1 > Video::GAMESCREEN_W) {
+		x1 = Video::GAMESCREEN_W;
 	}
-	// flush, and give the slabs back
-	void release() {
-		for (int i = 0; i < N; ++i) {
-			if (buf[i]) {
-				ST_invalidateBakedRange(buf[i], (uint32_t)cap[i]);
-				::free(buf[i]);
-			}
-			buf[i] = 0;
-			cap[i] = 0;
-		}
-		flush();
+	if (y1 > Video::GAMESCREEN_H) {
+		y1 = Video::GAMESCREEN_H;
 	}
+	if (x1 > x && y1 > y) {
+		vid.markBlockAsDirty(x, y, x1 - x, y1 - y, vid._layerScale);
+	}
+}
+
+// --- record and replay (record=N, replay=N) ------------------------
+//
+// A benchmark that plays. bench=true times an idle Conrad in a warm
+// room, the one case where every sprite cache hits, so it never sees a
+// fight. A recording is the input of a real session - running,
+// shooting, rooms changing - one keymask byte per inp_update, the
+// format the demos use; a replay feeds it back with no pacing and logs
+// what each frame cost. Both start from a title Load, so the state is
+// the save's, and the seed travels in the file because no save holds
+// one. Catch-ups are off while recording, so a step is a frame in both.
+enum { kRecMaxSteps = 32768, kRecVersion = 1 };
+static const uint32_t TAG_RSRC = 0x52535243;   // 'RSRC'
+
+// Per 64 frames of a replay, kept in memory and logged at the end so
+// no log write lands inside the measurement.
+struct STRepWindow {
+	uint32_t ms;
+	uint32_t hash;          // replay_hash: the frames' layers, folded
+	uint16_t frames;
+	uint16_t worst;
+	uint8_t room;
+	STPerf perf;
 };
-static SpriteCache _spmCache;
-static SpriteCache _spcCache;
+enum { kRepWinFrames = 64, kRepMaxWindows = 160, kRepBuckets = 41 };   // 5ms buckets; the last is 200ms+
+static STRepWindow *g_repWin;           // only while replaying: no memory in play
+static int g_repWins;
+static STRepWindow g_repCur;
+static uint16_t g_repHist[kRepBuckets];
+static uint32_t g_repLast;              // when the previous frame ended
+static uint32_t g_repFrames, g_repMs, g_repWorst;
 
-// Decoded 16x16 icons. drawIcon used to run AMIGA_decodeIcn every
-// frame - walking the icon list and unpacking four bitplanes for the
-// inventory item on display - which measured 18ms of a 93ms frame on
-// a stock ST. The decode depends only on the icon number and the
-// loaded ICN bank, so it is done once.
-struct IconCache {
-	enum { N = 16, kSize = 16 * 16 };
-	uint8_t key[N];
-	bool used[N];
-	uint8_t buf[N][kSize];
-	int pos;
+static inline uint32_t rotHash(uint32_t h, uint32_t v) {
+	return ((h << 5) | (h >> 27)) ^ v;
+}
 
-	const uint8_t *lookup(uint8_t num) const {
-		for (int i = 0; i < N; ++i) {
-			if (used[i] && key[i] == num) {
-				return buf[i];
-			}
+// Added, not XORed: a layer is 8960 longs, so a frame's rotations come
+// to a whole turn and two identical frames XORed in would cancel. Each
+// frame's own hash is kept as well, and written to FHASH.BIN at the end,
+// so two builds' replays can be compared to the frame; replay_dump=N
+// writes frame N's layer and colours to DMP.BIN to look at.
+static uint32_t *g_repFrameHash;
+static uint32_t g_repFrameHashCap;
+
+static void ST_replayHashFrame(const uint8_t *layer) {
+	// the four planes, what is seen: the priority plane after them only
+	// steers drawing, and two exact ways of drawing may leave it apart
+	const uint32_t *p = (const uint32_t *)layer;
+	uint32_t h = 0;
+	for (int n = kSTPlaneBytes / 4; --n >= 0; ) {
+		h = ((h << 5) | (h >> 27)) + *p++;
+	}
+	g_repCur.hash = ((g_repCur.hash << 5) | (g_repCur.hash >> 27)) + h;
+	if (g_repFrameHash && g_repFrames < g_repFrameHashCap) {
+		g_repFrameHash[g_repFrames] = h;
+	}
+	if (g_options.replay_dump != 0 && g_repFrames == (uint32_t)g_options.replay_dump) {
+		FILE *fp = fopen("DMP.BIN", "wb");
+		if (fp) {
+			fwrite((const void *)0xFFFF8240UL, 2, 16, fp);   // the colours on screen
+			fwrite(layer, 1, kSTLayerSize, fp);
+			fclose(fp);
 		}
-		return 0;
 	}
-	uint8_t *insert(uint8_t num) {
-		const int i = pos;
-		pos = (pos + 1) & (N - 1);
-		// same recycling contract as SpriteCache::insert
-		ST_invalidateBakedRange(buf[i], kSize);
-		key[i] = num;
-		used[i] = true;
-		return buf[i];
+}
+
+static void ST_replayCloseWindow(uint8_t room) {
+	g_repCur.perf = g_stPerf;
+	g_repCur.room = room;
+	memset(&g_stPerf, 0, sizeof(g_stPerf));
+	if (g_repWin && g_repWins < kRepMaxWindows) {
+		g_repWin[g_repWins++] = g_repCur;
 	}
-	void flush() {
-		for (int i = 0; i < N; ++i) {
-			used[i] = false;
-		}
+	memset(&g_repCur, 0, sizeof(g_repCur));
+}
+
+static void ST_replayReset(uint32_t now, uint32_t steps) {
+	if (!g_repWin) {
+		g_repWin = (STRepWindow *)malloc(kRepMaxWindows * sizeof(STRepWindow));
 	}
-};
-static IconCache _icnCache;
+	if (g_options.replay_hash) {
+		free(g_repFrameHash);
+		g_repFrameHash = (uint32_t *)malloc(steps * sizeof(uint32_t) + 4);
+		g_repFrameHashCap = g_repFrameHash ? steps : 0;
+	}
+	g_repWins = 0;
+	memset(&g_repCur, 0, sizeof(g_repCur));
+	memset(g_repHist, 0, sizeof(g_repHist));
+	memset(&g_stPerf, 0, sizeof(g_stPerf));
+	g_repLast = now;
+	g_repFrames = g_repMs = g_repWorst = 0;
+}
 
 // The saved games on disk for the title's Load line: RS<level>_<slot>.SAV
 // as makeGameStateName writes them, level 1-7 and slot 00 (the level's
@@ -337,6 +347,11 @@ Game::Game(SystemStub *stub, FileSystem *fs, const char *savePath, int level, Re
 	_stDeadline = 0;
 	_stStepPhase = 0;
 	_stLoadSlot = -1;
+	memset(&_stRecHdr, 0, sizeof(_stRecHdr));
+	_stRecBuf = 0;
+	_stRecPos = 0;
+	_stRecording = false;
+	_stReplaying = false;
 #endif
 }
 
@@ -349,6 +364,9 @@ void Game::run() {
 
 	_res.init();
 	_res.load_TEXT();
+#ifdef ATARIST
+	ST_sprSetDecoder(stDecode, this, _res._scratchBuffer, Resource::kScratchBufferSize);
+#endif
 
 	switch (_res._type) {
 	case kResourceTypeAmiga:
@@ -398,7 +416,11 @@ void Game::run() {
 			_menu.displayTitleScreenMac(Menu::kMacTitleScreen_Presage);
 		}
 	}
+#ifdef ATARIST
+	if (!g_options.skip_intro && g_options.replay < 0) {
+#else
 	if (!g_options.skip_intro) {
+#endif
 		playCutscene(0x40);
 		playCutscene(0x0D);
 	}
@@ -503,6 +525,20 @@ void Game::run() {
 			}
 			break;
 		case kResourceTypeAmiga:
+#ifdef ATARIST
+			if (g_options.replay >= 0) {
+				// straight to the recording's save: no title, and a
+				// second pass round this loop is the end of the run
+				if (_stReplaying || !ST_replayLoad()) {
+					_stub->_pi.quit = true;
+					break;
+				}
+				_menu._skill = _stRecHdr.skill;
+				_cheats = _stRecHdr.cheats;
+				_currentLevel = _stRecHdr.level;
+				_stLoadSlot = _stRecHdr.slot;
+			} else
+#endif
 			displayTitleScreenAmiga();
 			_stub->useFillWindow(true);
 			_skillLevel = _menu._skill;
@@ -538,6 +574,19 @@ void Game::run() {
 				// level's start, and so without its opening cutscene
 				if (loadGameState((uint8_t)_stLoadSlot)) {
 					_cut._id = 0xFFFF;
+					if (g_options.replay >= 0) {
+						// the seed the recording ran on, which no save
+						// holds; from here the game is input-driven
+						_randSeed = _stRecHdr.seed;
+						if (ST_stateHash() != _stRecHdr.startHash) {
+							warning("Replay: the save is not the one recorded from");
+						}
+						_stReplaying = true;
+						_stRecPos = 0;
+						ST_replayReset(_stub->getTimeStamp(), _stRecHdr.steps);
+					} else if (g_options.record >= 0) {
+						ST_recStart();
+					}
 					if (_stLoadSlot != kIngameSaveSlot) {
 						_stateSlot = (uint8_t)_stLoadSlot;      // Ctrl+S saves back to it
 					} else {
@@ -565,6 +614,9 @@ void Game::run() {
 			}
 			_stub->setOverscanColor(0x00);
 #ifdef ATARIST
+			if (_stRecording) {
+				ST_recFinish("the level loop ended");
+			}
 			ST_unloadLevel();
 #endif
 			// flush inputs
@@ -1062,6 +1114,17 @@ void Game::resetGameState() {
 }
 
 void Game::mainLoop() {
+#ifdef ATARIST
+	// a recording is gameplay only: what follows a cutscene, a death
+	// or a level change depends on more than the keymask carries
+	if (_stRecording && (_cut._id != 0xFFFF || _deathCutsceneCounter != 0 || _currentLevel != _stRecHdr.level)) {
+		ST_recFinish("a cutscene, a death or a new level");
+	}
+	if (_stReplaying && _stRecPos >= _stRecHdr.steps) {
+		ST_replayDone();       // where the recording stopped, to the step
+		return;
+	}
+#endif
 	playCutscene();
 	if (_cut._id == 0x3D) {
 		showFinalScore();
@@ -1098,7 +1161,9 @@ void Game::mainLoop() {
 	// one draw. One catch-up per frame at most, so the shown rate
 	// never drops below half the step rate; the cutscene player
 	// holds its pace the same way (Cutscene::stDecideSkip).
-	if (_logicDebt >= kLogicStepMs) {
+	// Not while recording: a replay runs one step a frame, and the
+	// recording has to have done the same to be replayed
+	if (_logicDebt >= kLogicStepMs && !_stRecording) {
 		_logicDebt -= kLogicStepMs;
 		_stDeadline += stNextStep();      // the catch-up takes a step of the schedule
 		++_logicCatchUps;
@@ -1109,11 +1174,14 @@ void Game::mainLoop() {
 			--_blinkingConradCounter;
 		}
 	}
-	_vid.ST_restoreDirty();
+	_vid.ST_frameBegin();
 #else
 	memcpy(_vid._frontLayer, _vid._backLayer, _vid._layerSize);
 #endif
 	if (!stepLogic()) {
+#ifdef ATARIST
+		_vid.ST_frameAbort();
+#endif
 		return;
 	}
 	if (_res.isDOS() && (_stub->_pi.dbgMask & PlayerInput::DF_AUTOZOOM) != 0) {
@@ -1140,6 +1208,12 @@ void Game::mainLoop() {
 	if (_blinkingConradCounter != 0) {
 		--_blinkingConradCounter;
 	}
+#ifdef ATARIST
+	_vid.ST_frameEnd();
+	if (_stReplaying && g_options.replay_hash) {
+		ST_replayHashFrame(_vid._frontLayer);
+	}
+#endif
 	_vid.updateScreen();
 	updateTiming();
 	drawStoryTexts();
@@ -1150,6 +1224,11 @@ void Game::mainLoop() {
 	}
 	if (_stub->_pi.escape) {
 		_stub->_pi.escape = false;
+#ifdef ATARIST
+		if (_stRecording) {
+			ST_recFinish("Escape");
+		}
+#endif
 		if (_demoBin != -1 || handleConfigPanel()) {
 			_endLoop = true;
 			return;
@@ -1173,6 +1252,32 @@ bool Game::stepLogic() {
 	pge_prepare();
 	col_prepareRoomState();
 	uint8_t oldLevel = _currentLevel;
+#ifdef ATARIST
+	{
+		// Only the slots the bitmap says are in use: a level has up
+		// to 256 and a dozen or so are, so the walk was mostly empty
+		// slots. Processing one can start or stop another further on,
+		// and the walk must see that as the table walk did, so the
+		// byte is read again after each one, past it.
+		const int pgeNum = _res._pgeNum;
+		for (int b = 0; b < pgeNum; b += 8) {
+			unsigned bits = _pge_liveBits[b >> 3];
+			while (bits) {
+				const int k = pge_firstLive(bits);
+				if (b + k >= pgeNum) {
+					break;
+				}
+				LivePGE *pge = _pge_liveTable2[b + k];
+				if (pge) {
+					_col_currentPiegeGridPosY = (pge->pos_y / 36) & ~1;
+					_col_currentPiegeGridPosX = (pge->pos_x + 8) >> 4;
+					pge_process(pge);
+				}
+				bits = _pge_liveBits[b >> 3] & (0x7F >> k);
+			}
+		}
+	}
+#else
 	{
 		// walking pointer and a counter in registers, as pge_prepare
 		// does: indexed over a member count, gcc 4.6 reloads both the
@@ -1187,6 +1292,7 @@ bool Game::stepLogic() {
 			}
 		}
 	}
+#endif
 	if (oldLevel != _currentLevel) {
 		if (_res._isDemo) {
 			_currentLevel = oldLevel;
@@ -1205,8 +1311,16 @@ bool Game::stepLogic() {
 			_deathCutsceneCounter = 1;
 		} else {
 			_currentRoom = _pgeLive[0].room_location;
+#ifdef ATARIST
+			// timed for the log: a room's first visit is where the
+			// unpacking and tile decoding show
+			const uint32_t roomT0 = _stub->getTimeStamp();
+			loadLevelRoom();
+			info("Room %d (%dms)", _currentRoom, (int)(_stub->getTimeStamp() - roomT0));
+#else
 			info("Room %d", _currentRoom);
 			loadLevelRoom();
+#endif
 #ifdef ATARIST
 			if (_stPaletteReloaded) {
 				// Ctrl+Shift+P's confirmation, once the room is back
@@ -1232,6 +1346,10 @@ bool Game::stepLogic() {
 
 void Game::updateTiming() {
 #ifdef ATARIST
+	if (_stReplaying) {
+		ST_replayFrame();
+		return;
+	}
 	// Benchmark: a fixed number of gameplay frames with no input, no
 	// frame limiter and a fixed seed, timed on the ST's own 200Hz
 	// counter so the figure is emulated time and fast-forward does
@@ -1261,19 +1379,33 @@ void Game::updateTiming() {
 	if (g_options.log_fps) {
 		static int frames;
 		static uint32_t t0;
+		// the longest frame of the window, from the end of the last
+		// one's wait to here: an average hides the frame that hitched
+		static uint32_t worst;
+		static uint16_t gen0;
+		const uint32_t now = _stub->getTimeStamp();
+		if (now - _frameTimestamp > worst) {
+			worst = now - _frameTimestamp;
+		}
 		if (++frames == 64) {
-			const uint32_t now = _stub->getTimeStamp();
 			const uint32_t d = now - t0;
 			if (t0 != 0 && d != 0) {
 				// the miss count rides along: a border that drops
 				// under load shows here rather than only in the
 				// per-cutscene line
 				// steps = frames + catch-ups: the game's own pace
-				info("fps %d.%d (%d ms/frame) catch-ups %u misses %u", (int)(64000 / d), (int)((640000 / d) % 10), (int)(d / 64),
-					(unsigned)_logicCatchUps, (unsigned)ST_overscanMisses());
+				char perf[160];
+				ST_perfFormat(g_stPerf, perf, sizeof(perf));
+				info("fps %d.%d (%d ms/frame) catch-ups %u misses %u worst %dms remap %u pge %d | %s",
+					(int)(64000 / d), (int)((640000 / d) % 10), (int)(d / 64),
+					(unsigned)_logicCatchUps, (unsigned)ST_overscanMisses(),
+					(int)worst, (unsigned)(uint16_t)(ST_remapGen() - gen0), ST_livePges(), perf);
 			}
+			memset(&g_stPerf, 0, sizeof(g_stPerf));
 			t0 = now;
 			frames = 0;
+			worst = 0;
+			gen0 = ST_remapGen();
 			_logicCatchUps = 0;
 		}
 	}
@@ -1326,6 +1458,218 @@ void Game::updateTiming() {
 #ifdef ATARIST
 // the next step of the schedule, 6 or 7 ticks of the 200Hz clock:
 // 30, 35, 35ms, which is 20 ticks for three steps
+int Game::ST_livePges() const {
+	int n = 0;
+	for (int i = 0; i < _res._pgeNum; ++i) {
+		if (_pge_liveTable2[i]) {
+			++n;
+		}
+	}
+	return n;
+}
+
+// The game's own state, for telling whether a replay did what its
+// recording did: every object's fields up to its pointers, where it
+// is, the seed, the score and the level's collision data.
+uint32_t Game::ST_stateHash() const {
+	uint32_t h = 0x9E3779B9;
+	enum { kPgeWords = offsetof(LivePGE, next_PGE_in_room) / 2 };
+	for (int i = 0; i < _res._pgeNum; ++i) {
+		const uint16_t *w = (const uint16_t *)&_pgeLive[i];
+		for (int k = 0; k < kPgeWords; ++k) {
+			h = rotHash(h, w[k]);
+		}
+	}
+	h = rotHash(h, _currentRoom);
+	h = rotHash(h, _currentLevel);
+	h = rotHash(h, _randSeed);
+	h = rotHash(h, _score);
+	h = rotHash(h, _pge_opGunVar);
+	const uint16_t *ct = (const uint16_t *)_res._ctData;
+	for (int i = 0; i < (int)(sizeof(_res._ctData) / 2); ++i) {
+		h = rotHash(h, ct[i]);
+	}
+	return h;
+}
+
+void Game::ST_recStart() {
+	if (!_stRecBuf) {
+		_stRecBuf = (uint8_t *)malloc(kRecMaxSteps);
+		if (!_stRecBuf) {
+			warning("Record: no memory for the recording");
+			return;
+		}
+	}
+	memset(&_stRecHdr, 0, sizeof(_stRecHdr));
+	_stRecHdr.tag = TAG_RSRC;
+	_stRecHdr.version = kRecVersion;
+	_stRecHdr.level = _currentLevel;
+	_stRecHdr.slot = (uint8_t)_stLoadSlot;
+	_stRecHdr.skill = _skillLevel;
+	_stRecHdr.cheats = (uint8_t)_cheats;
+	_stRecHdr.seed = _randSeed;
+	_stRecHdr.startHash = ST_stateHash();
+	_stRecPos = 0;
+	_stRecording = true;
+	info("Record: from level %d slot %d into REC%02d.DEM", _currentLevel + 1, _stLoadSlot, g_options.record);
+}
+
+// One inp_update's worth: kept while recording, supplied while
+// replaying - after processEvents either way, so a replay overrides
+// whatever the keyboard said.
+void Game::ST_recStep() {
+	PlayerInput &pi = _stub->_pi;
+	if (_stReplaying) {
+		if (_stRecPos >= _stRecHdr.steps) {
+			// ran dry inside a menu or the inventory: end it there
+			ST_replayDone();
+			return;
+		}
+		const uint8_t m = _stRecBuf[_stRecPos++];
+		pi.dirMask = m & 0xF;
+		pi.enter = (m & 0x10) != 0;
+		pi.space = (m & 0x20) != 0;
+		pi.shift = (m & 0x40) != 0;
+		pi.backspace = (m & 0x80) != 0;
+		return;
+	}
+	if (_stRecPos >= kRecMaxSteps) {
+		ST_recFinish("the recording is full");
+		return;
+	}
+	uint8_t m = pi.dirMask & 0xF;
+	if (pi.enter) {
+		m |= 0x10;
+	}
+	if (pi.space) {
+		m |= 0x20;
+	}
+	if (pi.shift) {
+		m |= 0x40;
+	}
+	if (pi.backspace) {
+		m |= 0x80;
+	}
+	_stRecBuf[_stRecPos++] = m;
+}
+
+void Game::ST_recFinish(const char *why) {
+	_stRecording = false;
+	_stRecHdr.steps = _stRecPos;
+	_stRecHdr.endHash = ST_stateHash();
+	char name[16];
+	snprintf(name, sizeof(name), "REC%02d.DEM", g_options.record);
+	FILE *fp = fopen(name, "wb");
+	bool ok = fp != 0;
+	if (fp) {
+		ok = fwrite(&_stRecHdr, sizeof(_stRecHdr), 1, fp) == 1
+		     && fwrite(_stRecBuf, 1, _stRecPos, fp) == _stRecPos;
+		ok = (fclose(fp) == 0) && ok;
+	}
+	info("RECORD done at %s: %s, %u steps, hash %08lx%s", why, name,
+		(unsigned)_stRecPos, (unsigned long)_stRecHdr.endHash, ok ? "" : ", NOT WRITTEN");
+}
+
+bool Game::ST_replayLoad() {
+	char name[16];
+	snprintf(name, sizeof(name), "REC%02d.DEM", g_options.replay);
+	FILE *fp = fopen(name, "rb");
+	if (!fp) {
+		warning("Replay: %s not found", name);
+		return false;
+	}
+	bool ok = fread(&_stRecHdr, sizeof(_stRecHdr), 1, fp) == 1
+	          && _stRecHdr.tag == TAG_RSRC && _stRecHdr.version == kRecVersion
+	          && _stRecHdr.steps <= kRecMaxSteps;
+	if (ok) {
+		_stRecBuf = (uint8_t *)malloc(_stRecHdr.steps + 1);
+		ok = _stRecBuf && fread(_stRecBuf, 1, _stRecHdr.steps, fp) == _stRecHdr.steps;
+	}
+	fclose(fp);
+	if (!ok) {
+		warning("Replay: %s is not a recording this build can play", name);
+		return false;
+	}
+	info("Replay: %s, level %d slot %d, %u steps", name, _stRecHdr.level + 1, _stRecHdr.slot, (unsigned)_stRecHdr.steps);
+	return true;
+}
+
+// The replay's clock: one call a frame, from updateTiming, which does
+// no pacing while a replay runs. 5ms resolution, like every ST time.
+void Game::ST_replayFrame() {
+	const uint32_t now = _stub->getTimeStamp();
+	const uint32_t d = now - g_repLast;
+	g_repLast = now;
+	++g_repFrames;
+	g_repMs += d;
+	if (d > g_repWorst) {
+		g_repWorst = d;
+	}
+	int b = (int)(d / 5);
+	if (b >= kRepBuckets) {
+		b = kRepBuckets - 1;
+	}
+	++g_repHist[b];
+	++g_repCur.frames;
+	g_repCur.ms += d;
+	if (d > g_repCur.worst) {
+		g_repCur.worst = (uint16_t)d;
+	}
+	if (g_repCur.frames == kRepWinFrames) {
+		ST_replayCloseWindow(_currentRoom);
+	}
+}
+
+void Game::ST_replayDone() {
+	_stReplaying = false;
+	PlayerInput &pi = _stub->_pi;
+	pi.dirMask = 0;
+	pi.enter = pi.space = pi.shift = pi.backspace = false;
+	pi.quit = true;
+	const uint32_t endHash = ST_stateHash();
+	if (g_repCur.frames != 0) {
+		ST_replayCloseWindow(_currentRoom);
+	}
+	uint32_t steadyMs = 0, steadyFrames = 0;
+	for (int i = 0; i < g_repWins; ++i) {
+		const STRepWindow &w = g_repWin[i];
+		char perf[160];
+		ST_perfFormat(w.perf, perf, sizeof(perf));
+		info("REPLAY window %d room %d: %d frames %d.%02d ms/frame worst %dms hash %08lx | %s",
+			i, w.room, w.frames, (int)(w.ms / w.frames), (int)((w.ms * 100 / w.frames) % 100),
+			w.worst, (unsigned long)w.hash, perf);
+		if (i != 0) {          // the first holds the room's load
+			steadyMs += w.ms;
+			steadyFrames += w.frames;
+		}
+	}
+	char hist[kRepBuckets * 12 + 1];
+	int len = 0;
+	for (int b = 0; b < kRepBuckets; ++b) {
+		if (g_repHist[b]) {
+			len += snprintf(hist + len, sizeof(hist) - len, " %d:%u", b * 5, (unsigned)g_repHist[b]);
+		}
+	}
+	hist[len] = 0;
+	info("REPLAY frame times, 5ms buckets from:%s", hist);
+	if (g_repFrameHash) {
+		FILE *fp = fopen("FHASH.BIN", "wb");
+		if (fp) {
+			const uint32_t n = (g_repFrames < g_repFrameHashCap) ? g_repFrames : g_repFrameHashCap;
+			fwrite(g_repFrameHash, sizeof(uint32_t), n, fp);
+			fclose(fp);
+		}
+	}
+	const uint32_t f = g_repFrames ? g_repFrames : 1;
+	const uint32_t sf = steadyFrames ? steadyFrames : 1;
+	info("REPLAY done: %u steps %u frames %u ms, %d.%02d ms/frame, steady %d.%02d, worst %ums, hash %08lx %s",
+		(unsigned)_stRecHdr.steps, (unsigned)g_repFrames, (unsigned)g_repMs,
+		(int)(g_repMs / f), (int)((g_repMs * 100 / f) % 100),
+		(int)(steadyMs / sf), (int)((steadyMs * 100 / sf) % 100),
+		(unsigned)g_repWorst, (unsigned long)endHash,
+		endHash == _stRecHdr.endHash ? "match" : "DIVERGED");
+}
+
 int Game::stNextStep() {
 	static const uint8_t kStepMs[3] = { 30, 35, 35 };
 	const int ms = kStepMs[_stStepPhase];
@@ -1340,6 +1684,15 @@ void Game::playCutscene(int id) {
 	}
 	if (_cut._id != 0xFFFF) {
 		info("Cutscene %02X start", _cut._id);
+#ifdef ATARIST
+		// A cutscene takes about 140K for its caches and pages. On a
+		// 2.5MB machine the sprite bakes and kept rooms can leave less
+		// than that: they go, and come back as play needs them.
+		if (((long)Malloc(-1) >> 10) < 200) {
+			ST_sprRelease();
+			ST_roomCacheRelease();
+		}
+#endif
 		ToggleWidescreenStack tws(_stub, false);
 		_mix.stopMusic();
 		if (_res._hasSeqData) {
@@ -1552,11 +1905,11 @@ void Game::ST_placeIcon() {
 	}
 	if (oldY >= 0) {
 		ST_layerCopyRect(_vid._frontLayer, _vid._backLayer, 232, oldY, 16);
-		_vid.markBlockAsDirty(232, oldY, 16, 16, _vid._layerScale);
+		_vid.ST_backChanged(232, oldY, 16, 16);
 	}
 	if (want >= 0 && iconY != oldY) {
 		ST_layerCopyRect(_vid._frontLayer, _vid._backLayer, 232, iconY, 16);
-		_vid.markBlockAsDirty(232, iconY, 16, 16, _vid._layerScale);
+		_vid.ST_backChanged(232, iconY, 16, 16);
 	}
 	_stIconShown = want;
 	_stIconY = iconY;
@@ -1568,7 +1921,9 @@ void Game::drawCurrentInventoryItem() {
 	// The icon is already in place (ST_placeIcon). The engine draws it
 	// over everything, so it goes back on top only where a sprite was
 	// drawn across it this frame.
-	if (_stIconShown >= 0 && _vid.ST_blocksDirty(232, _stIconY, 16, 16)) {
+	// With the display list the icon is drawn every frame: unchanged, it
+	// costs nothing, and when a sprite crosses it the list redraws it.
+	if (_stIconShown >= 0 && (_vid.ST_dlOn() || _vid.ST_blocksDirty(232, _stIconY, 16, 16))) {
 		drawIcon(_stIconShown, 232, _stIconY, 0xA);
 	}
 #else
@@ -2175,20 +2530,7 @@ void Game::drawAnimBuffer(uint8_t stateNum, AnimBufferState *state) {
 				case kResourceTypeAmiga:
 					{
 #ifdef ATARIST
-						const uint8_t *chr = _spmCache.lookup(state->dataPtr);
-						if (!chr) {
-							const int w = ((state->dataPtr[2] >> 7) + 1) * 16;
-							const int h = state->dataPtr[2] & 0x7F;
-							uint8_t *dst = _spmCache.insert(state->dataPtr, w * h);
-							if (dst) {
-								_vid.AMIGA_decodeSpm(state->dataPtr, dst);
-								chr = dst;
-							} else {
-								_vid.AMIGA_decodeSpm(state->dataPtr, _res._scratchBuffer);
-								chr = _res._scratchBuffer;
-							}
-						}
-						drawCharacter(chr, state->x, state->y, state->h, state->w, pge->flags);
+						ST_drawCharacterBaked(state->dataPtr, state->x, state->y, state->h, state->w, pge->flags);
 #else
 						_vid.AMIGA_decodeSpm(state->dataPtr, _res._scratchBuffer);
 						drawCharacter(_res._scratchBuffer, state->x, state->y, state->h, state->w, pge->flags);
@@ -2304,24 +2646,22 @@ void Game::drawObjectFrame(const uint8_t *bankDataPtr, const uint8_t *dataPtr, i
 	const uint8_t sprite_w = (((sprite_flags >> 2) & 3) + 1) * 8;
 
 #ifdef ATARIST
-	const uint8_t *decoded = 0;
+	if (_res._type == kResourceTypeAmiga) {
+		// the piece whole, at its unclipped place: the bake keys on the
+		// bank bytes, and the layer clips it
+		unsigned stFlags = (sprite_flags & 0x10) ? kSTSpriteXflip : 0;
+		if (!_eraseBackground) {
+			stFlags |= kSTSpriteRespectPrio;
+		}
+		ST_sprDraw(_vid._frontLayer, kSprKindSPC, src, kSprIdBank | (_res._stBankEpoch & kSprIdEpochMask),
+		           sprite_w, sprite_h, sprite_x, sprite_y, (flags & 0x60) >> 1, stFlags, false);
+		stMarkClipped(_vid, sprite_x, sprite_y, sprite_w, sprite_h);
+		return;
+	}
 #endif
 	switch (_res._type) {
 	case kResourceTypeAmiga:
-#ifdef ATARIST
-		decoded = _spcCache.lookup(src);
-		if (!decoded) {
-			uint8_t *dst = _spcCache.insert(src, sprite_w * sprite_h);
-			if (dst) {
-				_vid.AMIGA_decodeSpc(src, sprite_w, sprite_h, dst);
-				decoded = dst;
-			} else {
-				_vid.AMIGA_decodeSpc(src, sprite_w, sprite_h, _res._scratchBuffer);
-			}
-		}
-#else
 		_vid.AMIGA_decodeSpc(src, sprite_w, sprite_h, _res._scratchBuffer);
-#endif
 		break;
 	case kResourceTypeDOS:
 	case kResourceTypePC98:
@@ -2335,11 +2675,7 @@ void Game::drawObjectFrame(const uint8_t *bankDataPtr, const uint8_t *dataPtr, i
 		break;
 	}
 
-#ifdef ATARIST
-	src = decoded ? decoded : _res._scratchBuffer;
-#else
 	src = _res._scratchBuffer;
-#endif
 	bool sprite_mirror_x = false;
 	int16_t sprite_clipped_w;
 	if (sprite_x >= 0) {
@@ -2394,11 +2730,7 @@ void Game::drawObjectFrame(const uint8_t *bankDataPtr, const uint8_t *dataPtr, i
 
 #ifdef ATARIST
 	(void)dst_offset;
-	unsigned stFlags = (sprite_flags & 0x10) ? kSTSpriteXflip : 0;
-	if (!_eraseBackground) {
-		stFlags |= kSTSpriteRespectPrio;
-	}
-	ST_drawSpriteCached(_vid._frontLayer, src, sprite_w, sprite_x, sprite_y, sprite_clipped_w, sprite_clipped_h, sprite_col_mask, stFlags, false);
+	(void)sprite_col_mask;
 #else
 	if (_eraseBackground) {
 		if (!(sprite_flags & 0x10)) {
@@ -2516,7 +2848,11 @@ void Game::drawCharacter(const uint8_t *dataPtr, int16_t pos_x, int16_t pos_y, u
 		stFlags |= kSTSpriteColMajor;
 		stPitch = sprite_h;
 	}
-	ST_drawSpriteCached(_vid._frontLayer, src, stPitch, pos_x, pos_y, sprite_clipped_w, sprite_clipped_h, sprite_col_mask, stFlags, false);
+	// only non-Amiga data comes this way on the ST (never, in practice):
+	// Amiga frames go through ST_drawCharacterBaked
+	uint8_t map16[16];
+	ST_buildMap16(sprite_col_mask, map16);
+	ST_drawSprite(_vid._frontLayer, src, stPitch, pos_x, pos_y, sprite_clipped_w, sprite_clipped_h, map16, stFlags, false);
 #else
 	if (!(flags & 2)) {
 		if (sprite_mirror_y) {
@@ -2534,6 +2870,28 @@ void Game::drawCharacter(const uint8_t *dataPtr, int16_t pos_x, int16_t pos_y, u
 #endif
 	_vid.markBlockAsDirty(pos_x, pos_y, sprite_clipped_w, sprite_clipped_h, _vid._layerScale);
 }
+
+#ifdef ATARIST
+// drawCharacter for Amiga frames, through the planar bakes: the frame is
+// named by its bytes in the sprite data, drawn whole at its unclipped
+// place, and only decoded on the bake's miss.
+void Game::ST_drawCharacterBaked(const uint8_t *dataPtr, int16_t x, int16_t y, uint8_t a, uint8_t b, uint8_t flags) {
+	unsigned stFlags = kSTSpriteRespectPrio;
+	if (b & 0x40) {
+		b &= ~0x40;
+		SWAP(a, b);
+		stFlags |= kSTSpriteColMajor;
+	}
+	if (flags & 2) {
+		stFlags |= kSTSpriteXflip;
+	}
+	const uint8_t colMask = ((flags & 0x60) == 0x60) ? 0x50 : 0x40;
+	const uint32_t ident = _res.ST_inPerso(dataPtr) ? kSprIdPerso
+	                       : (kSprIdMonster | (_res._stMonsterEpoch & kSprIdEpochMask));
+	ST_sprDraw(_vid._frontLayer, kSprKindSPM, dataPtr, ident, b, a, x, y, colMask, stFlags, false);
+	stMarkClipped(_vid, x, y, b, a);
+}
+#endif
 
 int Game::loadMonsterSprites(LivePGE *pge) {
 	debug(DBG_GAME, "Game::loadMonsterSprites()");
@@ -2561,11 +2919,23 @@ int Game::loadMonsterSprites(LivePGE *pge) {
 		switch (_res._type) {
 		case kResourceTypeAmiga:
 		case kResourceTypeSega: {
-				_res.load(_monsterNames[1][_curMonsterNum], Resource::OT_SPM);
 #ifdef ATARIST
-				// the SPM buffer is reused per monster
-				_spmCache.flush();
-				ST_flushSpriteCache();
+				// Once read, a monster's sprites stay for the level in a
+				// buffer of their own. All four used to take turns in
+				// one, so two kinds of monster in a room read a file
+				// from disk every time the drawing passed from one to
+				// the other, and threw away every sprite decoded and
+				// baked with it.
+				if (!_res.ST_monsterResident(_curMonsterNum)) {
+					_res.load(_monsterNames[1][_curMonsterNum], Resource::OT_SPM);
+					++g_stPerf.monsterLoads;
+					if (!(g_options.ab & kAbNoMonsterKeep)) {
+						_res.ST_keepMonster(_curMonsterNum);
+					}
+				}
+				_res.ST_pointMonsters();
+#else
+				_res.load(_monsterNames[1][_curMonsterNum], Resource::OT_SPM);
 #endif
 				const int dst_offset = Video::PALETTE_INDEX_MONSTER * 16;
 				const int src_offset = _vid._mapPalSlot3 * 16 + (_curMonsterNum & 1) * 8;
@@ -2724,9 +3094,6 @@ void Game::ST_unloadLevel() {
 	_mix.stopAll();
 	clearStateRewind();
 	_res.freeLevelData();
-	_spmCache.release();
-	_spcCache.release();
-	_icnCache.flush();
 	_vid.ST_releaseLevelCaches();
 	ST_logFreeMemory("level unloaded");
 }
@@ -2734,10 +3101,11 @@ void Game::ST_unloadLevel() {
 
 void Game::loadLevelData() {
 #ifdef ATARIST
-	_spmCache.flush();
-	_spcCache.flush();
-	_icnCache.flush();
-	ST_flushSpriteCache();
+	// the bakes' memory back while the level loads; the first sprite
+	// drawn in it sizes the ring to what is left. The rooms kept for
+	// going back belong to the level that is going.
+	ST_sprRelease();
+	ST_roomCacheRelease();
 #endif
 	info("Loading level %d", _currentLevel + 1);
 #ifdef ATARIST
@@ -2878,7 +3246,7 @@ void Game::loadLevelData() {
 	_col_slots2Cur = _col_slots2;
 	_col_slots2Next = 0;
 
-	memset(_pge_liveTable2, 0, sizeof(_pge_liveTable2));
+	pge_clearLive();
 	memset(_pge_liveTable1, 0, sizeof(_pge_liveTable1));
 
 	_currentRoom = _res._pgeInit[0].init_room;
@@ -2935,15 +3303,25 @@ void Game::loadLevelData() {
 }
 
 void Game::drawIcon(uint8_t iconNum, int16_t x, int16_t y, uint8_t colMask, uint8_t *layer) {
-	uint8_t scratch[16 * 16];
-	uint8_t *buf = scratch;
 #ifdef ATARIST
-	const uint8_t *cached = _icnCache.lookup(iconNum);
-	if (cached) {
-		buf = (uint8_t *)cached;
-		goto drawCached;
+	if (_res._type == kResourceTypeAmiga) {
+		// Into another layer - the icon's place in the background - it
+		// leaves the priority plane alone, so sprites crossing it keep
+		// the fast path; drawCurrentInventoryItem puts it back on top of
+		// them. The bake keys on the icon number: icons are decoded once
+		// (ST_decodeIcon), where drawIcon used to unpack four bitplanes
+		// every frame - 18ms of a 93ms frame on a stock ST.
+		const bool front = !layer || layer == _vid._frontLayer;
+		ST_sprDraw(front ? _vid._frontLayer : layer, kSprKindIcon, (const uint8_t *)(uintptr_t)(iconNum + 1), kSprIdIcon,
+		           16, 16, x, y, colMask << 4, 0, front && (colMask & 8) != 0);
+		if (front) {
+			_vid.markBlockAsDirty(x, y, 16, 16, _vid._layerScale);
+		}
+		return;
 	}
 #endif
+	uint8_t scratch[16 * 16];
+	uint8_t *buf = scratch;
 	switch (_res._type) {
 	case kResourceTypeAmiga:
 		if (iconNum > 30) {
@@ -2995,31 +3373,47 @@ void Game::drawIcon(uint8_t iconNum, int16_t x, int16_t y, uint8_t colMask, uint
 		break;
 	}
 #ifdef ATARIST
-	if (_res._type != kResourceTypeMac) {
-		// draw from the cached copy, never the stack scratch: the
-		// planar cache keys on the source address, and a stack
-		// buffer is the same address with different content every
-		// call
-		uint8_t *kept = _icnCache.insert(iconNum);
-		memcpy(kept, buf, IconCache::kSize);
-		buf = kept;
-	}
-drawCached:
-#endif
-#ifdef ATARIST
-	// Into another layer - the icon's place in the background - it
-	// leaves the priority plane alone, so sprites crossing it keep the
-	// fast path; drawCurrentInventoryItem puts it back on top of them.
-	const bool front = !layer || layer == _vid._frontLayer;
-	ST_drawSpriteCached(front ? _vid._frontLayer : layer, buf, 16, x, y, 16, 16, colMask << 4, 0, front && (colMask & 8) != 0);
-	if (!front) {
-		return;                        // not the visible layer
+	{
+		uint8_t map16[16];
+		ST_buildMap16(colMask << 4, map16);
+		ST_drawSprite(layer ? layer : _vid._frontLayer, buf, 16, x, y, 16, 16, map16, 0, false);
 	}
 #else
 	_vid.drawSpriteSub1(buf, _vid._frontLayer + x + y * _vid._w, 16, 16, 16, colMask << 4);
 #endif
 	_vid.markBlockAsDirty(x, y, 16, 16, _vid._layerScale);
 }
+
+#ifdef ATARIST
+// An Amiga icon as chunky 16x16, for its bake (drawIcon)
+void Game::ST_decodeIcon(uint8_t iconNum, uint8_t *buf) {
+	if (iconNum > 30) {
+		// inventory icons
+		switch (iconNum) {
+		case 76: // cursor
+			memset(buf, 0, 16 * 16);
+			for (int i = 0; i < 3; ++i) {
+				buf[i] = buf[15 * 16 + (15 - i)] = 1;
+				buf[i * 16] = buf[(15 - i) * 16 + 15] = 1;
+			}
+			break;
+		case 77: // up - icon.spr 4
+			memset(buf, 0, 16 * 16);
+			_vid.AMIGA_decodeIcn(_res._icn, 35, buf);
+			break;
+		case 78: // down - icon.spr 5
+			memset(buf, 0, 16 * 16);
+			_vid.AMIGA_decodeIcn(_res._icn, 36, buf);
+			break;
+		default:
+			memset(buf, 5, 16 * 16);
+			break;
+		}
+	} else {
+		_vid.AMIGA_decodeIcn(_res._icn, iconNum, buf);
+	}
+}
+#endif
 
 void Game::playSound(uint8_t num, uint8_t softVol) {
 	debug(DBG_GAME, "playSound num:%d volume:%d", num, softVol);
@@ -3251,6 +3645,11 @@ void Game::handleInventory() {
 
 void Game::inp_update() {
 	_stub->processEvents();
+#ifdef ATARIST
+	if (_stRecording || _stReplaying) {
+		ST_recStep();
+	}
+#endif
 	if (_demoBin != -1 && _inp_demPos < _res._demLen) {
 		const int keymask = _res._dem[_inp_demPos++];
 		_stub->_pi.dirMask = keymask & 0xF;
@@ -3413,7 +3812,7 @@ void Game::loadState(File *f, int version) {
 	uint32_t off;
 	_skillLevel = f->readByte();
 	_score = f->readUint32BE();
-	memset(_pge_liveTable2, 0, sizeof(_pge_liveTable2));
+	pge_clearLive();
 	memset(_pge_liveTable1, 0, sizeof(_pge_liveTable1));
 	off = f->readUint32BE();
 	if (off == 0xFFFFFFFF) {
@@ -3478,7 +3877,7 @@ void Game::loadState(File *f, int version) {
 		if (_res._pgeInit[i].skill <= _skillLevel) {
 			LivePGE *pge = &_pgeLive[i];
 			if (pge->flags & 4) {
-				_pge_liveTable2[pge->index] = pge;
+				pge_setLive(pge->index, pge);
 			}
 			pge->next_PGE_in_room = _pge_liveTable1[pge->room_location];
 			_pge_liveTable1[pge->room_location] = pge;

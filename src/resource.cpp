@@ -35,13 +35,27 @@ Resource::Resource(FileSystem *fs, ResourceType ver, Language lang) {
 	if (!_scratchBuffer) {
 		error("Unable to allocate temporary memory buffer");
 	}
+#ifdef ATARIST
+	// 28K as upstream, unless the machine has RAM to spare. With 4MB
+	// the banks of most of a level fit at once, where 28K held about one
+	// room's: every room change emptied it and unpacked the tile banks
+	// again, half a second of a room entry on an 8MHz ST. Asked of
+	// GEMDOS, not read from phystop: this runs before the game is in
+	// supervisor mode, where low memory is out of reach. 4MB has about
+	// 2.9MB free here and 2.5MB about 1.4MB.
+	const int kBankDataSize = ((Malloc(-1) >> 10) >= 2048 && !(g_options.ab & kAbSmallBankArena)) ? 384 * 1024 : 0x7000;
+#else
 	static const int kBankDataSize = 0x7000;
+#endif
 	_bankData = (uint8_t *)malloc(kBankDataSize);
 	if (!_bankData) {
 		error("Unable to allocate bank data buffer");
 	}
 	_bankDataTail = _bankData + kBankDataSize;
 	clearBankData();
+#ifdef ATARIST
+	info("Bank arena: %dK (%ldK was free)", kBankDataSize >> 10, (long)Malloc(-1) >> 10);
+#endif
 }
 
 Resource::~Resource() {
@@ -137,6 +151,17 @@ bool Resource::fileExists(const char *filename) {
 }
 
 void Resource::clearLevelRes() {
+#ifdef ATARIST
+	ST_freeMonsters();
+	free(_stLevU); _stLevU = 0;
+	if (_stMbkU) {
+		// the banks were the arena's: it is all free again
+		_stMbkU = 0;
+		_stMbkUCount = 0;
+		_stMbkUEnd = 0;
+		clearBankData();
+	}
+#endif
 	free(_tbn); _tbn = 0;
 	free(_mbk); _mbk = 0;
 	free(_pal); _pal = 0;
@@ -822,6 +847,12 @@ void Resource::load(const char *objName, int objType, const char *ext) {
 		if (f.ioErr()) {
 			error("I/O error when reading '%s'", _entryName);
 		}
+#ifdef ATARIST
+		if (objType == OT_LEV || objType == OT_MBK) {
+			f.close();
+			ST_loadUnpackedResident(objType);
+		}
+#endif
 	} else {
 		if (_archive) {
 			uint32_t size;
@@ -1356,6 +1387,9 @@ void Resource::load_SPL(File *f) {
 
 void Resource::load_LEV(File *f) {
 	const int len = f->size();
+	// level 2 loads its other half over the first, and the first was
+	// never given back: 33-39K lost each time Conrad crossed between them
+	free(_lev);
 	_lev = (uint8_t *)malloc(len);
 	if (!_lev) {
 		error("Unable to allocate LEV buffer");
@@ -1449,6 +1483,10 @@ void Resource::load_SPM(File *f) {
 		if (!bytekiller_unpack(_sprm, sizeof(_sprm), tmp, len)) {
 			error("Bad CRC for SPM data");
 		}
+#ifdef ATARIST
+		_stSprmSize = size;
+		++_stMonsterEpoch;
+#endif
 	}
 	setSprData();
 	free(tmp);
@@ -1471,7 +1509,7 @@ void Resource::load_SPM(File *f) {
  */
 static int g_stUnpacked = -1;        // the folder is there: -1 not looked yet
 
-bool Resource::ST_openUnpacked(File *f, const char *name, uint32_t *sizes, int count) {
+static bool ST_haveUnpacked() {
 	if (g_stUnpacked < 0) {
 		_DTA dta;
 		_DTA *saved = Fgetdta();
@@ -1482,7 +1520,11 @@ bool Resource::ST_openUnpacked(File *f, const char *name, uint32_t *sizes, int c
 			info("Unpacked data in UNPACKED\\");
 		}
 	}
-	if (!g_stUnpacked || !f->open(name, "rb", "UNPACKED")) {
+	return g_stUnpacked != 0;
+}
+
+bool Resource::ST_openUnpacked(File *f, const char *name, uint32_t *sizes, int count) {
+	if (!ST_haveUnpacked() || !f->open(name, "rb", "UNPACKED")) {
 		return false;
 	}
 	const uint32_t len = f->size();
@@ -1499,6 +1541,185 @@ bool Resource::ST_openUnpacked(File *f, const char *name, uint32_t *sizes, int c
 	warning("UNPACKED\\%s is not what it should be, so DATA\\%s is unpacked instead", name, name);
 	f->close();
 	return false;
+}
+
+// Room data and banks unpacked ahead of time. The game keeps both whole
+// for a level and unpacks a room's data, and every bank its tiles and
+// objects use, as Conrad enters it: a third of a second or more on an
+// 8MHz ST, every first visit. Read from UNPACKED\ instead, beside
+// DATA\'s packed copies (still read for which rooms exist and how big
+// each bank is):
+//  - the banks into the bank arena itself, where it is big enough for
+//    all of a level's (34-125K in the 384K a 4MB machine has; never in
+//    a 2.5MB machine's 28K), so they cost no RAM at all;
+//  - the room data, 71-143K a level, on a machine with 3.5MB or more,
+//    where 1MB stays free after it.
+// A file holds a stream per room or per bank; anything missing, odd or
+// out of room and the game unpacks as before. With dst, the streams go
+// there if they fit in dstSize; without, into a block of their own.
+bool Resource::ST_readUnpackedTable(const char *name, int maxCount, uint8_t *dst, uint32_t dstSize, uint8_t **data, uint32_t *offs, uint32_t *sizes, int *count) {
+	enum { kMinRamK = 3584, kSpareK = 1024 };
+	extern int ATARIST_ramK();
+	if ((!dst && ATARIST_ramK() < kMinRamK) || !ST_haveUnpacked()) {
+		return false;
+	}
+	File f;
+	if (!f.open(name, "rb", "UNPACKED")) {
+		return false;
+	}
+	const uint32_t len = f.size();
+	if (len < 8 || f.readUint32BE() != 0x52585531) {
+		warning("UNPACKED\\%s is not what it should be, so DATA\\%s is unpacked instead", name, name);
+		return false;
+	}
+	const uint32_t n = f.readUint32BE();
+	if (n == 0 || n > (uint32_t)maxCount) {
+		warning("UNPACKED\\%s is not what it should be, so DATA\\%s is unpacked instead", name, name);
+		return false;
+	}
+	uint32_t total = 0;
+	for (uint32_t i = 0; i < n; ++i) {
+		sizes[i] = f.readUint32BE();
+		offs[i] = total;
+		total += sizes[i];
+	}
+	if (f.ioErr() || 8 + 4 * n + total != len) {
+		warning("UNPACKED\\%s is not what it should be, so DATA\\%s is unpacked instead", name, name);
+		return false;
+	}
+	uint8_t *buf = dst;
+	if (dst) {
+		if (total > dstSize) {
+			return false;
+		}
+	} else {
+		if (((long)Malloc(-1) >> 10) < (long)(total >> 10) + kSpareK) {
+			return false;                    // a machine without the RAM unpacks as it goes
+		}
+		buf = (uint8_t *)malloc(total + 1);
+		if (!buf) {
+			return false;
+		}
+	}
+	f.read(buf, total);
+	if (f.ioErr()) {
+		if (!dst) {
+			free(buf);
+		}
+		return false;
+	}
+	*data = buf;
+	*count = (int)n;
+	return true;
+}
+
+void Resource::ST_loadUnpackedResident(int objType) {
+	if (_type != kResourceTypeAmiga) {
+		return;
+	}
+	if (objType == OT_LEV) {
+		free(_stLevU);
+		_stLevU = 0;
+		int n;
+		if (ST_readUnpackedTable(_entryName, 64, 0, 0, &_stLevU, _stLevUOff, _stLevUSize, &n) && n != 64) {
+			free(_stLevU);
+			_stLevU = 0;
+		}
+	} else {
+		// the arena is about to be written over from its start
+		_stMbkU = 0;
+		_stMbkUCount = 0;
+		_stMbkUEnd = 0;
+		clearBankData();
+		int n;
+		uint8_t *banks;
+		if (!ST_readUnpackedTable(_entryName, 256, _bankData, _bankDataTail - _bankData, &banks, _stMbkUOff, _stMbkUSize, &n)) {
+			return;
+		}
+		// every bank as big as the packed table says, empty ones included,
+		// or none of them: then no bank ever needs the arena beside them
+		for (int i = 0; i < n; ++i) {
+			if ((int)_stMbkUSize[i] != getBankDataSize(i)) {
+				warning("UNPACKED\\%s does not match DATA\\%s, so the banks are unpacked as needed", _entryName, _entryName);
+				return;
+			}
+		}
+		_stMbkU = banks;
+		_stMbkUCount = n;
+		_stMbkUEnd = _stMbkUOff[n - 1] + _stMbkUSize[n - 1];
+		clearBankData();                     // anything else goes after them
+	}
+}
+
+// The sprite table's four monster ranges, one per SPM file in
+// Game::_monsterNames order: runs of offsets past PERSO's that start
+// again from the beginning of the shared buffer.
+static int16_t g_monsterRange[4][2];
+
+static void findMonsterRanges(const uint32_t *offsets) {
+	if (g_monsterRange[0][1] != 0) {
+		return;
+	}
+	int m = -1;
+	bool inRun = false;
+	uint32_t prev = 0;
+	for (int i = 0; i < Resource::NUM_SPRITES; ++i) {
+		const uint32_t offset = offsets[i];
+		if (offset < kPersoDatSize) {
+			inRun = false;
+			continue;
+		}
+		if (!inRun || offset < prev) {           // the next file's sprites
+			if (m == 3) {
+				break;
+			}
+			++m;
+			g_monsterRange[m][0] = i;
+		}
+		g_monsterRange[m][1] = i;
+		inRun = true;
+		prev = offset;
+	}
+}
+
+// Copy the monster just loaded into _sprm to a buffer of its own, if
+// the machine has the room: up to 61K a file, three at most on a
+// level. A machine without it keeps sharing _sprm, as before.
+bool Resource::ST_keepMonster(int num) {
+	enum { kSpareK = 320 };     // left for music, cutscenes and the rest
+	if (_stSprmSize == 0 || (Malloc(-1) >> 10) < (long)(_stSprmSize >> 10) + kSpareK) {
+		return false;
+	}
+	uint8_t *buf = (uint8_t *)malloc(_stSprmSize);
+	if (!buf) {
+		return false;
+	}
+	memcpy(buf, _sprm, _stSprmSize);
+	_stMonsterBuf[num] = buf;
+	return true;
+}
+
+// Point every kept monster's sprites at its own buffer: a load into
+// _sprm points all four ranges there.
+void Resource::ST_pointMonsters() {
+	findMonsterRanges(_spmOffsetsTable);
+	for (int m = 0; m < 4; ++m) {
+		uint8_t *buf = _stMonsterBuf[m];
+		if (!buf) {
+			continue;
+		}
+		for (int i = g_monsterRange[m][0]; i <= g_monsterRange[m][1]; ++i) {
+			_sprData[i] = buf + _spmOffsetsTable[i] - kPersoDatSize;
+		}
+	}
+}
+
+void Resource::ST_freeMonsters() {
+	for (int m = 0; m < 4; ++m) {
+		free(_stMonsterBuf[m]);
+		_stMonsterBuf[m] = 0;
+	}
+	++_stMonsterEpoch;
 }
 
 // The types that have a copy in UNPACKED\, loaded from it as their
@@ -1526,6 +1747,8 @@ bool Resource::ST_loadUnpacked(int objType) {
 				return false;
 			}
 			f.read(_sprm, sizes[0]);
+			_stSprmSize = sizes[0];
+			++_stMonsterEpoch;
 		}
 		setSprData();
 		break;
@@ -1573,13 +1796,20 @@ bool Resource::ST_loadUnpacked(int objType) {
 
 void Resource::clearBankData() {
 #ifdef ATARIST
-	// every pointer into the arena is about to mean something else;
-	// the planar sprite cache keys on such pointers (video_st.cpp)
-	ST_invalidateBakedRange(_bankData, (uint32_t)(_bankDataTail - _bankData));
+	// a frame's display list names pieces in the arena by address: what
+	// it has written down is drawn now, while those bytes are still theirs
+	ST_dlFlushNow();
+	// every pointer into the arena is about to mean something else, and
+	// the sprite bakes key on such pointers (spritecache_st.cpp)
+	++_stBankEpoch;
+	++g_stPerf.bankClears;
 #endif
 	_bankBuffersCount = 0;
 	_bankDataHead = _bankData;
-	_lastBankPtr = 0;
+#ifdef ATARIST
+	_bankDataHead += _stMbkUEnd;              // the level's banks, unpacked ahead, stay
+#endif
+	memset(_bankPtr, 0, sizeof(_bankPtr));
 }
 
 int Resource::getBankDataSize(uint16_t num) const {
@@ -1611,23 +1841,33 @@ int Resource::getBankDataSize(uint16_t num) const {
 }
 
 uint8_t *Resource::findBankData(uint16_t num) {
-	// Called a few times a frame while sprites are drawn, and nearly
-	// always for the entry asked for last: the scan below walks every
-	// bank loaded for the room.
-	if (_lastBankPtr && _lastBankNum == num) {
-		return _lastBankPtr;
+	// A table by entry number: this runs for every object piece drawn,
+	// and the scan of the loaded banks it replaces cost 1.1ms a frame on
+	// an 8MHz ST in a room full of objects, where several banks
+	// alternate and a one-entry memo kept missing.
+	if (num < ARRAYSIZE(_bankPtr)) {
+		return _bankPtr[num];
 	}
 	for (int i = 0; i < _bankBuffersCount; ++i) {
 		if (_bankBuffers[i].entryNum == num) {
-			_lastBankNum = num;
-			_lastBankPtr = _bankBuffers[i].ptr;
-			return _lastBankPtr;
+			return _bankBuffers[i].ptr;
 		}
 	}
 	return 0;
 }
 
 uint8_t *Resource::loadBankData(uint16_t num) {
+#ifdef ATARIST
+	if (num < _stMbkUCount && _stMbkUSize[num] != 0) {
+		// unpacked ahead of time and kept for the level at the start of
+		// the arena: no unpacking, and the same address all level long
+		uint8_t *bank = _stMbkU + _stMbkUOff[num];
+		if (num < ARRAYSIZE(_bankPtr)) {
+			_bankPtr[num] = bank;
+		}
+		return bank;
+	}
+#endif
 	const uint8_t *ptr = _mbk + num * 6;
 	int dataOffset = READ_BE_UINT32(ptr);
 	if (_type == kResourceTypeDOS) {
@@ -1638,6 +1878,12 @@ uint8_t *Resource::loadBankData(uint16_t num) {
 	const int size = getBankDataSize(num);
 	if (size == 0) {
 		warning("Invalid bank data %d", num);
+#ifdef ATARIST
+		// upstream hands back the arena's free bytes, which the next load
+		// fills: whatever keyed on this address (tile cells, sprite
+		// bakes) must not survive that
+		++_stBankEpoch;
+#endif
 		return _bankDataHead;
 	}
 	const int avail = _bankDataTail - _bankDataHead;
@@ -1645,14 +1891,21 @@ uint8_t *Resource::loadBankData(uint16_t num) {
 		clearBankData();
 	}
 	assert(_bankDataHead + size <= _bankDataTail);
-	if (_bankBuffersCount < (int)ARRAYSIZE(_bankBuffers)) {
-		_lastBankPtr = 0;
+	if (num < ARRAYSIZE(_bankPtr)) {
+		// the table holds it whether or not the list below has room: a
+		// bank the list dropped was unpacked again on every draw
+		_bankPtr[num] = _bankDataHead;
+	} else if (_bankBuffersCount < (int)ARRAYSIZE(_bankBuffers)) {
 		_bankBuffers[_bankBuffersCount].entryNum = num;
 		_bankBuffers[_bankBuffersCount].ptr = _bankDataHead;
 		++_bankBuffersCount;
 	}
 	const uint8_t *data = _mbk + dataOffset;
 	const int count = READ_BE_UINT16(ptr + 4);
+#ifdef ATARIST
+	++g_stPerf.bankLoads;
+	g_stPerf.bankBytes += size;
+#endif
 	if (count & 0x8000) {
 		memcpy(_bankDataHead, data, size);
 	} else {

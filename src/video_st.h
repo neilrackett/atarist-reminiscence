@@ -110,11 +110,6 @@ const uint8_t *ST_getRemap();
 // pixels with the mapping already baked in must re-bake when it moves
 uint16_t ST_remapGen();
 
-// as ST_remapGen, but unmoved by a cutscene borrowing the slots: the
-// game's mapping comes back as it was, so room scenery prepared
-// against it is still right
-uint16_t ST_roomGen();
-
 // maskless STDL surface view of a layer (screen copies, layer
 // copies); returns a cached wrapper
 struct STDL_Surface;
@@ -154,11 +149,45 @@ inline void ST_buildMap16(uint8_t colMask, uint8_t *map16) {
 // drop list, or the crop window) lives in the stub; callers placing
 // content by hand must ask instead of reproducing the arithmetic.
 bool ST_rowVisible(int y);
-void ST_invalidateBakedRange(const uint8_t *p, uint32_t len);
 
 // frames whose overscan border flip was missed (see STDL); 0 when
 // overscan is off
 uint32_t ST_overscanMisses();
+
+// What the gameplay sprite path did since the last log_fps line, so a
+// slow frame says which cache gave out instead of only how slow it
+// was. Increments only, and always compiled in: a build with them
+// lays out like one without, which the Mega STE's cache cares about.
+struct STPerf {
+	uint16_t bakeHits;      // baked sprite found
+	uint16_t bakeMakes;     // baked from a decode: a miss
+	uint16_t chunky;        // drawn from chunky: no ring, or no room in it
+	uint16_t shBuilds;      // pre-shifted copies made
+	uint16_t shRefused;     // ... not made, to keep their own bake in the ring
+	uint16_t promotes;      // bakes copied forward out of an old segment
+	uint16_t segFlush;      // ring segments emptied
+	uint16_t unused;        // bakes emptied without being drawn again
+	uint16_t monsterLoads;  // monster SPM files read
+	uint16_t bankLoads;     // banks unpacked into the arena
+	uint16_t bankClears;    // arena resets
+	uint32_t bankBytes;     // bytes those loads produced
+	uint32_t planar8Px;     // pixels through AMIGA_planar8
+	uint16_t dlDrawn;       // display list entries redrawn
+	uint16_t dlKept;        // ... and left as they were
+	uint16_t blitUnderAl;   // bakes blitted behind foreground, aligned
+	uint16_t blitUnderSh;   // ... through the shift chain
+	uint16_t blitPlainAl;   // bakes blitted with no foreground under them, aligned
+	uint16_t blitPlainSh;   // ... through the shift chain
+	uint16_t bakePlanar;    // bakes made straight from the Amiga planes
+	uint8_t roomHits;       // rooms copied back from the room cache
+	uint8_t roomRemap;      // ... found, but drawn in other colours since
+	uint8_t roomDecodes;    // rooms decoded
+	uint8_t pad;
+	uint16_t tilePreps;     // room tiles packed for the tile cache: a miss
+};
+extern STPerf g_stPerf;
+// a set of counters as one log fragment
+void ST_perfFormat(const STPerf &p, char *buf, int len);
 
 // ST_hspan with the colour pre-remapped (see fillArea)
 void ST_hspanV(uint8_t *layer, int x1, int x2, int y, uint8_t v, bool setPrio);
@@ -212,6 +241,9 @@ bool ST_drawPolygonFast(uint8_t *layer, const void *pts, int n,
 // it; the rest of a frame need not have it restored. Writers report
 // what they touched, and the restore asks once a frame.
 void ST_prioTouchedRect(int x, int y, int w, int h);
+// OR the blocks whose priority plane was touched since the last call into
+// acc (kSTBlockRows rows of block columns), and forget them
+void ST_takePrioBlocks(uint16_t *acc);
 void ST_prioTouched();
 bool ST_takePrioRect(int *x0, int *y0, int *x1, int *y1);
 
@@ -275,15 +307,28 @@ void ST_beamSync();
 // buffers sit at even addresses. ST_amigaPrepare reads contiguous planes (plane k
 // at planes + k * planeSize, rows of `units` bytes) and a 1bpp mask
 // of the same shape; ST_amigaTile8 packs one 32-byte 8x8 tile with
-// colour 0 transparent when keyZero. ST_amigaPlace clips to the
-// layer; x is normally a multiple of 8.
+// colour 0 transparent when keyZero, through the pair table
+// ST_tilePalette gives for its palette base. ST_amigaPlace clips to
+// the layer; x is normally a multiple of 8.
 void ST_amigaPrepare(uint8_t *out, const uint8_t *planes, int planeSize, int units, int rows, const uint8_t *mask, uint8_t pal);
-void ST_amigaTile8(uint8_t *out, const uint8_t *tile, uint8_t pal, bool xflip, bool yflip, bool keyZero);
+void ST_amigaTile8(uint8_t *out, const uint8_t *tile, const uint32_t *pair, bool xflip, bool yflip, bool keyZero);
 void ST_amigaPlace(uint8_t *layer, int x, int y, const uint8_t *prep, int units, int rows, bool setPrio);
 
+// the tile packer's pair table for palette base pal (0x00, 0x10, 0x80
+// or 0x90), and a version of the colours it maps to that changes only
+// when they do: a tile packed at one version is good while it lasts
+uint16_t ST_tilePalette(uint8_t pal, const uint32_t **pair);
+// the pair table (see packCellsAsm) for a sixteen-colour mapping
+void ST_buildPairTable(const uint8_t *map16, uint32_t *t);
+
 // ST_amigaPlace for one ST_amigaTile8 cell block that is known to
-// lie inside the layer at a multiple of 8 (the room tile grid)
-void ST_amigaPlaceTile8(uint8_t *layer, int x, int y, const uint8_t *prep, bool setPrio);
+// lie inside the layer at a multiple of 8 (the room tile grid), given
+// the tile's plane byte d (the even or odd byte of its group in row 0)
+// and priority byte pr, prio 0xFF or 0. The caller marks the priority
+// plane touched (ST_prioTouched). The opaque one is for a cell block
+// whose every mask byte is 0xFF.
+extern "C" void placeTile8Asm(uint8_t *d, uint8_t *pr, const uint8_t *cells, long prio);
+extern "C" void placeTile8OpaqueAsm(uint8_t *d, uint8_t *pr, const uint8_t *cells, long prio);
 
 // as ST_amigaPlace for a front-to-back build: the layer must start
 // black with a zero priority plane, which serves as per-unit
@@ -302,16 +347,81 @@ void ST_amigaPlaceCovEnd(uint8_t *layer, uint8_t colour8);
 // setPrio marks drawn pixels as foreground.
 void ST_drawSprite(uint8_t *layer, const uint8_t *src, int pitch, int x, int y, int w, int h, const uint8_t *map16, unsigned flags, bool setPrio);
 
-// As ST_drawSprite, but the planar form is cached: the same frame,
-// colour bank, flags and palette produce the same plane words every
-// time, so bake them once and then just move words. Falls back to
-// ST_drawSprite when a frame is too large to cache.
-void ST_drawSpriteCached(uint8_t *layer, const uint8_t *src, int pitch, int x, int y, int w, int h, uint8_t colMask, unsigned flags, bool setPrio);
+// A gameplay sprite, baked to planar the first time it is drawn and
+// moved into the layer from then on (spritecache_st.cpp). `data` names
+// the bytes it comes from - a frame in the level's data, a piece of an
+// object bank - and `ident` which load of them it is (kSprId* | epoch):
+// together they key the bake, so whatever recycles those bytes moves
+// the epoch. A miss decodes through the decoder the game registers, by
+// `kind`. The sprite is drawn whole at (x, y) - w x h, unclipped - and
+// clipped to the layer here. flags are kSTSprite*.
+enum {
+	kSprKindSPM = 0,      // a character frame (Conrad, a monster)
+	kSprKindSPC = 1,      // an object piece from a bank
+	kSprKindIcon = 2      // an icon: data is the icon number + 1
+};
+enum {
+	kSprIdPerso = 1UL << 24,
+	kSprIdMonster = 2UL << 24,
+	kSprIdBank = 3UL << 24,
+	kSprIdIcon = 4UL << 24,
+	kSprIdEpochMask = (1UL << 24) - 1
+};
+// dst: chunky w x h, or with planes set the four Amiga bitplanes one
+// after another, (w / 8) * h bytes each; false when it cannot be done
+// that way (the bake then asks for chunky)
+typedef bool (*STSprDecodeFn)(void *ctx, int kind, const uint8_t *data, int w, int h, uint8_t *dst, bool planes);
+// the spread and bit-reverse tables the Amiga-planes kernels use, and
+// packCellsAsm itself (video_st.cpp)
+const uint32_t *ST_spreadTable();
+const uint8_t *ST_bitrevTable();
+extern "C" void packCellsAsm(uint8_t *out, const uint8_t *s0, long planeSize,
+	const uint8_t *mask, long n, const uint32_t *spread, const uint32_t *pair);
+void ST_sprSetDecoder(STSprDecodeFn fn, void *ctx, uint8_t *scratch, uint32_t scratchSize);
+void ST_sprDraw(uint8_t *layer, int kind, const uint8_t *data, uint32_t ident, int w, int h,
+                int x, int y, uint8_t colMask, unsigned flags, bool setPrio);
+// give the bakes' memory back: a level is about to load, or a cutscene
+// is short of room (Game::playCutscene); the next draw asks for it again
+void ST_sprRelease();
+// give back the decoded rooms kept for revisits (Video::AMIGA_decodeLev)
+void ST_roomCacheRelease();
+// the layer as an STDL surface; masked: with the priority plane as its mask
+STDL_Surface *ST_layerView(uint8_t *layer, bool masked);
+// the palette token a sprite in this colour bank would be baked with;
+// between Begin and End the remap is taken as fixed, and End says
+// whether it really was
+uint8_t ST_sprToken(uint8_t colMask);
+void ST_sprTokensBegin();
+bool ST_sprTokensEnd();
 
-// drop every cached planar frame (level data reloaded)
-void ST_flushSpriteCache();
-// as ST_flushSpriteCache, and give the bake buffers back too
-void ST_releaseSpriteCache();
+// Gameplay frames redrawn only where they changed (displaylist_st.cpp).
+// Between ST_dlBegin and ST_dlEnd, sprites and glyphs drawn on `front`
+// are written down instead of drawn; ST_dlEnd compares the list with
+// the previous frame's and works out the blocks to redraw - R comes in
+// with the blocks that must be, and goes out with all of them - and
+// ST_dlReplay draws what touches them. ST_dlAbort stops a frame that
+// will not be finished; ST_dlInvalidate says the front layer no longer
+// shows the last list (a full refresh, a menu drawn over it).
+enum { kSTBlockRows = kSTLayerH / 8 };
+// The Add calls return false when the list could not take the draw -
+// it was full and has just been drawn (ST_dlFlushNow) - so the caller
+// draws it there and then. ST_dlFlushNow draws the list so far and
+// stops writing for the frame (before the bytes its entries name are
+// reused); a frame that did is ended with ST_dlEndFlushed. The flush
+// function rebuilds the front layer from the room first.
+void ST_dlSetFlush(void (*fn)(void *), void *ctx);
+void ST_dlBegin(uint8_t *front);
+bool ST_dlRecording(const uint8_t *layer);
+bool ST_dlAddSprite(int kind, const uint8_t *data, uint32_t ident, int w, int h, int x, int y,
+                    uint8_t colMask, unsigned flags, bool setPrio);
+bool ST_dlAddGlyph(const uint8_t *src, int pitch, int x, int y, uint8_t v, bool setPrio);
+void ST_dlFlushNow();
+bool ST_dlFlushed();
+void ST_dlEnd(uint16_t *R, bool full);
+void ST_dlEndFlushed();
+void ST_dlReplay();
+void ST_dlAbort();
+void ST_dlInvalidate();
 
 // with logging on, the largest block malloc can still hand out
 void ST_logFreeMemory(const char *where);

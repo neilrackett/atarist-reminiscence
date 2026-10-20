@@ -11,16 +11,21 @@ build reads them straight into place and falls back to DATA/ for
 anything missing. RExtract (web-rextract) writes the same folder; the
 two must agree byte for byte.
 
-Only what is unpacked when a scene, the title or a level is loaded:
+What is unpacked when a scene, the title or a level is loaded:
 cutscenes (*.CMP), the title picture (PRESENT.CMP), sprites (*.SPM),
-level graphics (*.SGD), objects (*.OBC) and collision data (*.CT).
-Room data (*.LEV) and sprite banks (*.MBK) stay packed: the game keeps
-those whole in memory, which a 2.5MB machine cannot spare unpacked.
+level graphics (*.SGD), objects (*.OBC) and collision data (*.CT). And
+what is unpacked on entering a room: the room data (*.LEV, a stream per
+room) and the object and tile banks (*.MBK, a stream per bank). The game
+keeps those two whole in memory, so it only reads them from here where it
+has the RAM to spare (a 4MB machine); elsewhere it unpacks DATA/'s as
+before, room by room.
 
 Each output file has its DATA/ name and holds:
 
   "RXU1"           magic and version
-  BE32 count       streams: 2 for a cutscene (polygons, commands), else 1
+  BE32 count       streams: 2 for a cutscene (polygons, commands), 64 for
+                   room data (one per room, empty where a room has none),
+                   one per bank for banks (empty for an empty entry), else 1
   BE32 size        one per stream
   the streams      as the unpacker writes them
 
@@ -36,9 +41,10 @@ def be32(b, o):
     return struct.unpack('>I', b[o:o + 4])[0]
 
 
-def unpack(src):
+def unpack(src, want_start=False):
     """One bytekiller stream, read from its end; ValueError if it does
-    not check out. A transcription of src/unpack.cpp's C version."""
+    not check out. A transcription of src/unpack.cpp's C version. With
+    want_start, (stream, offset in src where the packed stream began)."""
     pos = len(src) - 4
     size = be32(src, pos); pos -= 4
     crc = be32(src, pos); pos -= 4
@@ -97,6 +103,8 @@ def unpack(src):
                 out[o] = get(8)
     if crc != 0:
         raise ValueError('bad CRC')
+    if want_start:
+        return bytes(out), pos + 4
     return bytes(out)
 
 
@@ -121,6 +129,39 @@ def streams(name, data):
         return [unpack(data[4:4 + be32(data, 0)])]
     if ext in ('SPM', 'SGD', 'CT'):     # the whole file is the stream
         return [unpack(data)]
+    if ext == 'LEV':
+        # 64 rooms, each a BE32 offset to where its packed stream ends; a
+        # room with no data here ends where the one before it does (the
+        # first, where the table does)
+        out, prev = [], 64 * 4
+        for room in range(64):
+            end = be32(data, room * 4)
+            out.append(unpack(data[:end]) if end != prev else b'')
+            prev = end
+        return out
+    if ext == 'MBK':
+        # 6-byte entries: a BE32 offset and a signed BE16 count of 32-byte
+        # tiles - negative where the bank is stored as it is (the offset
+        # is then its start), positive where packed (the offset is where
+        # its stream ends), 0 for none. The table runs up to where the
+        # first bank begins.
+        out, n, first = [], 0, len(data)
+        while 6 * (n + 1) <= first:
+            off = be32(data, n * 6)
+            count = struct.unpack('>h', data[n * 6 + 4:n * 6 + 6])[0]
+            if count < 0:
+                out.append(data[off:off - count * 32])
+                first = min(first, off)
+            elif count > 0:
+                bank, start = unpack(data[:off], True)
+                if len(bank) != count * 32:
+                    raise ValueError('bank %d is %d bytes, not %d' % (n, len(bank), count * 32))
+                out.append(bank)
+                first = min(first, start)
+            else:
+                out.append(b'')
+            n += 1
+        return out
     return None
 
 

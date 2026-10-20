@@ -374,6 +374,7 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 }
 
 static int ST_ramK();
+static void ST_logMachine();
 
 void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int widescreenMode, bool maximized, const ScalerParameters *scalerParameters, int outputRate) {
 	memset(&_pi, 0, sizeof(_pi));
@@ -451,6 +452,9 @@ void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int
 	// out of reach (kOverscanMinK, a 60Hz display) whatever RS.CFG
 	// asked for. The RAM goes in the log either way, for bug reports.
 	ST_ramK();
+	if (g_options.logging) {
+		ST_logMachine();
+	}
 	g_options.screen = setScreenMode(g_options.screen);
 	setScreenSize(w, h);
 	// black screen until the first frame arrives
@@ -588,6 +592,53 @@ static int ST_ramK() {
 		info("Memory: %dK ST RAM, %dK alt-RAM", (int)(st >> 10), (int)(alt >> 10));
 	}
 	return g_ramK;
+}
+
+// The RAM the machine has, as found at start-up (0 before then): for
+// code that runs in user mode, where low memory is out of reach
+int ATARIST_ramK() {
+	return g_ramK < 0 ? 0 : g_ramK;
+}
+
+// The CPU clock, measured: a fixed loop run for four ticks of the 200Hz
+// counter. 32 cycles an iteration on a 68000 with no wait states, so
+// 5000 iterations in 20ms is 8MHz; interrupts take a few percent of
+// that, which the reading carries. It is there for an accelerator,
+// which no cookie names - a "Mega ST at 16MHz" can be an accelerated
+// Mega ST or a Mega STE, and only the clock tells them apart.
+static int ST_cpuMHz10() {
+	volatile uint32_t *hz200 = (volatile uint32_t *)0x4BAUL;
+	uint32_t t = *hz200;
+	while (*hz200 == t) {
+	}
+	const uint32_t end = *hz200 + 4;
+	uint32_t n = 0;
+	__asm__ volatile(
+		"1:\taddq.l #1,%0\n\t"
+		"cmp.l (%1),%2\n\t"
+		"bhi.s 1b"
+		: "+d"(n) : "a"(hz200), "d"(end) : "cc");
+	return (int)(n * 16 / 1000);
+}
+
+// One line for bug reports: the machine, as the library and the clock
+// see it. Nothing said before which of several very different machines
+// a report came from.
+static void ST_logMachine() {
+	const STDL_MachineInfo *mi = STDL_GetMachineInfo();
+	const uint32_t sysbase = *(volatile uint32_t *)0x4F2UL;
+	const unsigned tos = *(volatile uint16_t *)(sysbase + 2);
+	char speed[32] = "";
+	if (mi->is_megaste) {
+		// bit 1 the 16MHz clock, bit 0 the cache (see STDL_UseMegaSteSpeedup)
+		const unsigned r = *(volatile uint8_t *)0xFFFF8E21UL;
+		snprintf(speed, sizeof(speed), ", %dMHz cache %s", (r & 2) ? 16 : 8, (r & 1) ? "on" : "off");
+	}
+	const int mhz10 = ST_cpuMHz10();
+	info("Machine: %s, _MCH %08lx, TOS %x.%02x, BLiTTER %s%s, CPU about %d.%dMHz",
+		mi->is_megaste ? "Mega STE" : (mi->is_ste ? "STE" : "ST"),
+		(unsigned long)mi->mch_cookie, tos >> 8, tos & 0xFF,
+		mi->has_blitter ? "yes" : "no", speed, mhz10 / 10, mhz10 % 10);
 }
 
 bool ST_screenModeAvailable(int mode) {
@@ -791,18 +842,8 @@ static bool g_cutscenePal;
 // planar pixels (the sprite cache) key their entries on this.
 static uint16_t g_remapGen = 1;
 
-// Bumped only when the game's own mapping changes: a cutscene puts
-// that mapping aside and brings it back unchanged, so the room
-// scenery prepared against it (Video's SGD cache) stays good across
-// one, where the sprite cache keyed on g_remapGen does not.
-static uint16_t g_roomGen = 1;
-
 uint16_t ST_remapGen() {
 	return g_remapGen;
-}
-
-uint16_t ST_roomGen() {
-	return g_roomGen;
 }
 
 // The game's mapping is put aside while a cutscene has the slots and
@@ -985,16 +1026,30 @@ static void nearestPartner(const MergeCols &mc, const uint32_t *dm, int n,
 		const uint8_t *cand, int m, int k, uint32_t *nnd, uint8_t *nnj) {
 	uint32_t best = 0xFFFFFFFF;
 	int bj = 0xFF;
-	const uint32_t *row = dm ? dm + (uint16_t)k * (uint16_t)n : 0;
-	for (int a = 0; a < m; ++a) {
-		const int j = cand[a];
-		if (j == k) {
-			continue;
+	if (dm) {
+		// the table's walk on its own: the test for it, left in the
+		// loop, was a third of the merge on an 8MHz ST
+		const uint32_t *row = dm + (uint16_t)k * (uint16_t)n;
+		const uint8_t *c = cand;
+		for (int a = m; --a >= 0; ) {
+			const int j = *c++;
+			const uint32_t d = row[j];
+			if (d < best && j != k) {
+				best = d;
+				bj = j;
+			}
 		}
-		const uint32_t d = row ? row[j] : mc.dist(k, j);
-		if (d < best) {
-			best = d;
-			bj = j;
+	} else {
+		for (int a = 0; a < m; ++a) {
+			const int j = cand[a];
+			if (j == k) {
+				continue;
+			}
+			const uint32_t d = mc.dist(k, j);
+			if (d < best) {
+				best = d;
+				bj = j;
+			}
 		}
 	}
 	nnd[k] = best;
@@ -1023,6 +1078,46 @@ void SystemStub_STDL::quantiseClusters(uint16_t *col, uint16_t *cnt, int n, uint
 	if (live <= 16) {
 		goto assign;
 	}
+	{
+	// The same colours as one of the last few times - a room seen
+	// before, back from a cutscene or a death - merge the same way: a
+	// fifth of a second or more of the merge below on an 8MHz ST, every
+	// time. The slots are still assigned afresh, from the hardware
+	// palette as it stands now.
+	enum { kMemo = 4 };
+	struct Memo {
+		bool valid, perceptual;
+		int16_t n;
+		uint32_t hash;
+		uint16_t col[256], cnt[256];        // what came in
+		uint16_t mcol[256], mcnt[256];      // ... and what the merge left
+		uint8_t alias[256];
+	};
+	static Memo memo[kMemo];
+	static int memoNext;
+	uint32_t hash = (uint32_t)n * 2 + (perceptual ? 1 : 0);
+	for (int i = 0; i < n; ++i) {
+		hash = ((hash << 5) | (hash >> 27)) + col[i];
+		hash = ((hash << 5) | (hash >> 27)) + cnt[i];
+	}
+	for (int k = 0; k < kMemo; ++k) {
+		const Memo &e = memo[k];
+		if (e.valid && e.hash == hash && e.n == n && e.perceptual == perceptual
+		    && memcmp(e.col, col, n * sizeof(*col)) == 0 && memcmp(e.cnt, cnt, n * sizeof(*cnt)) == 0) {
+			memcpy(col, e.mcol, n * sizeof(*col));
+			memcpy(cnt, e.mcnt, n * sizeof(*cnt));
+			memcpy(alias, e.alias, n);
+			goto assign;
+		}
+	}
+	Memo &entry = memo[memoNext];
+	memoNext = (memoNext + 1) & (kMemo - 1);
+	entry.valid = false;
+	entry.hash = hash;
+	entry.n = (int16_t)n;
+	entry.perceptual = perceptual;
+	memcpy(entry.col, col, n * sizeof(*col));
+	memcpy(entry.cnt, cnt, n * sizeof(*cnt));
 	{
 	static MergeCols mc;
 	mc.perceptual = perceptual;
@@ -1145,6 +1240,11 @@ void SystemStub_STDL::quantiseClusters(uint16_t *col, uint16_t *cnt, int n, uint
 		}
 	}
 	free(dm);
+	}
+	memcpy(entry.mcol, col, n * sizeof(*col));
+	memcpy(entry.mcnt, cnt, n * sizeof(*cnt));
+	memcpy(entry.alias, alias, n);
+	entry.valid = true;
 	}
 assign:
 
@@ -1638,10 +1738,18 @@ void SystemStub_STDL::buildRemap() {
 				isChg[changed[c]] = true;
 			}
 			const bool perceptual = _haveColW && !g_cutscenePal;
+			// Only a slot that actually moved makes the remap new: every
+			// planar bake and every room cell keys on the generation, and
+			// a palette poke that lands each entry where it already was
+			// (a monster's half of the palette set again, unchanged) used
+			// to throw all of them away.
+			bool moved = false;
 			for (int c = 0; c < nchg; ++c) {
 				const int i = changed[c];
 				if (_customPal && !g_cutscenePal) {
-					_remap[i] = (uint8_t)customSlotFor(i);
+					const uint8_t cs = (uint8_t)customSlotFor(i);
+					moved |= (_remap[i] != cs);
+					_remap[i] = cs;
 					continue;
 				}
 				// In play a changed entry is usually a copy - an enemy's
@@ -1668,11 +1776,11 @@ void SystemStub_STDL::buildRemap() {
 						}
 					}
 				}
+				moved |= (_remap[i] != (uint8_t)bs);
 				_remap[i] = (uint8_t)bs;
 			}
-			++g_remapGen;
-			if (!g_cutscenePal) {
-				++g_roomGen;
+			if (moved || (g_options.ab & kAbRemapBumpAlways)) {
+				++g_remapGen;
 			}
 			_fade = (fade > 1023) ? 1023 : fade;
 			_hwDirty = true;
@@ -1788,9 +1896,6 @@ void SystemStub_STDL::applyRemap(const uint8_t *newRemap) {
 	if (memcmp(newRemap, _remap, sizeof(_remap)) != 0) {
 		memcpy(_remap, newRemap, sizeof(_remap));
 		++g_remapGen;
-		if (!g_cutscenePal) {
-			++g_roomGen;
-		}
 		// stale planar data on screen uses the old mapping:
 		// re-run the conversion from the shadow frame
 		reconvertFromShadow();

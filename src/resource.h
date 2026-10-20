@@ -141,7 +141,20 @@ struct Resource {
 	// code alone, where the read itself is four instructions. Cold
 	// loaders keep the pointers; the hot accessors branch instead.
 	uint16_t readUint16(const void *p) const {
+#ifdef ATARIST
+		// The ST reads the Amiga data only, which is big-endian like the
+		// 68000: at an even address the word is one load, where the two
+		// bytes put together cost five instructions and a shift by 8.
+		// The animation and object tables are read this way hundreds
+		// of times a frame. (Every READ_BE_UINT16 the same way measured
+		// nothing more in play or cutscenes, for 4.7K of code.)
+		if (!((uintptr_t)p & 1)) {
+			return *(const uint16_t *)p;
+		}
+		return READ_BE_UINT16(p);
+#else
 		return _bigEndianData ? READ_BE_UINT16(p) : READ_LE_UINT16(p);
+#endif
 	}
 	bool _hasSeqData;
 	char _entryName[32];
@@ -258,6 +271,38 @@ struct Resource {
 #ifdef ATARIST
 	bool ST_openUnpacked(File *f, const char *name, uint32_t *sizes, int count);
 	bool ST_loadUnpacked(int objType);
+	// Each monster's sprites in a buffer of their own for the level,
+	// rather than all four taking turns in _sprm (see
+	// Game::loadMonsterSprites)
+	uint8_t *_stMonsterBuf[4];
+	uint32_t _stSprmSize;       // bytes the last monster SPM put in _sprm
+	// Moved whenever bytes the sprite bakes key on are replaced: the
+	// bank arena emptied, a monster file loaded into _sprm or a level's
+	// monster buffers freed (see ST_sprDraw)
+	uint32_t _stBankEpoch;
+	uint32_t _stMonsterEpoch;
+	// room data and banks from UNPACKED\, where the RAM allows
+	uint8_t *_stLevU;
+	uint32_t _stLevUOff[64], _stLevUSize[64];
+	uint8_t *_stMbkU;            // the start of the bank arena when they are there
+	int _stMbkUCount;
+	uint32_t _stMbkUEnd;         // the arena's bytes they take
+	uint32_t _stMbkUOff[256], _stMbkUSize[256];
+	bool ST_readUnpackedTable(const char *name, int maxCount, uint8_t *dst, uint32_t dstSize, uint8_t **data, uint32_t *offs, uint32_t *sizes, int *count);
+	void ST_loadUnpackedResident(int objType);
+	// a room's data from UNPACKED\ into dst; false to unpack DATA\'s
+	bool ST_unpackedRoom(int room, uint8_t *dst) const {
+		if (!_stLevU || room < 0 || room >= 64 || _stLevUSize[room] == 0 || _stLevUSize[room] > kScratchBufferSize) {
+			return false;
+		}
+		memcpy(dst, _stLevU + _stLevUOff[room], _stLevUSize[room]);
+		return true;
+	}
+	bool ST_inPerso(const uint8_t *p) const { return p >= _spr1 && p < _spr1 + 178647; }
+	bool ST_monsterResident(int num) const { return _stMonsterBuf[num] != 0; }
+	bool ST_keepMonster(int num);
+	void ST_pointMonsters();
+	void ST_freeMonsters();
 #endif
 	const uint8_t *getAniData(int num) const {
 		if (_type == kResourceTypeMac) {
@@ -348,8 +393,7 @@ struct Resource {
 	void clearBankData();
 	int getBankDataSize(uint16_t num) const;
 	uint8_t *findBankData(uint16_t num);
-	uint16_t _lastBankNum;      // one-entry memo for findBankData
-	uint8_t *_lastBankPtr;      // 0 when there is nothing to remember
+	uint8_t *_bankPtr[256];     // findBankData by entry number, 0 = not loaded
 	uint8_t *loadBankData(uint16_t num);
 
 	void PC98_loadLevelMap(int level);

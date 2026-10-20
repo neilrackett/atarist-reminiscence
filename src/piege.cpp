@@ -119,7 +119,7 @@ void Game::pge_loadForCurrentLevel(uint16_t idx) {
 	if (init_pge->skill <= _skillLevel) {
 		if (init_pge->room_location != 0 || ((init_pge->flags & 4) && (_currentRoom == init_pge->init_room))) {
 			flags |= 4;
-			_pge_liveTable2[idx] = live_pge;
+			pge_setLive(idx, live_pge);
 		}
 		if (init_pge->mirror_x != 0) {
 			flags |= 1;
@@ -401,25 +401,44 @@ void Game::pge_prepare() {
 		while (pge) {
 			col_preparePiegeState(pge);
 			if (!(pge->flags & 4) && (pge->init_PGE->flags & 4)) {
-				_pge_liveTable2[pge->index] = pge;
+				pge_setLive(pge->index, pge);
 				pge->flags |= 4;
 			}
 			pge = pge->next_PGE_in_room;
 		}
 	}
-	// A walking pointer and a counter in registers: as an indexed
-	// loop over a member count, gcc 4.6 reloaded both the table
-	// address and the count every iteration, and this runs over
-	// every piege in the level once a frame.
+	// Only the slots in use (see stepLogic): preparing one can start
+	// another further on, which this walk must still reach.
 	{
-		LivePGE **p = _pge_liveTable2;
 		const uint8_t room = _currentRoom;
-		for (int n = _res._pgeNum; --n >= 0; ++p) {
-			LivePGE *pge = *p;
-			if (pge && room != pge->room_location) {
-				col_preparePiegeState(pge);
+		const int pgeNum = _res._pgeNum;
+#ifdef ATARIST
+		for (int b = 0; b < pgeNum; b += 8) {
+			unsigned bits = _pge_liveBits[b >> 3];
+			while (bits) {
+				const int k = pge_firstLive(bits);
+				if (b + k >= pgeNum) {
+					break;
+				}
+				LivePGE *pge = _pge_liveTable2[b + k];
+				if (pge && room != pge->room_location) {
+					col_preparePiegeState(pge);
+				}
+				bits = _pge_liveBits[b >> 3] & (0x7F >> k);
 			}
 		}
+#else
+		for (int b = 0; b < pgeNum; b += 8) {
+			LivePGE **p = &_pge_liveTable2[b];
+			const int end = (b + 8 < pgeNum) ? b + 8 : pgeNum;
+			for (int n = end - b; --n >= 0; ++p) {
+				LivePGE *pge = *p;
+				if (pge && room != pge->room_location) {
+					col_preparePiegeState(pge);
+				}
+			}
+		}
+#endif
 	}
 }
 
@@ -495,7 +514,7 @@ void Game::pge_setupOtherPieges(LivePGE *pge, const InitPGE *init_pge) {
 				LivePGE *pge_it = _pge_liveTable1[_currentRoom];
 				while (pge_it) {
 					if (pge_it->init_PGE->flags & 4) {
-						_pge_liveTable2[pge_it->index] = pge_it;
+						pge_setLive(pge_it->index, pge_it);
 						pge_it->flags |= 4;
 					}
 					pge_it = pge_it->next_PGE_in_room;
@@ -505,7 +524,7 @@ void Game::pge_setupOtherPieges(LivePGE *pge, const InitPGE *init_pge) {
 					pge_it = _pge_liveTable1[room];
 					while (pge_it) {
 						if (pge_it->init_PGE->object_type != kObjectTypeMonster && pge_it->pos_y >= 48 && (pge_it->init_PGE->flags & 4)) {
-							_pge_liveTable2[pge_it->index] = pge_it;
+							pge_setLive(pge_it->index, pge_it);
 							pge_it->flags |= 4;
 						}
 						pge_it = pge_it->next_PGE_in_room;
@@ -516,7 +535,7 @@ void Game::pge_setupOtherPieges(LivePGE *pge, const InitPGE *init_pge) {
 					pge_it = _pge_liveTable1[room];
 					while (pge_it) {
 						if (pge_it->init_PGE->object_type != kObjectTypeMonster && pge_it->pos_y >= 176 && (pge_it->init_PGE->flags & 4)) {
-							_pge_liveTable2[pge_it->index] = pge_it;
+							pge_setLive(pge_it->index, pge_it);
 							pge_it->flags |= 4;
 						}
 						pge_it = pge_it->next_PGE_in_room;
@@ -1162,7 +1181,7 @@ int Game::pge_op_wakeUpPiege(ObjectOpcodeArgs *args) {
 		if (num >= 0) {
 			LivePGE *pge = &_pgeLive[num];
 			pge->flags |= 4;
-			_pge_liveTable2[num] = pge;
+			pge_setLive(num, pge);
 		}
 	}
 	return 1;
@@ -1172,7 +1191,7 @@ int Game::pge_op_removePiege(ObjectOpcodeArgs *args) {
 	if (args->a <= 3) {
 		int16_t num = args->pge->init_PGE->data[args->a];
 		if (num >= 0) {
-			_pge_liveTable2[num] = 0;
+			pge_setLive(num, 0);
 			_pgeLive[num].flags &= ~4;
 		}
 	}
@@ -1193,7 +1212,7 @@ int Game::pge_op_removePiegeIfNotNear(ObjectOpcodeArgs *args) {
 kill_pge:
 	pge->flags &= ~4;
 	pge->collision_slot = 0xFF;
-	_pge_liveTable2[pge->index] = 0;
+	pge_setLive(pge->index, 0);
 
 skip_pge:
 	_pge_playAnimSound = false;
@@ -1239,7 +1258,7 @@ int Game::pge_op_killInventoryPiege(ObjectOpcodeArgs *args) {
 	LivePGE *pge = args->pge;
 	pge->room_location = 0xFE;
 	pge->flags &= ~4;
-	_pge_liveTable2[pge->index] = 0;
+	pge_setLive(pge->index, 0);
 	LivePGE *inv_pge = pge_getPreviousInventoryItem(&_pgeLive[args->a], pge);
 	if (inv_pge == &_pgeLive[args->a]) {
 		if (pge->index != inv_pge->current_inventory_PGE) {
@@ -1258,7 +1277,7 @@ int Game::pge_op_killPiege(ObjectOpcodeArgs *args) {
 	LivePGE *pge = args->pge;
 	pge->room_location = 0xFE;
 	pge->flags &= ~4;
-	_pge_liveTable2[pge->index] = 0;
+	pge_setLive(pge->index, 0);
 	if (pge->init_PGE->object_type == kObjectTypeMonster) {
 		_score += 200;
 	}
@@ -2225,7 +2244,7 @@ void Game::pge_sendMessage(uint8_t src_pge_index, uint8_t dst_pge_index, int16_t
 			return;
 		}
 		pge->flags |= 4;
-		_pge_liveTable2[dst_pge_index] = pge;
+		pge_setLive(dst_pge_index, pge);
 	}
 	if (num <= 4) {
 		uint8_t pge_room = pge->room_location;

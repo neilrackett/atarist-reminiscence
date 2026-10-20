@@ -80,6 +80,25 @@ struct Video {
 	void ST_releaseLevelCaches();
 	// restore only recently drawn blocks from the back layer
 	void ST_restoreDirty();
+	// A gameplay frame: begin before the logic runs, end once everything
+	// is drawn and before updateScreen, abort if it will not be drawn.
+	// With the display list on (displaylist_st.cpp) only what changed
+	// since the last frame is restored and redrawn; off, every frame
+	// restores and redraws all it drew (ST_restoreDirty).
+	void ST_frameBegin();
+	void ST_frameEnd();
+	void ST_frameAbort();
+	bool ST_dlOn() const { return _dlOn; }
+	// a rectangle of the back layer changed under the front one
+	void ST_backChanged(int x, int y, int w, int h);
+	uint16_t _blkForce[kBlockRows];    // blocks the next listed frame must redraw
+	bool _dlOn;
+	bool _dlFull;                      // ... all of them
+	uint16_t _dlBackGen;               // _stBackGen the front layer was last rebuilt from
+	void ST_restoreBlocks(const uint16_t *blk, const uint16_t *prio);
+	uint16_t _prioDirty[kBlockRows];   // blocks whose priority plane may differ from the room's
+	bool ST_roomFromCache(int level, int room);
+	void ST_roomToCache(int level, int room, const uint8_t *hdr);
 	// has anything been drawn in these blocks since the last update?
 	bool ST_blocksDirty(int x, int y, int w, int h) const;
 #endif
@@ -119,6 +138,11 @@ struct Video {
 	void AMIGA_decodeSpm(const uint8_t *src, uint8_t *dst);
 	void AMIGA_decodeIcn(const uint8_t *src, int num, uint8_t *dst);
 	void AMIGA_decodeSpc(const uint8_t *src, int w, int h, uint8_t *dst);
+#ifdef ATARIST
+	// a sprite's Amiga bitplanes as four planes one after another,
+	// (w / 8) * h bytes each: what the planar bakes read (ST_sprDraw)
+	bool ST_amigaPlanes(int kind, const uint8_t *src, int w, int h, uint8_t *dst);
+#endif
 	void AMIGA_decodeCmp(const uint8_t *src, uint8_t *dst);
 	void SEGA_decodeIcn(const uint8_t *src, int num, uint8_t *dst);
 	void SEGA_decodeSpc(const uint8_t *src, int w, int h, uint8_t *dst);

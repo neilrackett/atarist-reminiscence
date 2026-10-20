@@ -176,6 +176,25 @@ struct Options {
 	bool music_mod;        // ST port: with music on, the .mod tracks where the STE can play them
 	int sound_quality;     // ST port: the STE voice device's rate, a SoundQuality
 	bool experimental;     // ST port, hidden: show work in progress
+	int record;            // ST port, hidden: RECnn.DEM to write, -1 none
+	int replay;            // ST port, hidden: RECnn.DEM to play back, -1 none
+	bool replay_hash;      // ST port, hidden: hash every replayed frame
+	int ab;                // ST port, hidden: kAb* bits, each turning one optimisation off
+	int replay_dump;       // ST port, hidden: replayed frame to write out as DMP.BIN, 0 none
+};
+
+// ST port: ab= in RS.CFG, for measuring an optimisation against what it
+// replaced inside one binary - the only fair comparison on a Mega STE,
+// whose cache moves frame times with the code layout
+enum {
+	kAbNoMonsterKeep = 1 << 0,     // monster sprites share one buffer again
+	kAbSmallBankArena = 1 << 1,    // the 28K bank arena on any machine
+	kAbRemapBumpAlways = 1 << 2,   // every palette patch renews the remap
+	kAbNoBakes = 1 << 3,           // every sprite decoded and drawn from chunky: the reference
+	kAbNoDisplayList = 1 << 4,     // restore and redraw every sprite every frame
+	kAbChunkyBake = 1 << 5,        // bake through a chunky decode, not from the Amiga planes
+	kAbNoRoomCache = 1 << 6,       // decode every room afresh, revisits too
+	kAbNoPreshift = 1 << 7         // no copies shifted to a sprite's phase: the shift chain every time
 };
 
 // ST port: the four screen modes, in the order the menu cycles them
