@@ -68,18 +68,14 @@ static int g_dlN[2];
 static int g_cur;                // the list being written
 static DlEntry *g_next;          // where its next entry goes
 static DlEntry *g_end;
-static bool g_rec;               // writing it
+bool g_stDlRec;                      // writing it (ST_dlRecording)
 static bool g_tokOpen;           // the palette tokens are fixed for the frame's draws
-static uint8_t *g_front;
+uint8_t *g_stDlFront;
 static bool g_prevValid;         // the other list is what the front layer shows
 static bool g_flushed;           // drawn early this frame; the rest went straight to the layer
 static bool g_warned;
 static void (*g_flushFn)(void *);
 static void *g_flushCtx;
-
-bool ST_dlRecording(const uint8_t *layer) {
-	return g_rec && layer == g_front;
-}
 
 void ST_dlSetFlush(void (*fn)(void *), void *ctx) {
 	g_flushFn = fn;
@@ -87,11 +83,11 @@ void ST_dlSetFlush(void (*fn)(void *), void *ctx) {
 }
 
 void ST_dlBegin(uint8_t *front) {
-	g_front = front;
+	g_stDlFront = front;
 	g_next = g_dl[g_cur];
 	g_end = g_next + kDlMax;
 	g_flushed = false;
-	g_rec = true;
+	g_stDlRec = true;
 	g_tokOpen = false;               // fixed at the first draw: the logic runs first, and may move the colours
 }
 
@@ -106,7 +102,7 @@ static bool closeTokens() {
 }
 
 void ST_dlAbort() {
-	g_rec = false;
+	g_stDlRec = false;
 	closeTokens();
 	g_prevValid = false;             // the front layer is no longer what a list says
 }
@@ -123,10 +119,10 @@ static void drawEntry(const DlEntry *e);
 // room with every entry so far, and everything after goes straight to
 // it; the next frame is redrawn whole, as this one's list is partial.
 void ST_dlFlushNow() {
-	if (!g_rec) {
+	if (!g_stDlRec) {
 		return;
 	}
-	g_rec = false;
+	g_stDlRec = false;
 	g_flushed = true;
 	g_prevValid = false;
 	if (g_flushFn) {
@@ -144,8 +140,8 @@ bool ST_dlFlushed() {
 // A new entry for something drawn over [x, x+w) x [y, y+h), clipped to
 // the layer: 0 when none of it is on the layer, or when there is no
 // room left - then the list is drawn there and then (ST_dlFlushNow), and
-// g_rec is false: whoever asked draws it directly.
-static DlEntry *newEntry(int x, int y, int w, int h) {
+// g_stDlRec is false: whoever asked draws it directly.
+static inline __attribute__((always_inline)) DlEntry *newEntry(int x, int y, int w, int h) {
 	int x1 = x + w, y1 = y + h;
 	int cx = x, cy = y;
 	if (cx < 0) {
@@ -190,7 +186,7 @@ bool ST_dlAddSprite(int kind, const uint8_t *data, uint32_t ident, int w, int h,
                     uint8_t colMask, unsigned flags, bool setPrio) {
 	DlEntry *e = newEntry(x, y, w, h);  // (ST_sprDraw has turned away an empty size)
 	if (!e) {
-		return g_rec;
+		return g_stDlRec;
 	}
 	e->type = 0;
 	e->kind = (uint8_t)kind;
@@ -213,7 +209,7 @@ bool ST_dlAddSprite(int kind, const uint8_t *data, uint32_t ident, int w, int h,
 bool ST_dlAddGlyph(const uint8_t *src, int pitch, int x, int y, uint8_t v, bool setPrio) {
 	DlEntry *e = newEntry(x, y, 8, 8);
 	if (!e) {
-		return g_rec;
+		return g_stDlRec;
 	}
 	e->type = 1;
 	e->kind = 0;
@@ -255,7 +251,7 @@ static inline bool hitsBlocks(const uint16_t *R, const DlEntry *e) {
 // that must be redrawn whatever the lists say, and goes out holding
 // every block that is. Entries to redraw are marked for ST_dlReplay.
 void ST_dlEnd(uint16_t *R, bool full) {
-	g_rec = false;
+	g_stDlRec = false;
 	if (!closeTokens()) {
 		full = true;                 // the colours moved under the frame's draws
 	}
@@ -338,17 +334,21 @@ void ST_dlEnd(uint16_t *R, bool full) {
 static void drawEntry(const DlEntry *e) {
 	++g_stPerf.dlDrawn;
 	if (e->type == 0) {
-		ST_sprDraw(g_front, e->kind, e->data, e->ident, e->w, e->h, e->x, e->y, e->colMask, e->flags, e->setPrio != 0);
+		ST_sprDraw(g_stDlFront, e->kind, e->data, e->ident, e->w, e->h, e->x, e->y, e->colMask, e->flags, e->setPrio != 0);
 	} else {
 		uint8_t map16[16];
 		memset(map16, e->token, sizeof(map16));
-		ST_drawSprite(g_front, e->data, (int)e->ident, e->x, e->y, 8, 8, map16, 0, e->setPrio != 0);
+		ST_drawSprite(g_stDlFront, e->data, (int)e->ident, e->x, e->y, 8, 8, map16, 0, e->setPrio != 0);
 	}
 }
 
 void ST_dlReplay() {
 	DlEntry *C = g_dl[g_cur];
 	const int nc = g_dlN[g_cur];
+	// ST_dlEnd has just looked at the colours and nothing moves them
+	// before this is drawn: the palette tokens stay as they are, which
+	// spares every redrawn sprite the look
+	ST_sprTokensBegin();
 	for (int i = 0; i < nc; ++i) {
 		const DlEntry *e = &C[i];
 		if (!e->in) {
@@ -357,13 +357,14 @@ void ST_dlReplay() {
 		}
 		drawEntry(e);
 	}
+	ST_sprTokensEnd();
 	g_cur ^= 1;                      // this frame's list is the one to compare with next
 }
 
 // The end of a frame ST_dlFlushNow already drew: nothing to compare,
 // and the next frame starts from nothing
 void ST_dlEndFlushed() {
-	g_rec = false;
+	g_stDlRec = false;
 	closeTokens();
 	g_flushed = false;
 	g_prevValid = false;

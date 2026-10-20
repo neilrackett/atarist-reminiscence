@@ -421,7 +421,13 @@ enum { kSTBlockRows = kSTLayerH / 8 };
 // function rebuilds the front layer from the room first.
 void ST_dlSetFlush(void (*fn)(void *), void *ctx);
 void ST_dlBegin(uint8_t *front);
-bool ST_dlRecording(const uint8_t *layer);
+// a draw onto layer is to be written down rather than drawn: inline, as
+// every sprite and glyph asks
+extern bool g_stDlRec;
+extern uint8_t *g_stDlFront;
+inline bool ST_dlRecording(const uint8_t *layer) {
+	return g_stDlRec && layer == g_stDlFront;
+}
 bool ST_dlAddSprite(int kind, const uint8_t *data, uint32_t ident, int w, int h, int x, int y,
                     uint8_t colMask, unsigned flags, bool setPrio);
 bool ST_dlAddGlyph(const uint8_t *src, int pitch, int x, int y, uint8_t v, bool setPrio);

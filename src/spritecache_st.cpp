@@ -327,14 +327,10 @@ static void sprPairInvalidate(int i) {
 	g_sprPair[i].valid = false;
 }
 
-static uint8_t palToken(uint8_t colMask) {
-	if (!g_tokFrozen) {
-		tokCheckGen();
-	}
+// a bank whose token is not known: its colours looked up, or a new
+// token made for them
+static __attribute__((noinline)) uint8_t palTokenMake(uint8_t colMask) {
 	const int bank = colMask >> 4;
-	if (g_tokBankValid & (1 << bank)) {
-		return g_tokOfBank[bank];
-	}
 	uint8_t map16[16];
 	ST_buildMap16(colMask, map16);
 	uint32_t hi = 0, lo = 0;
@@ -373,15 +369,29 @@ static uint8_t palToken(uint8_t colMask) {
 	return (uint8_t)t;
 }
 
-// --- finding and baking -----------------------------------------------
-
-static inline uint16_t hashOf(const void *key, uint32_t ident, uint16_t tag) {
-	const uint32_t k = (uint32_t)key;
-	return (uint16_t)((uint16_t)(k >> 2) ^ (uint16_t)(k >> 11) ^ (uint16_t)ident
-	                  ^ (uint16_t)(ident >> 13) ^ tag ^ (uint16_t)(tag >> 7)) & g_bucketMask;
+static inline uint8_t palToken(uint8_t colMask) {
+	if (!g_tokFrozen) {
+		tokCheckGen();
+	}
+	const int bank = colMask >> 4;
+	if (g_tokBankValid & (1 << bank)) {
+		return g_tokOfBank[bank];
+	}
+	return palTokenMake(colMask);
 }
 
-static Rec *findRec(const void *key, uint32_t ident, uint16_t tag, uint8_t w, uint8_t h, uint16_t *bucket) {
+// --- finding and baking -----------------------------------------------
+
+// The bucket: shifts the 68000 does in one go (by 8 or less, or 16 as
+// a swap) - a shift by 11 or 13 takes a count in a register and twice
+// the cycles, on every sprite drawn
+static inline uint16_t hashOf(const void *key, uint32_t ident, uint16_t tag) {
+	const uint32_t k = (uint32_t)key;
+	return (uint16_t)((uint16_t)(k >> 2) ^ (uint16_t)(k >> 16) ^ (uint16_t)ident
+	                  ^ (uint16_t)(ident >> 16) ^ tag ^ (uint16_t)(tag >> 7)) & g_bucketMask;
+}
+
+static inline __attribute__((always_inline)) Rec *findRec(const void *key, uint32_t ident, uint16_t tag, uint8_t w, uint8_t h, uint16_t *bucket) {
 	const uint16_t b = hashOf(key, ident, tag);
 	*bucket = b;
 	for (Rec *r = g_bucket[b]; r; r = r->next) {
@@ -999,14 +1009,11 @@ uint8_t ST_sprToken(uint8_t colMask) {
 	return palToken(colMask);
 }
 
-void ST_sprDraw(uint8_t *layer, int kind, const uint8_t *data, uint32_t ident, int w, int h,
+// the draw itself, apart from the front below: most calls only write
+// an entry in the display list, and this one's registers cost them
+// a dozen saves and restores each
+static __attribute__((noinline)) void sprDrawNow(uint8_t *layer, int kind, const uint8_t *data, uint32_t ident, int w, int h,
                 int x, int y, uint8_t colMask, unsigned flags, bool setPrio) {
-	if (w <= 0 || h <= 0 || x >= kSTLayerW || y >= kSTLayerH || x + w <= 0 || y + h <= 0) {
-		return;
-	}
-	if (ST_dlRecording(layer) && ST_dlAddSprite(kind, data, ident, w, h, x, y, colMask, flags, setPrio)) {
-		return;
-	}
 	if (w > kMaxW || h > kMaxH || (g_options.ab & kAbNoBakes) || !ringOpen()) {
 		drawChunky(layer, kind, data, w, h, x, y, colMask, flags, setPrio);
 		return;
@@ -1026,6 +1033,17 @@ void ST_sprDraw(uint8_t *layer, int kind, const uint8_t *data, uint32_t ident, i
 		}
 	}
 	blitRec(layer, r, x, y, (flags & kSTSpriteRespectPrio) != 0, setPrio);
+}
+
+void ST_sprDraw(uint8_t *layer, int kind, const uint8_t *data, uint32_t ident, int w, int h,
+                int x, int y, uint8_t colMask, unsigned flags, bool setPrio) {
+	if (w <= 0 || h <= 0 || x >= kSTLayerW || y >= kSTLayerH || x + w <= 0 || y + h <= 0) {
+		return;
+	}
+	if (ST_dlRecording(layer) && ST_dlAddSprite(kind, data, ident, w, h, x, y, colMask, flags, setPrio)) {
+		return;
+	}
+	sprDrawNow(layer, kind, data, ident, w, h, x, y, colMask, flags, setPrio);
 }
 
 #endif
