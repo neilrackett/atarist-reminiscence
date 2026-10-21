@@ -148,6 +148,7 @@ struct Cutscene {
 		uint16_t work;            // ms since the previous frame ended
 		uint16_t polyHit, polyMiss;
 		uint16_t restoreGR;       // group-rows the restore copied
+		uint16_t touchGR;         // ... and the shapes touched, a box each
 		uint8_t budget4;          // the frame's budget, ms / 4
 		uint8_t push, restore;    // ms
 		uint8_t flags;            // kStF*
@@ -167,7 +168,7 @@ struct Cutscene {
 	uint16_t _stRingN;
 	uint16_t _stHist[kStHist];    // frames by work, in 5ms steps
 	uint16_t _stSceneId;
-	uint32_t _stSegHit0, _stSegMiss0, _stShpDrawn0, _stShpBaked0;
+	uint32_t _stSegHit0, _stSegMiss0, _stShpDrawn0, _stShpBaked0, _stTouch0;
 	int32_t _stLastDelay, _stLastBudget;
 	bool _stLastLate;
 	uint32_t *_stHash;

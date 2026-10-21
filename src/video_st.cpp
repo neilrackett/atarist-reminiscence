@@ -15,6 +15,10 @@ extern "C" {
 
 #include "video_st.h"
 
+// group-rows the drawing on a tracked page touched, box by box (the
+// per-frame stats: what one box per page costs against these)
+uint32_t g_stCutTouchGR;
+
 // see ST_pageBandStart; the whole page when no band is in force
 static int16_t g_bandY0 = 0, g_bandY1 = kSTLayerH;
 static int16_t g_bandFill = -1;   // hardware value outside the band
@@ -117,6 +121,7 @@ static inline __attribute__((always_inline)) void pageTouch(const uint8_t *layer
 	}
 	if (TrkBox *b = trkBoxOf(layer)) {
 		boxAdd(b, g0, g1, y0, y1);
+		g_stCutTouchGR += STDL_MulU16((uint16_t)(g1 - g0), (uint16_t)(y1 - y0));
 	}
 }
 

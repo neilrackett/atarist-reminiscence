@@ -289,6 +289,8 @@ extern STPerf g_stPerf;
 // cutscenes: group-rows (8 bytes x 1 row) the page copies have moved,
 // for the per-frame stats
 extern uint32_t g_stCutCopyGR;
+// ... and what the drawing touched, a box per shape (overlaps counted twice)
+extern uint32_t g_stCutTouchGR;
 // a set of counters as one log fragment
 void ST_perfFormat(const STPerf &p, char *buf, int len);
 

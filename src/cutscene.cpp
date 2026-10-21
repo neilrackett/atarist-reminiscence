@@ -288,7 +288,15 @@ void Cutscene::stDecideSkip() {
 	// time it was going to spend sleeping anyway.
 	static const int32_t kDebtSkip = 50;
 	const int32_t debt = (int32_t)(_stub->getTimeStamp() - _stSched);
-	if (debt > kDebtSkip && _stSkipRun < kSkipMax) {
+	// One skip at a time: a frame is shown between skips unless the
+	// scene is more than three frames behind. Three in a row was the
+	// rule for every catch-up, so one heavy frame left a hole of three
+	// in the motion; spread out, the same frames go as show, show,
+	// skip, which reads as steady. The scripted clock's debt cap keeps
+	// the scene within 200ms of its time either way.
+	const bool runOk = (g_options.ab & kAbCutSkipBursts) || _stSkipRun == 0
+	                   || debt > 3 * (int32_t)_stLastBudget;
+	if (debt > kDebtSkip && _stSkipRun < kSkipMax && runOk) {
 		if (!_stUsesCopyScreen) {
 			_stSkipDraw = true;
 			++_stSkipRun;
@@ -332,6 +340,7 @@ void Cutscene::stStatsBegin() {
 	memset(_stHist, 0, sizeof(_stHist));
 	ST_segCacheStats(&_stSegHit0, &_stSegMiss0);
 	ST_shpStats(&_stShpDrawn0, &_stShpBaked0);
+	_stTouch0 = g_stCutTouchGR;
 	if (g_options.replay_hash) {
 		_stHash = (uint32_t *)malloc(kStHashMax * sizeof(uint32_t));
 		_stPalHash = (uint32_t *)malloc(kStHashMax * sizeof(uint32_t));
@@ -394,6 +403,11 @@ void Cutscene::stStatsFrame(uint8_t flags) {
 	_stSegMiss0 = miss;
 	_stShpDrawn0 = drawn;
 	_stShpBaked0 = baked;
+	{
+		const uint32_t t = g_stCutTouchGR - _stTouch0;
+		f.touchGR = (uint16_t)(t > 0xFFFF ? 0xFFFF : t);
+		_stTouch0 = g_stCutTouchGR;
+	}
 	if (_stKeys) {
 		const int cur = _stKeyCur;
 		const int p1 = cur == 0 ? 2 : cur - 1;
@@ -431,7 +445,7 @@ void Cutscene::stStatsEnd() {
 		for (int i = 0; i < _stRingN; i += 8) {
 			uint32_t w = 0, b = 0, p = 0, r = 0, L = 0, S = 0, U = 0, pal = 0, cap = 0, clr = 0;
 			uint32_t sh = 0, xf = 0, sp = 0, bk = 0, rf = 0, rc = 0, rs = 0, ph = 0, pm = 0;
-			uint32_t el = 0, sd = 0, box = 0, s1 = 0, s2 = 0;
+			uint32_t el = 0, sd = 0, box = 0, tb = 0, s1 = 0, s2 = 0;
 			const int n = (_stRingN - i < 8) ? _stRingN - i : 8;
 			for (int k = 0; k < n; ++k) {
 				const StFrameStat &f = _stRing[i + k];
@@ -445,7 +459,7 @@ void Cutscene::stStatsEnd() {
 				sh += f.shapes; xf += f.xform; sp += f.sprHit; bk += f.sprBake;
 				rf += f.refFirst; rc += f.refClip; rs += f.refShadow;
 				ph += f.polyHit; pm += f.polyMiss; el += f.ellipses; sd += f.shadows;
-				box += f.restoreGR; s1 += f.same1; s2 += f.same2;
+				box += f.restoreGR; tb += f.touchGR; s1 += f.same1; s2 += f.same2;
 				if (f.flags & (kStFSkipped | kStFUnshown)) {
 					if (++run > runMax) {
 						runMax = run;
@@ -461,11 +475,11 @@ void Cutscene::stStatsEnd() {
 			late += L; push += p; restore += r; budget += b;
 			polyHit += ph; polyMiss += pm; spr += sp; bake += bk;
 			refF += rf; refC += rc; refS += rs;
-			info("CUT %02X f%d: w%u/%u p%u r%u L%u S%u U%u pal%u cap%u clr%u sh%u xf%u spr%u+%u ref%u/%u/%u poly%u/%u el%u sd%u box%u same%u/%u",
+			info("CUT %02X f%d: w%u/%u p%u r%u L%u S%u U%u pal%u cap%u clr%u sh%u xf%u spr%u+%u ref%u/%u/%u poly%u/%u el%u sd%u box%u tb%u same%u/%u",
 				_stSceneId, i, (unsigned)(w / n), (unsigned)(b / n), (unsigned)(p / n), (unsigned)(r / n),
 				(unsigned)L, (unsigned)S, (unsigned)U, (unsigned)pal, (unsigned)cap, (unsigned)clr,
 				(unsigned)sh, (unsigned)xf, (unsigned)sp, (unsigned)bk, (unsigned)rf, (unsigned)rc, (unsigned)rs,
-				(unsigned)ph, (unsigned)pm, (unsigned)el, (unsigned)sd, (unsigned)(box / n), (unsigned)s1, (unsigned)s2);
+				(unsigned)ph, (unsigned)pm, (unsigned)el, (unsigned)sd, (unsigned)(box / n), (unsigned)(tb / n), (unsigned)s1, (unsigned)s2);
 		}
 		// work percentiles from the 5ms histogram
 		const uint32_t frames = _stRingN;
