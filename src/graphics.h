@@ -22,6 +22,9 @@ struct Graphics {
 	void drawLine(uint8_t color, const Point *pt1, const Point *pt2);
 	void addEllipseRadius(int16_t y, int16_t x1, int16_t x2);
 	void drawEllipse(uint8_t color, bool hasAlpha, const Point *pt, int16_t rx, int16_t ry);
+#ifdef ATARIST
+	static int ellipseSpans(int16_t rx, int16_t ry, int16_t *spans);
+#endif
 	void fillArea(uint8_t color, bool hasAlpha);
 	void drawSegment(uint8_t color, bool hasAlpha, int16_t ys, const Point *pts, uint8_t numPts);
 	void drawPolygonOutline(uint8_t color, const Point *pts, uint8_t numPts);

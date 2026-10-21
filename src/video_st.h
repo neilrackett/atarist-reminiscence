@@ -333,7 +333,26 @@ void ST_shpFlush();
 void ST_shpColoursChanged();
 void ST_shpStats(uint32_t *drawn, uint32_t *baked);
 extern "C" int segHit(const void *key, int x, int y, int colour8);
+// op_drawShape's primitive loop over the cache (segWalk): it draws the
+// cached polygons itself and returns 1 with a primitive it leaves to
+// the caller (new, an ellipse or point, a shadow), 0 at the end;
+// colour and alpha are the last primitive's either way
+struct SegWalk {
+	const uint8_t *data;         // the next primitive's header
+	const uint8_t *vot, *vdt;    // the vertices offset and data tables
+	int16_t count;               // primitives left
+	int16_t x, y;                // the shape's origin
+	uint8_t cadd, pad;           // added to a primitive's colour byte
+	const uint8_t *verts;        // the primitive handed back
+	int16_t px, py;
+	uint8_t colour, alpha;
+};
+extern "C" int segWalk(SegWalk *w);
 bool ST_segRecordDraw(const void *key, const void *pts, int n, int x, int y, uint8_t colour8);
+// the same for rows given as spans (xl, xr pairs) from (ox, oy), an
+// ellipse's (Graphics::ellipseSpans)
+bool ST_segRecordSpans(const void *key, int ox, int oy, int rows, const int16_t *spans,
+	int x, int y, uint8_t colour8);
 
 // fast path for opaque 3+-point non-flat polygons; returns false
 // when the caller must use the reference converter

@@ -1093,8 +1093,8 @@ const void *Cutscene::stBakeShape(uint16_t key, const uint8_t *shapeData, uint16
 		p = stReadPrim(p, verticesOffsetTable, verticesDataTable, &prim);
 		_hasAlphaColor = prim.alpha;
 		_primitiveColor = prim.colour;
-		// a recorded polygon through segHit, as on a page
-		if ((uint8_t)(*prim.vertices - 1) < 0x7F
+		// a recorded polygon or ellipse through segHit, as on a page
+		if (*prim.vertices != 0
 		    && segHit(prim.vertices, sox + prim.dx, soy + prim.dy, _primitiveColor)) {
 			continue;
 		}
@@ -1169,10 +1169,20 @@ void Cutscene::drawShape(const uint8_t *data, int16_t x, int16_t y) {
 		pt.y = READ_BE_UINT16(data) + y; data += 2;
 		int16_t rx = READ_BE_UINT16(data); data += 2;
 		int16_t ry = READ_BE_UINT16(data); data += 2;
-		scalePoints(&pt, 1, _vid->_layerScale, &rx, &ry);
 #ifdef ATARIST
 		++_stCur.ellipses;
+		// new to the cache (op_drawShape replays one seen before): its
+		// rows kept, from the shape's origin, and drawn from them
+		if (stSegCacheable()) {
+			static int16_t spans[(250 * 2 + 1) * 2];
+			if (const int rows = Graphics::ellipseSpans(rx, ry, spans)) {
+				if (ST_segRecordSpans(data - 9, pt.x - x, pt.y - y - ry, rows, spans, x, y, _primitiveColor)) {
+					return;
+				}
+			}
+		}
 #endif
+		scalePoints(&pt, 1, _vid->_layerScale, &rx, &ry);
 		_gfx.drawEllipse(_primitiveColor, _hasAlphaColor, &pt, rx, ry);
 	} else if (numVertices == 0) {
 		Point pt;
@@ -1279,7 +1289,26 @@ void Cutscene::op_drawShape() {
 	}
 	const bool segOn = ST_segCacheOn() && !_isConcavePolygonShape && _vid->_layerScale == 1;
 	if (segOn) {
+		// the loop below in asm, drawing the polygons drawn before
 		ST_segShapeBegin(_backPage, _gfx._crx, _gfx._cry, _gfx._crw, _gfx._crh);
+		SegWalk w;
+		w.data = shapeData;
+		w.vot = verticesOffsetTable;
+		w.vdt = verticesDataTable;
+		w.count = primitiveCount;
+		w.x = x;
+		w.y = y;
+		w.cadd = (_clearScreen == 0) ? 0xD0 : 0xC0;
+		w.colour = _primitiveColor;
+		w.alpha = _hasAlphaColor;
+		while (segWalk(&w)) {
+			_hasAlphaColor = w.alpha != 0;
+			_primitiveColor = w.colour;
+			drawShape(w.verts, w.px, w.py);
+		}
+		_hasAlphaColor = w.alpha != 0;
+		_primitiveColor = w.colour;
+		primitiveCount = 0;
 	}
 #endif
 	while (primitiveCount--) {
@@ -1297,15 +1326,6 @@ void Cutscene::op_drawShape() {
 			color += 0x10;
 		}
 		_primitiveColor = 0xC0 + color;
-#ifdef ATARIST
-		// a polygon (not an ellipse or a point) drawn before in this
-		// scene: straight from the cache, see ST_segRecordDraw
-		if (segOn && !(_hasAlphaColor && _primitiveColor > 0xC7)
-		    && (uint8_t)(*primitiveVertices - 1) < 0x7F
-		    && segHit(primitiveVertices, x + dx, y + dy, _primitiveColor)) {
-			continue;
-		}
-#endif
 		drawShape(primitiveVertices, x + dx, y + dy);
 	}
 #ifdef ATARIST

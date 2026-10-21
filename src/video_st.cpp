@@ -2127,19 +2127,29 @@ __asm__(
 "    add.w  %a4,%d3\n"
 "    RS_PAGE_BODY 26\n"
 /* segHit(key, x, y, colour8): a cached polygon drawn start to finish -
- * the lookup, the clipping, and the spans - for op_drawShape's loop,
- * where a C path's setup cost as much as the fill. 0 when the
- * key is not cached (the caller records it). The shape's box grows in
- * g_segCtx and is applied once per shape (ST_segShapeEnd). SegCtx
- * offsets past RasterState: layer 44, remap 48, fill01 52, fill23 56,
- * hash 60, lim 64, crx 68, cry 70, xmaxv 72, ylast 74, box xlo 76 xhi
- * 78 y0 80 y1 82, hits 84, bake 88 (a shape sprite's bake: mode 1,
- * which marks coverage in the priority plane, and prow for it). */
+ * the lookup, the clipping, and the spans - where a C path's setup
+ * cost as much as the fill. 0 when the key is not cached (the caller
+ * records it). The shape's box grows in g_segCtx and is applied once
+ * per shape (ST_segShapeEnd). SegCtx offsets past RasterState: layer
+ * 44, remap 48, fill01 52, fill23 56, hash 60, lim 64, crx 68, cry 70,
+ * xmaxv 72, ylast 74, box xlo 76 xhi 78 y0 80 y1 82, hits 84, bake 88
+ * (a shape sprite's bake: mode 1, which marks coverage in the priority
+ * plane, and prow for it). */
 "    .globl _segHit\n"                  /* called from cutscene.cpp */
 "_segHit:\n"
 "    movem.l %d2-%d7/%a2-%a6,-(%sp)\n"
+"    move.l 48(%sp),%a2\n"             /* key */
+"    move.w 54(%sp),%d2\n"             /* x */
+"    move.w 58(%sp),%d3\n"             /* y */
+"    move.b 63(%sp),%d4\n"             /* colour8 */
+"    bsr.s  sh_core\n"
+"    movem.l (%sp)+,%d2-%d7/%a2-%a6\n"
+"    rts\n"
+/* a2 key, d2 x, d3 y, d4.b colour8; d0 = 0 (not cached: a2 and
+ * d2-d4 kept) or 1 (drawn, everything else clobbered) */
+"sh_core:\n"
 "    lea    _g_segCtx,%a0\n"
-"    move.l 48(%sp),%d0\n"             /* key */
+"    move.l %a2,%d0\n"
 "    move.l %d0,%d1\n"
 "    lsr.l  #8,%d1\n"
 "    eor.l  %d0,%d1\n"
@@ -2156,10 +2166,16 @@ __asm__(
 "    bra.s  1b\n"
 "sh_miss:\n"
 "    moveq  #0,%d0\n"
-"    movem.l (%sp)+,%d2-%d7/%a2-%a6\n"
 "    rts\n"
 "2:  addq.l #1,84(%a0)\n"
-"    move.w 54(%sp),%d2\n"             /* x */
+"    move.w %d2,%a4\n"                 /* xo = x + crx */
+"    add.w  68(%a0),%a4\n"
+"    moveq  #0,%d1\n"                  /* v = remap[colour8] & 15 */
+"    move.b %d4,%d1\n"
+"    move.l 48(%a0),%a3\n"
+"    move.b (%a3,%d1.w),%d1\n"
+"    and.w  #15,%d1\n"
+"    move.w %d3,%d4\n"                 /* y */
 "    move.w %d2,%d3\n"
 "    add.w  12(%a1),%d2\n"             /* xlo */
 "    add.w  14(%a1),%d3\n"             /* xhi */
@@ -2167,7 +2183,6 @@ __asm__(
 "    bmi    sh_done\n"                 /* wholly left of the clip */
 "    cmp.w  72(%a0),%d2\n"
 "    bgt    sh_done\n"                 /* wholly right of it */
-"    move.w 58(%sp),%d4\n"             /* y */
 "    add.w  8(%a1),%d4\n"              /* ytop */
 "    move.w %d4,%d6\n"                 /* first = max(ytop, 0) */
 "    bpl.s  3f\n"
@@ -2199,8 +2214,6 @@ __asm__(
 "    lea    16(%a1,%d5.w),%a3\n"       /* the first row's span */
 "    sub.w  %d6,%d7\n"                 /* rows = last - first + 1 */
 "    addq.w #1,%d7\n"
-"    move.w 54(%sp),%a4\n"             /* xo = x + crx */
-"    add.w  68(%a0),%a4\n"
 "    add.w  70(%a0),%d6\n"             /* row = layer + (cry + first) * 128 */
 "    ext.l  %d6\n"
 "    lsl.l  #7,%d6\n"
@@ -2212,13 +2225,7 @@ __asm__(
 "    add.l  #28672,%d6\n"              /* kSTPlaneBytes */
 "    move.l 44(%a0),%a6\n"
 "    add.l  %d6,%a6\n"
-"9:\n"
-"    moveq  #0,%d1\n"                  /* v = remap[colour8] & 15 */
-"    move.b 63(%sp),%d1\n"
-"    move.l 48(%a0),%a1\n"
-"    move.b (%a1,%d1.w),%d1\n"
-"    and.w  #15,%d1\n"
-"    moveq  #0x20,%d5\n"               /* mode 3 if it cannot need clamping */
+"9:  moveq  #0x20,%d5\n"               /* mode 3 if it cannot need clamping */
 "    tst.w  %d2\n"
 "    bmi.s  6f\n"
 "    cmp.w  72(%a0),%d3\n"
@@ -2240,6 +2247,75 @@ __asm__(
 "    bsr    sp_go\n"
 "sh_done:\n"
 "    moveq  #1,%d0\n"
+"    rts\n"
+/* segWalk(w): op_drawShape's primitive loop over a shape (SegWalk,
+ * video_st.h; offsets data 0, vot 4, vdt 8, count 12, x 14, y 16,
+ * cadd 18, verts 20, px 24, py 26, colour 28, alpha 29): each
+ * primitive's header read and, for a cached polygon, drawn through
+ * sh_core, until one the caller must draw (new, an ellipse or point,
+ * a shadow) - 1, with it in verts..alpha - or the end, 0. The C loop
+ * and segHit's call and register saves cost about as much as the
+ * lookup and set-up they wrapped. */
+"    .globl _segWalk\n"
+"_segWalk:\n"
+"    movem.l %d2-%d7/%a2-%a6,-(%sp)\n"
+"sw_next:\n"
+"    move.l 48(%sp),%a0\n"
+"    subq.w #1,12(%a0)\n"
+"    bmi    sw_end\n"
+"    move.l (%a0),%a1\n"               /* the header, at any alignment */
+"    move.b (%a1)+,%d0\n"
+"    lsl.w  #8,%d0\n"
+"    move.b (%a1)+,%d0\n"              /* vertices offset and flags */
+"    move.w 14(%a0),%d2\n"             /* px = x (+ dx) */
+"    move.w 16(%a0),%d3\n"             /* py = y (+ dy) */
+"    tst.w  %d0\n"
+"    bpl.s  1f\n"
+"    move.b (%a1)+,%d1\n"
+"    lsl.w  #8,%d1\n"
+"    move.b (%a1)+,%d1\n"
+"    add.w  %d1,%d2\n"
+"    move.b (%a1)+,%d1\n"
+"    lsl.w  #8,%d1\n"
+"    move.b (%a1)+,%d1\n"
+"    add.w  %d1,%d3\n"
+"1:  move.b (%a1)+,%d4\n"
+"    add.b  18(%a0),%d4\n"             /* colour8 */
+"    move.l %a1,(%a0)\n"
+"    move.b %d4,28(%a0)\n"
+"    btst   #14,%d0\n"
+"    sne    29(%a0)\n"                 /* alpha */
+"    move.w %d0,%d1\n"                 /* verts = vdt + vot[offset] */
+"    and.w  #0x3FFF,%d1\n"
+"    add.w  %d1,%d1\n"
+"    move.l 4(%a0),%a1\n"
+"    add.w  %d1,%a1\n"
+"    moveq  #0,%d1\n"
+"    move.b (%a1)+,%d1\n"
+"    lsl.w  #8,%d1\n"
+"    move.b (%a1),%d1\n"
+"    move.l 8(%a0),%a2\n"
+"    add.l  %d1,%a2\n"
+"    btst   #14,%d0\n"                 /* a shadow: the caller's */
+"    beq.s  2f\n"
+"    cmp.b  #0xC7,%d4\n"
+"    bhi.s  sw_out\n"
+"2:  tst.b  (%a2)\n"                   /* a polygon or an ellipse, not a point */
+"    beq.s  sw_out\n"
+"    bsr    sh_core\n"
+"    tst.w  %d0\n"
+"    bne    sw_next\n"
+"    move.l 48(%sp),%a0\n"
+"sw_out:\n"
+"    move.l %a2,20(%a0)\n"
+"    move.w %d2,24(%a0)\n"
+"    move.w %d3,26(%a0)\n"
+"    moveq  #1,%d0\n"
+"    movem.l (%sp)+,%d2-%d7/%a2-%a6\n"
+"    rts\n"
+"sw_end:\n"
+"    clr.w  12(%a0)\n"
+"    moveq  #0,%d0\n"
 "    movem.l (%sp)+,%d2-%d7/%a2-%a6\n"
 "    rts\n"
 /* shpBlit(data, dst, rows): a shape sprite (ST_shpBakeEnd) onto a
@@ -2573,6 +2649,7 @@ extern "C" SegCtx g_segCtx;
 SegCtx g_segCtx;
 // the asm addresses these fields by number: the sizes pin the layout
 typedef char SegCtxLayout[(sizeof(SegCtx) == 92) ? 1 : -1];
+typedef char SegWalkLayout[(sizeof(SegWalk) == 30 && __builtin_offsetof(SegWalk, verts) == 20) ? 1 : -1];
 
 extern "C" void rasterSeg(RasterState *st, long count);
 extern "C" void polyWalk(PolyState *st);
@@ -3136,6 +3213,174 @@ uint8_t *ST_shpBakeBegin() {
 	return g_shpScratch;
 }
 
+// The bake's scans over the scratch (ST_shpBakeEnd). shpCovScan: rows
+// of a box of the priority plane (cov, its first row's first group),
+// each group's coverage ORed into colOr, and the first and last rows
+// with any into rowSpan (-1 if none). shpEmit: the covered box's rows
+// as shpBlit's ops at out, clearing the planes and coverage it read;
+// returns the end. In C the two came to 76K cycles a bake on an 8MHz
+// ST, more than the draws the sprite then saved in a pan.
+#ifdef __m68k__
+extern "C" void shpCovScan(const uint16_t *cov, long rows, long groups, uint16_t *colOr, long *rowSpan);
+extern "C" uint16_t *shpEmit(uint16_t *cov, uint16_t *planes, long rows, long groups, uint16_t *out);
+__asm__(
+"    .text\n"
+"    .even\n"
+"_shpCovScan:\n"
+"    movem.l %d2-%d7/%a2-%a3,-(%sp)\n"
+"    move.l 36(%sp),%a0\n"             /* cov */
+"    move.l 40(%sp),%d2\n"             /* rows */
+"    move.l 44(%sp),%d3\n"             /* groups */
+"    move.l 48(%sp),%a2\n"             /* colOr */
+"    subq.w #1,%d3\n"
+"    moveq  #-1,%d4\n"                 /* first */
+"    moveq  #-1,%d5\n"                 /* last */
+"    moveq  #0,%d1\n"                  /* row */
+"1:  move.l %a0,%a1\n"
+"    move.l %a2,%a3\n"
+"    moveq  #0,%d6\n"
+"    move.w %d3,%d7\n"
+"2:  move.w (%a1)+,%d0\n"
+"    or.w   %d0,(%a3)+\n"
+"    or.w   %d0,%d6\n"
+"    dbra   %d7,2b\n"
+"    tst.w  %d6\n"
+"    beq.s  3f\n"
+"    tst.l  %d4\n"
+"    bpl.s  4f\n"
+"    move.l %d1,%d4\n"
+"4:  move.l %d1,%d5\n"
+"3:  lea    32(%a0),%a0\n"            /* kSTPrioRowBytes */
+"    addq.l #1,%d1\n"
+"    cmp.l  %d2,%d1\n"
+"    blt.s  1b\n"
+"    move.l 52(%sp),%a0\n"
+"    move.l %d4,(%a0)+\n"
+"    move.l %d5,(%a0)\n"
+"    movem.l (%sp)+,%d2-%d7/%a2-%a3\n"
+"    rts\n"
+/* d3 pending skip, a3 the open run's count (0: none), a2 planes, a1
+ * coverage, a0 out, d7 groups left, d6 rows left */
+"_shpEmit:\n"
+"    movem.l %d2-%d7/%a2-%a5,-(%sp)\n"
+"    move.l 44(%sp),%a4\n"             /* cov */
+"    move.l 48(%sp),%a5\n"             /* planes */
+"    move.l 52(%sp),%d6\n"             /* rows */
+"    move.l 56(%sp),%d2\n"             /* groups */
+"    move.l 60(%sp),%a0\n"             /* out */
+"    subq.w #1,%d6\n"
+"    subq.w #1,%d2\n"
+"se_row:\n"
+"    move.l %a4,%a1\n"
+"    move.l %a5,%a2\n"
+"    moveq  #0,%d3\n"
+"    sub.l  %a3,%a3\n"
+"    move.w %d2,%d7\n"
+"se_grp:\n"
+"    move.w (%a1),%d0\n"
+"    beq.s  se_skip\n"
+"    tst.w  %d3\n"
+"    beq.s  1f\n"
+"    or.w   #0x8000,%d3\n"
+"    move.w %d3,(%a0)+\n"              /* the groups not covered before it */
+"    moveq  #0,%d3\n"
+"1:  cmp.w  #-1,%d0\n"
+"    bne.s  se_part\n"
+"    move.l %a3,%d1\n"                 /* wholly covered: into the run */
+"    beq.s  2f\n"
+"    addq.w #1,(%a3)\n"
+"    bra.s  se_copy\n"
+"2:  move.l %a0,%a3\n"
+"    move.w #1,(%a0)+\n"
+"    bra.s  se_copy\n"
+"se_part:\n"
+"    sub.l  %a3,%a3\n"
+"    move.w #0x4000,(%a0)+\n"
+"    not.w  %d0\n"
+"    move.w %d0,(%a0)+\n"              /* the keep mask */
+"se_copy:\n"
+"    move.l (%a2),(%a0)+\n"
+"    move.l 4(%a2),(%a0)+\n"
+"    clr.l  (%a2)+\n"
+"    clr.l  (%a2)+\n"
+"    clr.w  (%a1)+\n"
+"    dbra   %d7,se_grp\n"
+"    bra.s  se_eol\n"
+"se_skip:\n"
+"    addq.w #1,%d3\n"
+"    sub.l  %a3,%a3\n"
+"    addq.l #8,%a2\n"
+"    addq.l #2,%a1\n"
+"    dbra   %d7,se_grp\n"
+"se_eol:\n"
+"    clr.w  (%a0)+\n"
+"    lea    32(%a4),%a4\n"
+"    lea    128(%a5),%a5\n"
+"    dbra   %d6,se_row\n"
+"    move.l %a0,%d0\n"
+"    movem.l (%sp)+,%d2-%d7/%a2-%a5\n"
+"    rts\n"
+);
+#else
+// C twins of shpCovScan and shpEmit
+static void shpCovScan(const uint16_t *cov, long rows, long groups, uint16_t *colOr, long *rowSpan) {
+	rowSpan[0] = rowSpan[1] = -1;
+	for (long r = 0; r < rows; ++r, cov += kSTPrioRowBytes / 2) {
+		uint16_t any = 0;
+		for (long g = 0; g < groups; ++g) {
+			colOr[g] |= cov[g];
+			any |= cov[g];
+		}
+		if (any) {
+			if (rowSpan[0] < 0) {
+				rowSpan[0] = r;
+			}
+			rowSpan[1] = r;
+		}
+	}
+}
+
+static uint16_t *shpEmit(uint16_t *cov, uint16_t *planes, long rows, long groups, uint16_t *out) {
+	for (long r = 0; r < rows; ++r, cov += kSTPrioRowBytes / 2, planes += kSTRowBytes / 2) {
+		uint16_t *run = 0;       // the open run of covered groups
+		int skip = 0;
+		for (long g = 0; g < groups; ++g) {
+			const uint16_t c = cov[g];
+			if (c == 0) {
+				++skip;
+				run = 0;
+				continue;
+			}
+			uint16_t *w = planes + g * 4;
+			if (skip) {
+				*out++ = 0x8000 | skip;
+				skip = 0;
+			}
+			if (c == 0xFFFF) {
+				if (run) {
+					++*run;
+				} else {
+					run = out;
+					*out++ = 1;
+				}
+			} else {
+				run = 0;
+				*out++ = 0x4000;
+				*out++ = (uint16_t)~c;
+			}
+			*out++ = w[0];
+			*out++ = w[1];
+			*out++ = w[2];
+			*out++ = w[3];
+			w[0] = w[1] = w[2] = w[3] = 0;
+			cov[g] = 0;
+		}
+		*out++ = 0;
+	}
+	return out;
+}
+#endif
+
 // Keep what the bake drew in rows [soy + y0, soy + y1] and columns
 // [sox + x0, sox + x1] of the scratch (bounds with a pixel's margin,
 // from the shape's origin, which the bake put at (sox, soy)), clearing
@@ -3148,18 +3393,18 @@ const void *ST_shpBakeEnd(uint16_t key, int sox, int soy, int x0, int y0, int x1
 	uint8_t *planes = g_shpScratch;
 	uint8_t *prio = g_shpScratch + kSTPlaneBytes;
 	// the covered box, and the covered columns of its end groups
-	int tr0 = kSTLayerH, tr1 = -1, tg0 = 16, tg1 = -1;
 	uint16_t colOr[16];
 	memset(colOr, 0, sizeof(colOr));
-	for (int r = r0; r <= r1; ++r) {
-		const uint16_t *cov = (const uint16_t *)(prio + r * kSTPrioRowBytes);
+	long rowSpan[2];
+	shpCovScan((const uint16_t *)(prio + r0 * kSTPrioRowBytes) + g0, r1 - r0 + 1, g1 - g0 + 1, colOr + g0, rowSpan);
+	int tr0 = kSTLayerH, tr1 = -1, tg0 = 16, tg1 = -1;
+	if (rowSpan[0] >= 0) {
+		tr0 = r0 + rowSpan[0];
+		tr1 = r0 + rowSpan[1];
 		for (int g = g0; g <= g1; ++g) {
-			if (cov[g]) {
-				if (r < tr0) tr0 = r;
-				tr1 = r;
+			if (colOr[g]) {
 				if (g < tg0) tg0 = g;
-				if (g > tg1) tg1 = g;
-				colOr[g] |= cov[g];
+				tg1 = g;
 			}
 		}
 	}
@@ -3174,48 +3419,20 @@ const void *ST_shpBakeEnd(uint16_t key, int sox, int soy, int x0, int y0, int x1
 		}
 		e = (ShpEntry *)(g_shpArena + g_shpUsed);
 	}
-	uint16_t *out = e ? (uint16_t *)(e + 1) : 0;
-	for (int r = tr0; r <= tr1; ++r) {
-		uint16_t *cov = (uint16_t *)(prio + r * kSTPrioRowBytes);
-		uint16_t *pl = (uint16_t *)(planes + r * kSTRowBytes);
-		uint16_t *run = 0;       // the open run of covered groups
-		int skip = 0;
-		for (int g = tg0; g <= tg1; ++g) {
-			const uint16_t c = cov[g];
-			if (c == 0) {
-				++skip;
-				run = 0;
-				continue;
+	uint16_t *out = 0;
+	if (rows > 0) {
+		uint16_t *cov = (uint16_t *)(prio + tr0 * kSTPrioRowBytes) + tg0;
+		uint16_t *pl = (uint16_t *)(planes + tr0 * kSTRowBytes) + tg0 * 4;
+		if (e) {
+			out = shpEmit(cov, pl, rows, groups, (uint16_t *)(e + 1));
+		} else {
+			for (int r = 0; r < rows; ++r, cov += kSTPrioRowBytes / 2, pl += kSTRowBytes / 2) {
+				memset(cov, 0, groups * 2);
+				memset(pl, 0, groups * 8);
 			}
-			uint16_t *w = pl + g * 4;
-			if (out) {
-				if (skip) {
-					*out++ = 0x8000 | skip;
-					skip = 0;
-				}
-				if (c == 0xFFFF) {
-					if (run) {
-						++*run;
-					} else {
-						run = out;
-						*out++ = 1;
-					}
-				} else {
-					run = 0;
-					*out++ = 0x4000;
-					*out++ = (uint16_t)~c;
-				}
-				*out++ = w[0];
-				*out++ = w[1];
-				*out++ = w[2];
-				*out++ = w[3];
-			}
-			w[0] = w[1] = w[2] = w[3] = 0;
-			cov[g] = 0;
 		}
-		if (out) {
-			*out++ = 0;
-		}
+	} else if (e) {
+		out = (uint16_t *)(e + 1);
 	}
 	if (!e) {
 		return 0;
@@ -3375,6 +3592,44 @@ bool ST_segRecordDraw(const void *key, const void *pts, int n, int x, int y, uin
 	}
 	segHit(key, x, y, colour8);
 	--g_segCtx.hits;            // a miss, counted as one (segRecord)
+	return true;
+}
+
+// An ellipse drawn through the cores' clip is drawEllipse's: it clips
+// its rows to the clip rect the same way, after the same steps. Its
+// C rows (a call and a fill set-up each) were 3ms an ellipse on an
+// 8MHz ST.
+bool ST_segRecordSpans(const void *key, int ox, int oy, int rows, const int16_t *spans,
+		int x, int y, uint8_t colour8) {
+	const uint32_t need = (sizeof(SegEntry) + rows * 4 + 3) & ~3u;
+	if (!g_segArena || need > g_segArenaSize) {
+		return false;
+	}
+	if (g_segUsed + need > g_segArenaSize) {
+		segFlush();
+	}
+	++g_segMisses;
+	SegEntry *e = (SegEntry *)(g_segArena + g_segUsed);
+	int16_t *out = (int16_t *)(e + 1);
+	int16_t xlo = 0x7FFF, xhi = -0x7FFF;
+	for (int i = 0; i < rows * 2; i += 2) {
+		const int16_t a = spans[i] + ox, b = spans[i + 1] + ox;
+		out[i] = a;
+		out[i + 1] = b;
+		if (a < xlo) xlo = a;
+		if (b > xhi) xhi = b;
+	}
+	e->key = key;
+	e->ytop = oy;
+	e->rows = rows;
+	e->xlo = xlo;
+	e->xhi = xhi;
+	const unsigned b = segBucket(key);
+	e->next = g_segHash[b];
+	g_segHash[b] = e;
+	g_segUsed += need;
+	segHit(key, x, y, colour8);
+	--g_segCtx.hits;
 	return true;
 }
 

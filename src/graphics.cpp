@@ -103,6 +103,121 @@ void Graphics::addEllipseRadius(int16_t y, int16_t x1, int16_t x2) {
 	}
 }
 
+#ifdef ATARIST
+// drawEllipse's rows for a centre at (0, 0) and no clip, as xl, xr
+// pairs from row -ry down: the same steps, so the same spans wherever
+// it is drawn (only the clip, applied after, depends on where), which
+// lets the cutscene polygon cache keep it. 0 if a row is never
+// written - drawEllipse would then fill from whatever the area buffer
+// held - or it is too tall for the buffer; else the row count.
+static inline void ellipseRow(int16_t *spans, int16_t ry, int16_t y, int16_t x1, int16_t x2) {
+	spans[(y + ry) * 2] = x1;
+	spans[(y + ry) * 2 + 1] = x2;
+}
+
+int Graphics::ellipseSpans(int16_t rx, int16_t ry, int16_t *spans) {
+	if (ry < 0 || ry > 250 || rx < 0) {
+		return 0;
+	}
+	const int rows = ry * 2 + 1;
+	for (int i = 0; i < rows; ++i) {
+		spans[i * 2] = 0x7FFF;
+	}
+	bool flag = false;
+	int32_t dy = 0;
+	int32_t rxsq  = rx * rx;
+	int32_t rxsq2 = rx * rx * 2;
+	int32_t rxsq4 = rx * rx * 4;
+	int32_t rysq  = ry * ry;
+	int32_t rysq2 = ry * ry * 2;
+	int32_t rysq4 = ry * ry * 4;
+
+	int32_t dx = 0;
+	int32_t b = rx * ((rysq2 & 0xFFFF) + (rysq2 >> 16));
+	int32_t a = 2 * b;
+
+	int32_t ny1, ny2, nx1, nx2;
+	ny1 = ny2 = rysq4 / 2 - a + rxsq;
+	nx1 = nx2 = rxsq2 - b + rysq;
+
+	while (ny2 < 0) {
+		int16_t x2 = rx;
+		int16_t x1 = -rx;
+		int16_t by = dy;
+		int16_t ty = -dy;
+		if (x1 != x2) {
+			ellipseRow(spans, ry, by, x1, x2);
+			if (ty < by) {
+				ellipseRow(spans, ry, ty, x1, x2);
+			}
+		}
+		dy += 1;
+		dx += rxsq4;
+		nx1 = dx;
+		if (nx2 < 0) {
+			nx2 += nx1 + rxsq2;
+			ny2 += nx1;
+		} else {
+			--rx;
+			a -= rysq4;
+			ny1 = a;
+			nx2 += nx1 + rxsq2 - ny1;
+			ny2 += nx1 + rysq2 - ny1;
+		}
+	}
+
+	while (rx >= 0) {
+		bool flag2 = false;
+		int16_t x2 = rx;
+		int16_t x1 = -rx;
+		int16_t by = dy;
+		int16_t ty = -dy;
+		if (!flag && x1 != x2) {
+			flag2 = true;
+			ellipseRow(spans, ry, by, x1, x2);
+			if (ty < by) {
+				ellipseRow(spans, ry, ty, x1, x2);
+			}
+		}
+		if (flag2) {
+			flag = true;
+		}
+		--rx;
+		a -= rysq4;
+		nx1 = a;
+		if (ny2 < 0) {
+			++dy;
+			flag = false;
+			dx += rxsq4;
+			ny2 += dx - nx1 + rysq2;
+			ny1 = dx - nx1 + rysq2;
+		} else {
+			ny2 += rysq2 - nx1;
+			ny1 = rysq2 - nx1;
+		}
+	}
+	if (flag) {
+		++dy;
+	}
+
+	while (dy <= ry) {
+		int16_t ty = -dy;
+		int16_t by = dy;
+		if (ty < by) {
+			ellipseRow(spans, ry, ty, 0, 0);
+		}
+		ellipseRow(spans, ry, by, 0, 0);
+		++dy;
+	}
+	for (int i = 0; i < rows; ++i) {
+		if (spans[i * 2] == 0x7FFF) {
+			return 0;
+		}
+	}
+	return rows;
+}
+#endif
+
 void Graphics::drawEllipse(uint8_t color, bool hasAlpha, const Point *pt, int16_t rx, int16_t ry) {
 	debug(DBG_VIDEO, "Graphics::drawEllipse()");
 	bool flag = false;
