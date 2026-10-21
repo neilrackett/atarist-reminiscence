@@ -1442,6 +1442,20 @@ void ST_cutscenePalCollect(const uint16_t *packed) {
 	}
 }
 
+// row i's nearest live j > i: the first at the least distance (-1 none)
+static void rowNearest(const uint8_t (*dm)[kCutEntries], const bool *liveE, int i, int16_t *dMin, int8_t *arg) {
+	int m = 0x7FFF, a = -1;
+	const uint8_t *row = dm[i];
+	for (int j = i + 1; j < kCutEntries; ++j) {
+		if (liveE[j] && row[j] < m) {
+			m = row[j];
+			a = j;
+		}
+	}
+	*dMin = (int16_t)m;
+	*arg = (int8_t)a;
+}
+
 void ST_cutscenePalLock(int part) {
 	if (part >= kCutParts) {
 		part = kCutParts - 1;
@@ -1464,44 +1478,49 @@ void ST_cutscenePalLock(int part) {
 	for (int i = 0; i < kCutEntries; ++i) {
 		alias[i] = (uint8_t)i;
 	}
-	// The entries not yet merged, in order: the pairs are scanned in
-	// the order the full 32x32 walk took, so the same pair wins every
-	// time, without the walk's tests of every merged entry (this and
-	// the slot search below were ~200ms at each part start on an 8MHz
-	// ST, a visible hitch and a late frame or two)
-	uint8_t liveList[kCutEntries];
+	// Merge the nearest pair until 16 are left: the first nearest, in
+	// the order of a walk of every live pair (i, then j > i). Kept as
+	// each live row's nearest partner (the first j at the least
+	// distance), so a merge rescans only the rows it can change - the
+	// merged row, and those whose nearest was either of the two -
+	// rather than every pair again. That walk and the slot search
+	// below were ~200ms at each part start on an 8MHz ST, a visible
+	// hitch and a late frame or two.
+	bool liveE[kCutEntries];
+	int16_t rowMin[kCutEntries];
+	int8_t rowArg[kCutEntries];
 	for (int i = 0; i < kCutEntries; ++i) {
-		liveList[i] = (uint8_t)i;
+		liveE[i] = true;
+	}
+	for (int i = 0; i < kCutEntries; ++i) {
+		rowNearest(dm, liveE, i, &rowMin[i], &rowArg[i]);
 	}
 	int live = kCutEntries;
 	while (live > 16) {
-		int bi = -1, bj = -1, bjAt = -1, best = 0x7FFF;
-		for (int a = 0; a < live - 1; ++a) {
-			const int i = liveList[a];
-			const uint8_t *row = dm[i];
-			for (int b = a + 1; b < live; ++b) {
-				const int d = row[liveList[b]];
-				if (d < best) {
-					best = d;
-					bi = i;
-					bj = liveList[b];
-					bjAt = b;
-				}
+		int bi = -1, best = 0x7FFF;
+		for (int i = 0; i < kCutEntries; ++i) {
+			if (liveE[i] && rowArg[i] >= 0 && rowMin[i] < best) {
+				best = rowMin[i];
+				bi = i;
 			}
 		}
 		if (bi < 0) {
 			break;
 		}
+		const int bj = rowArg[bi];
 		for (int k = 0; k < kCutEntries; ++k) {
 			if (dm[bj][k] > dm[bi][k]) {
 				dm[bi][k] = dm[k][bi] = dm[bj][k];
 			}
 		}
 		alias[bj] = (uint8_t)bi;
-		for (int b = bjAt; b < live - 1; ++b) {
-			liveList[b] = liveList[b + 1];
-		}
+		liveE[bj] = false;
 		--live;
+		for (int i = 0; i < kCutEntries; ++i) {
+			if (liveE[i] && (i == bi || rowArg[i] == bi || rowArg[i] == bj)) {
+				rowNearest(dm, liveE, i, &rowMin[i], &rowArg[i]);
+			}
+		}
 	}
 
 	// give each surviving cluster the free slot whose current colour
@@ -1530,30 +1549,37 @@ void ST_cutscenePalLock(int part) {
 			dcs[c][sl] = (uint8_t)dist4(rc, slotPacked[sl]);
 		}
 	}
-	for (int pass = 0; pass < nc; ++pass) {
-		int best = 0x7FFF, bc = -1, bs = -1;
-		for (int c = 0; c < nc; ++c) {
-			if (clusterDone[c]) {
-				continue;
-			}
-			for (int sl = 0; sl < 16; ++sl) {
-				if (slotUsed[sl]) {
-					continue;
-				}
-				const int d = dcs[c][sl];
-				if (d < best) {
-					best = d;
-					bc = c;
-					bs = sl;
-				}
-			}
+	// Sixteen passes each took the nearest free cluster and slot, the
+	// first in cluster-then-slot order on a tie. The pairs sorted by
+	// distance, that order kept within a distance (a counting sort:
+	// a distance is at most 60), give the same picks in one walk.
+	enum { kMaxD = 61 };
+	uint16_t at[kMaxD];
+	memset(at, 0, sizeof(at));
+	for (int c = 0; c < nc; ++c) {
+		for (int sl = 0; sl < 16; ++sl) {
+			++at[dcs[c][sl]];
 		}
-		if (bc < 0) {
-			break;
+	}
+	for (int d = 0, sum = 0; d < kMaxD; ++d) {
+		const int n = at[d];
+		at[d] = (uint16_t)sum;
+		sum += n;
+	}
+	uint8_t order[16 * 16];
+	for (int c = 0; c < nc; ++c) {
+		for (int sl = 0; sl < 16; ++sl) {
+			order[at[dcs[c][sl]]++] = (uint8_t)((c << 4) | sl);
 		}
-		slotOfCluster[bc] = (uint8_t)bs;
-		slotUsed[bs] = true;
-		clusterDone[bc] = true;
+	}
+	for (int k = 0, left = nc; k < nc * 16 && left > 0; ++k) {
+		const int c = order[k] >> 4, sl = order[k] & 15;
+		if (!clusterDone[c] && !slotUsed[sl]) {
+			slotOfCluster[c] = (uint8_t)sl;
+			slotUsed[sl] = true;
+			clusterDone[c] = true;
+			--left;
+		}
 	}
 
 	bool repSet[16];
