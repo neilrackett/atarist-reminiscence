@@ -328,19 +328,11 @@ void Graphics::fillArea(uint8_t color, bool hasAlpha) {
 	debug(DBG_VIDEO, "Graphics::fillArea()");
 	int16_t *pts = _areaPoints;
 #ifdef ATARIST
-	int y = _cry + *pts++;
-	int16_t x1 = *pts++;
+	int16_t x1 = pts[1];
 	if (x1 >= 0) {
 		const bool orMode = (hasAlpha && color > 0xC7);
 		if (orMode) {
-			do {
-				const int16_t x2 = MIN<int16_t>(_crw - 1, *pts++);
-				if (x1 <= x2) {
-					ST_hspanOr(_layer, _crx + x1, _crx + x2, y, color);
-				}
-				++y;
-				x1 = *pts++;
-			} while (x1 >= 0);
+			ST_hspanOrArea(_layer, _areaPoints, _crx, _cry, _crw, color);
 		} else {
 			ST_fillArea(_layer, _areaPoints, _crx, _cry, _crw,
 				ST_getRemap()[color], (color & 0x80) != 0);

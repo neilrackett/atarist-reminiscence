@@ -3653,65 +3653,102 @@ void ST_hspanV(uint8_t *layer, int x1, int x2, int y, uint8_t v, bool setPrio) {
 // The chunky code's cutscene "shadow" effect ORs the colour's slot
 // bits into the underlying pixel (*dst |= colour & 0xF8), selecting
 // the artist's shadow variant of whatever is underneath. In hardware
-// colour space that becomes a per-slot lookup (ST_getOrMap): read
-// each covered pixel, translate, write back. Outside cutscene mode
-// (no representative table) it falls back to an opaque fill.
-void ST_hspanOr(uint8_t *layer, int x1, int x2, int y, uint8_t colour8) {
+// colour space that becomes a per-slot lookup (ST_getOrMap): each
+// covered pixel translated through it. Outside cutscene mode (no
+// representative table) it falls back to an opaque fill. A whole
+// shadow polygon, fillArea's run list (y, then x1,x2 pairs until
+// x1 < 0), in one call: the map once, the box once.
+//
+// All sixteen pixels of a group are translated together (bitsliced):
+// each output plane is a function of the four input planes, a tree of
+// three muxes - by plane 3, then plane 2 - over four functions of
+// planes 0 and 1, of which there are only sixteen, computed once a
+// group. Translating the values the map moves one at a time cost
+// 1.4-2.2K cycles a group, as every value moves; a row at a time, with
+// the map and the box per row, 2.8ms a row of level 4's second scene.
+static inline void orGroup(uint16_t *g, uint16_t m, const uint8_t *prog) {
+	const uint16_t p0 = g[0], p1 = g[1], p2 = g[2], p3 = g[3];
+	uint16_t F[16];
+	const uint16_t a = (uint16_t)(p0 & p1), o = (uint16_t)(p0 | p1), x = (uint16_t)(p0 ^ p1);
+	const uint16_t b = (uint16_t)(p0 & ~p1), c = (uint16_t)(p1 & ~p0);
+	F[0] = 0;
+	F[1] = (uint16_t)~o;
+	F[2] = b;
+	F[3] = (uint16_t)~p1;
+	F[4] = c;
+	F[5] = (uint16_t)~p0;
+	F[6] = x;
+	F[7] = (uint16_t)~a;
+	F[8] = a;
+	F[9] = (uint16_t)~x;
+	F[10] = p0;
+	F[11] = (uint16_t)~c;
+	F[12] = p1;
+	F[13] = (uint16_t)~b;
+	F[14] = o;
+	F[15] = 0xFFFF;
+	for (int j = 0; j < 4; ++j, prog += 4) {
+		const uint16_t A = F[prog[0]], B = F[prog[1]], C = F[prog[2]], D = F[prog[3]];
+		const uint16_t lo = (uint16_t)(A ^ ((A ^ B) & p2));
+		const uint16_t hi = (uint16_t)(C ^ ((C ^ D) & p2));
+		const uint16_t q = (uint16_t)(lo ^ ((lo ^ hi) & p3));
+		g[j] = (uint16_t)(g[j] ^ ((g[j] ^ q) & m));
+	}
+}
+
+void ST_hspanOrArea(uint8_t *layer, const int16_t *pts, int crx, int cry, int crw, uint8_t colour8) {
 	ST_prioTouched();
-	if (y < 0 || y >= kSTLayerH) {
+	int y = cry + *pts++;
+	int x1 = *pts++;
+	if (x1 < 0) {
 		return;
 	}
-	if (x1 < 0) x1 = 0;
-	if (x2 >= kSTLayerW) x2 = kSTLayerW - 1;
-	if (x1 > x2) {
-		return;
-	}
-	pageTouch(layer, x1, x2 + 1, y, y + 1);
-	if (!ST_cutscenePalMode()) {
-		fillRow(layer, x1, x2 - x1 + 1, y, ST_getRemap()[colour8], (colour8 & 0x80) != 0);
-		return;
-	}
-	uint8_t orMap[16];
-	ST_getOrMap(colour8, orMap);
-	// The values the map moves, and the plane bits each move flips:
-	// all sixteen pixels of a group are translated together, a value
-	// at a time - the pixels holding value v are the AND of the four
-	// planes (or their complements, by v's bits), and those pixels'
-	// planes are XORed by v ^ orMap[v]. Values the map leaves alone
-	// cost nothing. Pixel by pixel this was ~127 cycles a pixel: a
-	// full-width shadow row 3.8ms, 2.2s of level 4's second scene.
-	uint8_t mv[16], flip[16];
-	int nMoved = 0;
-	for (int v = 0; v < 16; ++v) {
-		if (orMap[v] != v) {
-			mv[nMoved] = (uint8_t)v;
-			flip[nMoved] = (uint8_t)(orMap[v] ^ v);
-			++nMoved;
+	const bool pal = ST_cutscenePalMode();
+	// output plane j: for each value of planes 3 and 2 (k), the truth
+	// table over planes 1 and 0 (an index into orGroup's F)
+	uint8_t prog[16];
+	if (pal) {
+		uint8_t orMap[16];
+		ST_getOrMap(colour8, orMap);
+		for (int j = 0; j < 4; ++j) {
+			for (int k = 0; k < 4; ++k) {
+				uint8_t t = 0;
+				for (int u = 0; u < 4; ++u) {
+					t |= ((orMap[k * 4 + u] >> j) & 1) << u;
+				}
+				prog[j * 4 + k] = t;
+			}
 		}
 	}
-	uint16_t *dst = groupPtr(layer, x1, y);
-	uint16_t *prio = prioPtr(layer, x1, y);
-	for (int g = x1 >> 4; g <= (x2 >> 4); ++g) {
-		const uint16_t m = groupMask(g, x1, x2);
-		const uint16_t p0 = dst[0], p1 = dst[1], p2 = dst[2], p3 = dst[3];
-		uint16_t d0 = 0, d1 = 0, d2 = 0, d3 = 0;
-		for (int k = 0; k < nMoved; ++k) {
-			const int v = mv[k];
-			const uint16_t sel = (uint16_t)(((v & 1) ? p0 : ~p0) & ((v & 2) ? p1 : ~p1)
-			                    & ((v & 4) ? p2 : ~p2) & ((v & 8) ? p3 : ~p3));
-			const int f = flip[k];
-			if (f & 1) d0 |= sel;
-			if (f & 2) d1 |= sel;
-			if (f & 4) d2 |= sel;
-			if (f & 8) d3 |= sel;
+	const int yFirst = y;
+	int xMin = kSTLayerW, xMax = -1;
+	do {
+		int x2 = *pts++;
+		if (x2 > crw - 1) {
+			x2 = crw - 1;
 		}
-		dst[0] = (uint16_t)(p0 ^ (d0 & m));
-		dst[1] = (uint16_t)(p1 ^ (d1 & m));
-		dst[2] = (uint16_t)(p2 ^ (d2 & m));
-		dst[3] = (uint16_t)(p3 ^ (d3 & m));
-		*prio |= m;
-		dst += 4;
-		++prio;
+		int xa = crx + x1, xb = crx + x2;
+		if (x1 <= x2 && (unsigned)y < (unsigned)kSTLayerH) {
+			if (xa < 0) xa = 0;
+			if (xb >= kSTLayerW) xb = kSTLayerW - 1;
+			if (xa <= xb) {
+				if (xa < xMin) xMin = xa;
+				if (xb > xMax) xMax = xb;
+				if (!pal) {
+					fillRow(layer, xa, xb - xa + 1, y, ST_getRemap()[colour8], (colour8 & 0x80) != 0);
+				} else {
+					uint16_t *g = groupPtr(layer, xa, y);
+					for (int gi = xa >> 4; gi <= (xb >> 4); ++gi, g += 4) {
+						orGroup(g, groupMask(gi, xa, xb), prog);
+					}
+				}
+			}
+		}
+		++y;
+		x1 = *pts++;
+	} while (x1 >= 0);
+	if (xMax >= 0) {
+		pageTouch(layer, xMin, xMax + 1, yFirst, y);
 	}
 }
 

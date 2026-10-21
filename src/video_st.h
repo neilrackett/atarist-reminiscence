@@ -593,7 +593,7 @@ void ST_drawGlyph(uint8_t *layer, const uint8_t *src, int pitch, const uint8_t *
 
 void ST_fillRect(uint8_t *layer, int x, int y, int w, int h, uint8_t colour8);
 void ST_hspan(uint8_t *layer, int x1, int x2, int y, uint8_t colour8);
-void ST_hspanOr(uint8_t *layer, int x1, int x2, int y, uint8_t colour8);
+void ST_hspanOrArea(uint8_t *layer, const int16_t *pts, int crx, int cry, int crw, uint8_t colour8);
 void ST_drawPoint(uint8_t *layer, int x, int y, uint8_t colour8);
 void ST_clearLayer(uint8_t *layer, uint8_t colour8);
 
