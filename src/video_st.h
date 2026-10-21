@@ -306,8 +306,9 @@ void ST_fillArea(uint8_t *layer, const int16_t *pts, int crx, int cry,
 // played scene (false: no memory, drawn the ordinary way). A shape's
 // primitives go between ShapeBegin and ShapeEnd; segHit draws one
 // recorded under its key and returns 1, or returns 0 and the caller
-// records it - Record takes it relative to the shape's origin (null if
-// it cannot) and Draw fills it at an origin in the clip rect.
+// records it - RecordDraw takes it relative to the shape's origin,
+// keeps it and draws it as segHit would at an origin in the clip rect
+// (false if it cannot be kept: the caller draws it).
 bool ST_segCacheBegin();
 void ST_segCacheEnd();
 bool ST_segCacheOn();
@@ -332,10 +333,7 @@ void ST_shpFlush();
 void ST_shpColoursChanged();
 void ST_shpStats(uint32_t *drawn, uint32_t *baked);
 extern "C" int segHit(const void *key, int x, int y, int colour8);
-const void *ST_segFind(const void *key);
-const void *ST_segRecord(const void *key, const void *pts, int n);
-void ST_segDraw(uint8_t *layer, const void *entry, int x, int y, uint8_t colour8,
-		int crx, int cry, int crw, int crh);
+bool ST_segRecordDraw(const void *key, const void *pts, int n, int x, int y, uint8_t colour8);
 
 // fast path for opaque 3+-point non-flat polygons; returns false
 // when the caller must use the reference converter
@@ -568,9 +566,11 @@ enum { kSTResidentRamK = 3584 };
 enum { kSTRoomCacheSpareK = 500, kSTRoomSlotsKept = 3 };
 bool ST_screenModeAvailable(int mode);   // see kOverscanMinK
 
-// 8x8 glyph from a 16-byte-stride chunky source (AMIGA_decodeIcn
-// output): nonzero source pixels painted in colour8
-void ST_drawGlyph(uint8_t *layer, const uint8_t *src, int pitch, int x, int y, uint8_t colour8);
+// 8x8 glyph from a chunky source (the glyph cache's): nonzero source
+// pixels painted in colour8; rows are the same pixels as a byte a row,
+// the leftmost in bit 7
+void ST_drawGlyph(uint8_t *layer, const uint8_t *src, int pitch, const uint8_t *rows,
+	int x, int y, uint8_t colour8);
 
 void ST_fillRect(uint8_t *layer, int x, int y, int w, int h, uint8_t colour8);
 void ST_hspan(uint8_t *layer, int x1, int x2, int y, uint8_t colour8);

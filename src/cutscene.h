@@ -109,6 +109,9 @@ struct Cutscene {
 	uint16_t _stBakeQueue[16];  // shapes seen once, baked while waiting
 	uint8_t _stBakeHead, _stBakeTail;
 	int32_t _stBakeMs;        // the longest bake yet, in ms
+	uint8_t _stPrevOp;        // the opcode before the one running
+	uint16_t _stTextId;       // the last op_drawTextAtPos: string, place
+	int16_t _stTextX, _stTextY;
 	bool stShapeSprite(uint16_t shapeOffset, int16_t x, int16_t y, const uint8_t *shapeData,
 		uint16_t count, const uint8_t *verticesOffsetTable, const uint8_t *verticesDataTable);
 	const void *stBakeShape(uint16_t key, const uint8_t *shapeData, uint16_t count,

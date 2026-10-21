@@ -1182,18 +1182,12 @@ void Cutscene::drawShape(const uint8_t *data, int16_t x, int16_t y) {
 		_gfx.drawPoint(_primitiveColor, &pt);
 	} else {
 #ifdef ATARIST
-		// op_drawShape has already replayed any polygon this scene
-		// drew before (segHit), except in a shape sprite's bake; a new
-		// one is read relative to its origin, recorded, and drawn from
-		// the recording.
+		// op_drawShape (or a shape sprite's bake) has already replayed
+		// any polygon this scene drew before (segHit); a new one is
+		// read relative to its origin, recorded, and drawn from the
+		// recording.
 		const uint8_t *key = data - 1;
 		const bool cached = stSegCacheable();
-		if (cached && _stBakePage) {
-			if (const void *e = ST_segFind(key)) {
-				ST_segDraw(page, e, x, y, _primitiveColor, _gfx._crx, _gfx._cry, _gfx._crw, _gfx._crh);
-				return;
-			}
-		}
 		const int16_t ox = cached ? 0 : x;
 		const int16_t oy = cached ? 0 : y;
 #else
@@ -1224,8 +1218,7 @@ void Cutscene::drawShape(const uint8_t *data, int16_t x, int16_t y) {
 		}
 #ifdef ATARIST
 		if (cached) {
-			if (const void *e = ST_segRecord(key, _vertices, numVertices)) {
-				ST_segDraw(page, e, x, y, _primitiveColor, _gfx._crx, _gfx._cry, _gfx._crw, _gfx._crh);
+			if (ST_segRecordDraw(key, _vertices, numVertices, x, y, _primitiveColor)) {
 				return;
 			}
 			for (int i = 0; i < numVertices; ++i) {
@@ -1306,7 +1299,7 @@ void Cutscene::op_drawShape() {
 		_primitiveColor = 0xC0 + color;
 #ifdef ATARIST
 		// a polygon (not an ellipse or a point) drawn before in this
-		// scene: straight from the cache, see ST_segRecord
+		// scene: straight from the cache, see ST_segRecordDraw
 		if (segOn && !(_hasAlphaColor && _primitiveColor > 0xC7)
 		    && (uint8_t)(*primitiveVertices - 1) < 0x7F
 		    && segHit(primitiveVertices, x + dx, y + dy, _primitiveColor)) {
@@ -1987,6 +1980,18 @@ void Cutscene::op_drawTextAtPos() {
 				str = 0;
 			}
 #endif
+#ifdef ATARIST
+			// 'voyage' redraws its string 74 times in one frame, 15ms
+			// apart (below), with nothing in between: the same pixels on
+			// the same page each time, which on an 8MHz ST took 10ms a
+			// redraw on top of each wait. Only the first is drawn.
+			if (str && _stPrevOp == 13 && strId == _stTextId && x == _stTextX && y == _stTextY) {
+				str = 0;
+			}
+			_stTextId = strId;
+			_stTextX = x;
+			_stTextY = y;
+#endif
 			if (str) {
 				const uint8_t color = 0xD0 + (strId >> 0xC);
 				drawText(x, y, str, color, _backPage, kTextJustifyCenter);
@@ -2186,6 +2191,9 @@ void Cutscene::mainLoop(uint16_t num) {
 	_isConcavePolygonShape = false;
 	_drawMemoSetShapes = (_id == kCineMemo && g_options.restore_memo_cutscene);
 	_memoSetOffset = 0;
+#ifdef ATARIST
+	_stPrevOp = 0xFF;          // a pass (the prescan, the play) starts afresh
+#endif
 
 	while (!_stub->_pi.quit && !_interrupted && !_stop) {
 		if (_stPrescan && ++_stPrescanOps > 20000) {
@@ -2222,6 +2230,9 @@ void Cutscene::mainLoop(uint16_t num) {
 		}
 #endif
 		(this->*_opcodeTable[op])();
+#ifdef ATARIST
+		_stPrevOp = op;
+#endif
 		if (_stPrescan) {
 			continue;
 		}

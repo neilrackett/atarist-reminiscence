@@ -2294,27 +2294,28 @@ void Video::AMIGA_drawStringChar(uint8_t *dst, int pitch, int x, int y, const ui
 	enum { kGlyphs = 256 - 32 };
 	static const uint8_t *cachedFnt;
 	static uint8_t cache[kGlyphs][8 * 8];
+	static uint8_t rows[kGlyphs][8];      // the same, a byte a row (ST_drawGlyph)
 	static uint8_t cached[kGlyphs];
-	const int idx = chr - 32;
-	int stride = 16;
-	if (idx < kGlyphs) {
-		if (src != cachedFnt) {
-			memset(cached, 0, sizeof(cached));
-			cachedFnt = src;
-		}
-		if (!cached[idx]) {
-			AMIGA_decodeIcn(src, idx, _res->_scratchBuffer);
-			for (int row = 0; row < 8; ++row) {
-				memcpy(cache[idx] + row * 8, _res->_scratchBuffer + row * 16, 8);
-			}
-			cached[idx] = 1;
-		}
-		src = cache[idx];
-		stride = 8;
-	} else {
-		AMIGA_decodeIcn(src, idx, _res->_scratchBuffer);
-		src = _res->_scratchBuffer;
+	const int idx = chr - 32;            // chr is 32..255: always a slot
+	if (src != cachedFnt) {
+		memset(cached, 0, sizeof(cached));
+		cachedFnt = src;
 	}
+	if (!cached[idx]) {
+		AMIGA_decodeIcn(src, idx, _res->_scratchBuffer);
+		for (int row = 0; row < 8; ++row) {
+			const uint8_t *px = _res->_scratchBuffer + row * 16;
+			memcpy(cache[idx] + row * 8, px, 8);
+			uint8_t mb = 0;
+			for (int i = 0; i < 8; ++i) {
+				mb = (uint8_t)((mb << 1) | (px[i] != 0));
+			}
+			rows[idx][row] = mb;
+		}
+		cached[idx] = 1;
+	}
+	src = cache[idx];
+	const int stride = 8;
 #else
 	AMIGA_decodeIcn(src, chr - 32, _res->_scratchBuffer);
 	src = _res->_scratchBuffer;
@@ -2323,7 +2324,7 @@ void Video::AMIGA_drawStringChar(uint8_t *dst, int pitch, int x, int y, const ui
 	// pitch 256 = a planar layer / cutscene page; anything else is a
 	// plain chunky buffer (the 320-wide Amiga title screen)
 	if (pitch == GAMESCREEN_W) {
-		ST_drawGlyph(dst, src, stride, x, y, color);
+		ST_drawGlyph(dst, src, stride, rows[idx], x, y, color);
 		return;
 	}
 #else

@@ -1305,7 +1305,119 @@ static __attribute__((noinline)) void glyphTouch(const uint8_t *layer, int x, in
 	pageTouch(layer, x, x + 8, y, y + 8);
 }
 
-void ST_drawGlyph(uint8_t *layer, const uint8_t *src, int pitch, int x, int y, uint8_t colour8) {
+#ifdef __m68k__
+// glyphPlanar(g, rows, s, v): an 8x8 glyph's rows (a byte of pixels
+// each, the leftmost in bit 7) into the planes from group g, the
+// glyph s (x & 15) pixels into it, colour v. A variant per colour, so
+// a plane is one or.w or and.w a group: within one group when s <= 8,
+// else across two.
+extern "C" void glyphPlanar(uint16_t *g, const uint8_t *rows, long s, long v);
+__asm__(
+"    .text\n"
+"    .even\n"
+".macro GL_PLANES p0,p1,p2,p3\n"
+".irp p,\\p0,\\p1,\\p2,\\p3\n"
+"    .if \\p\n"
+"    or.w   %d0,(%a0)+\n"
+"    .else\n"
+"    and.w  %d1,(%a0)+\n"
+"    .endif\n"
+".endr\n"
+".endm\n"
+".macro GL_V p0,p1,p2,p3\n"
+"gl1_\\p0\\p1\\p2\\p3:\n"          /* one group: d2 = 8 - s */
+"1:  moveq  #0,%d0\n"
+"    move.b (%a1)+,%d0\n"
+"    beq.s  2f\n"
+"    lsl.w  %d2,%d0\n"
+"    move.w %d0,%d1\n"
+"    not.w  %d1\n"
+"    GL_PLANES \\p0,\\p1,\\p2,\\p3\n"
+"    lea    120(%a0),%a0\n"
+"    dbra   %d3,1b\n"
+"    rts\n"
+"2:  lea    128(%a0),%a0\n"
+"    dbra   %d3,1b\n"
+"    rts\n"
+"gl2_\\p0\\p1\\p2\\p3:\n"          /* two groups: d2 = 24 - s */
+"1:  moveq  #0,%d0\n"
+"    move.b (%a1)+,%d0\n"
+"    beq.s  2f\n"
+"    lsl.l  %d2,%d0\n"
+"    swap   %d0\n"
+"    move.w %d0,%d1\n"
+"    not.w  %d1\n"
+"    GL_PLANES \\p0,\\p1,\\p2,\\p3\n"
+"    swap   %d0\n"
+"    move.w %d0,%d1\n"
+"    not.w  %d1\n"
+"    GL_PLANES \\p0,\\p1,\\p2,\\p3\n"
+"    lea    112(%a0),%a0\n"
+"    dbra   %d3,1b\n"
+"    rts\n"
+"2:  lea    128(%a0),%a0\n"
+"    dbra   %d3,1b\n"
+"    rts\n"
+".endm\n"
+".macro GL_TAB p0,p1,p2,p3\n"
+"    .word gl1_\\p0\\p1\\p2\\p3-gl_tab, gl2_\\p0\\p1\\p2\\p3-gl_tab\n"
+".endm\n"
+"_glyphPlanar:\n"
+"    movem.l %d2-%d3/%a2,-(%sp)\n"
+"    movem.l 16(%sp),%a0-%a1\n"        /* g, rows */
+"    move.l 24(%sp),%d2\n"             /* s */
+"    move.l 28(%sp),%d1\n"             /* v */
+"    moveq  #7,%d3\n"
+"    add.w  %d1,%d1\n"
+"    add.w  %d1,%d1\n"
+"    lea    gl_tab(%pc),%a2\n"
+"    neg.w  %d2\n"
+"    addq.w #8,%d2\n"                  /* 8 - s */
+"    bmi.s  1f\n"
+"    move.w (%a2,%d1.w),%d1\n"
+"    bra.s  2f\n"
+"1:  add.w  #16,%d2\n"                 /* 24 - s */
+"    move.w 2(%a2,%d1.w),%d1\n"
+"2:  jsr    (%a2,%d1.w)\n"
+"    movem.l (%sp)+,%d2-%d3/%a2\n"
+"    rts\n"
+".irp p3,0,1\n"
+".irp p2,0,1\n"
+".irp p1,0,1\n"
+".irp p0,0,1\n"
+"    GL_V \\p0,\\p1,\\p2,\\p3\n"
+".endr\n"
+".endr\n"
+".endr\n"
+".endr\n"
+"gl_tab:\n"
+".irp p3,0,1\n"
+".irp p2,0,1\n"
+".irp p1,0,1\n"
+".irp p0,0,1\n"
+"    GL_TAB \\p0,\\p1,\\p2,\\p3\n"
+".endr\n"
+".endr\n"
+".endr\n"
+".endr\n"
+);
+#else
+// C twin of glyphPlanar
+static void glyphPlanar(uint16_t *g, const uint8_t *rows, long s, long v) {
+	for (int r = 0; r < 8; ++r, g += kSTRowBytes / 2) {
+		const uint32_t m32 = (uint32_t)rows[r] << (24 - s);
+		for (int k = 0; k < 2; ++k) {
+			const uint16_t m = (uint16_t)(k ? m32 : m32 >> 16);
+			for (int p = 0; p < 4; ++p) {
+				uint16_t &w = g[k * 4 + p];
+				w = (v & (1 << p)) ? (uint16_t)(w | m) : (uint16_t)(w & ~m);
+			}
+		}
+	}
+}
+#endif
+
+void ST_drawGlyph(uint8_t *layer, const uint8_t *src, int pitch, const uint8_t *rows, int x, int y, uint8_t colour8) {
 	const uint8_t v = ST_getRemap()[colour8];
 	const bool setPrio = (colour8 & 0x80) != 0;
 	if (ST_dlRecording(layer) && ST_dlAddGlyph(src, pitch, x, y, v, setPrio)) {
@@ -1321,47 +1433,21 @@ void ST_drawGlyph(uint8_t *layer, const uint8_t *src, int pitch, int x, int y, u
 	// the planes: what STDL_BlitIndexed8 does with it (0 transparent,
 	// anything else the colour, the priority bits marked under it), a
 	// row's eight pixels as one shifted mask over the one or two
-	// groups they fall in. The general chunky blit cost ~2ms a glyph
-	// on an 8MHz ST, and a cutscene caption is 30 of them, twice.
+	// groups they fall in, from the masks the glyph cache keeps. The
+	// general chunky blit cost ~2ms a glyph on an 8MHz ST; this in C,
+	// with the masks made per draw, 1.2ms - and level 4's opening
+	// redraws a 32-character caption every frame. A cutscene page's
+	// priority plane is not read (see prioMode), so it is left alone.
 	glyphTouch(layer, x, y);
-	if (setPrio) {
+	glyphPlanar(groupPtr(layer, x, y), rows, x & 15, v & 15);
+	if (setPrio && !ST_cutscenePalMode()) {
 		ST_prioTouchedRect(x, y, 8, 8);
-	}
-	const uint16_t f0 = (v & 1) ? 0xFFFF : 0, f1 = (v & 2) ? 0xFFFF : 0;
-	const uint16_t f2 = (v & 4) ? 0xFFFF : 0, f3 = (v & 8) ? 0xFFFF : 0;
-	const int shift = 24 - (x & 15);
-	uint16_t *g = groupPtr(layer, x, y);
-	uint16_t *pr = prioPtr(layer, x, y);
-	for (int r = 0; r < 8; ++r, src += pitch, g += kSTRowBytes / 2, pr += kSTPrioRowBytes / 2) {
-		unsigned mb = 0;
-		for (int i = 0; i < 8; ++i) {
-			mb = (mb << 1) | (src[i] != 0);
-		}
-		if (mb == 0) {
-			continue;
-		}
-		const uint32_t m32 = (uint32_t)mb << shift;
-		uint16_t m = (uint16_t)(m32 >> 16);
-		if (m) {
-			const uint16_t keep = (uint16_t)~m;
-			g[0] = (uint16_t)((g[0] & keep) | (f0 & m));
-			g[1] = (uint16_t)((g[1] & keep) | (f1 & m));
-			g[2] = (uint16_t)((g[2] & keep) | (f2 & m));
-			g[3] = (uint16_t)((g[3] & keep) | (f3 & m));
-			if (setPrio) {
-				pr[0] |= m;
-			}
-		}
-		m = (uint16_t)m32;
-		if (m) {
-			const uint16_t keep = (uint16_t)~m;
-			g[4] = (uint16_t)((g[4] & keep) | (f0 & m));
-			g[5] = (uint16_t)((g[5] & keep) | (f1 & m));
-			g[6] = (uint16_t)((g[6] & keep) | (f2 & m));
-			g[7] = (uint16_t)((g[7] & keep) | (f3 & m));
-			if (setPrio) {
-				pr[1] |= m;
-			}
+		const int shift = 24 - (x & 15);
+		uint16_t *pr = prioPtr(layer, x, y);
+		for (int r = 0; r < 8; ++r, pr += kSTPrioRowBytes / 2) {
+			const uint32_t m32 = (uint32_t)rows[r] << shift;
+			pr[0] |= (uint16_t)(m32 >> 16);
+			pr[1] |= (uint16_t)m32;
 		}
 	}
 }
@@ -1909,7 +1995,7 @@ __asm__(
 "    lea    128(%a5),%a5\n"
 "    dbra   %d5,rs3_row\n"
 "    rts\n"
-/* The record core (mode 4, see ST_segRecord): a page core's calling
+/* The record core (mode 4, see segRecord): a page core's calling
  * convention, but instead of filling its rows it appends each row's
  * span - the two edges' x as the row header sorts them - at the
  * state's rec pointer (offset 88), stepping the edges as a fill
@@ -1930,31 +2016,13 @@ __asm__(
 "    dbra   %d5,1b\n"
 "    move.l %a1,88(%a0)\n"
 "    rts\n"
-/* Replay a recorded polygon's spans (ST_segDraw). ReplayState past
- * RasterState: span 44 (the first row to fill), rows 48, xo 52 (the
- * origin's layer x, clip origin included), in the low words. */
-"_segReplay:\n"                      /* (state) */
-"    movem.l %d2-%d7/%a2-%a6,-(%sp)\n"
-"    move.l 48(%sp),%a0\n"
-"    move.l 16(%a0),%a5\n"            /* row */
-"    move.l 20(%a0),%a6\n"            /* prow */
-"    move.l 24(%a0),%d0\n"            /* f01 */
-"    move.l 28(%a0),%d1\n"            /* f23 */
-"    move.l 36(%a0),%d6\n"            /* lim */
-"    move.l 44(%a0),%a3\n"            /* span */
-"    move.w 50(%a0),%d7\n"            /* rows */
-"    move.w 54(%a0),%a4\n"            /* xo */
-"    move.w 42(%a0),%d2\n"            /* fn */
-"    bsr    sp_go\n"
-"    movem.l (%sp)+,%d2-%d7/%a2-%a6\n"
-"    rts\n"
 /* The span cores: a recorded polygon is its rows' spans (rs4_run),
  * so a replay reads each row's two x where the edge cores step two
  * 16.16 edges, and there are no segments to set up - the per-segment
  * set-up cost a third as much as the rows of a cached polygon. sp_go
- * fills d7 rows (1..) from the spans at a3 for fn in d2 (colour |
- * mode << 4): d0/d1 fill, d6 lim, a4 xo, a5 row, a6 prow (a bake),
- * a0 the state (pv at 32). Page modes 2 and 3: d5 the dbra count and
+ * (segHit's) fills d7 rows (1..) from the spans at a3 for fn in d2
+ * (colour | mode << 4): d0/d1 fill, d6 lim, a4 xo, a5 row, a6 prow
+ * (a bake), a0 the state (pv at 32). Page modes 2 and 3: d5 the dbra count and
  * a6 the header, which each variant's tail loops back to (sp_mtab,
  * SP_ROW). Mode 1, a shape sprite's bake, marks coverage in the
  * priority plane like rs_run, with its row count in d7's high word
@@ -2059,8 +2127,8 @@ __asm__(
 "    add.w  %a4,%d3\n"
 "    RS_PAGE_BODY 26\n"
 /* segHit(key, x, y, colour8): a cached polygon drawn start to finish -
- * the lookup, ST_segDraw's clipping, and the spans - for op_drawShape's
- * loop, where the C path's setup cost as much as the fill. 0 when the
+ * the lookup, the clipping, and the spans - for op_drawShape's loop,
+ * where a C path's setup cost as much as the fill. 0 when the
  * key is not cached (the caller records it). The shape's box grows in
  * g_segCtx and is applied once per shape (ST_segShapeEnd). SegCtx
  * offsets past RasterState: layer 44, remap 48, fill01 52, fill23 56,
@@ -2486,14 +2554,6 @@ struct PolyState : RasterState {
 	uint8_t *rec;                // record mode: where the next row's span goes
 };
 
-// segReplay's state: a recorded polygon's spans to fill and where (see
-// ST_segDraw)
-struct ReplayState : RasterState {
-	const int16_t *span;         // the first row to fill: xl, xr from the origin
-	long rows;                   // rows to fill
-	long xo;                     // the origin's layer x, clip origin included
-};
-
 struct SegEntry;
 
 // segHit's context (offsets in the asm): the page and clip of the
@@ -2512,11 +2572,10 @@ struct SegCtx : RasterState {
 extern "C" SegCtx g_segCtx;
 SegCtx g_segCtx;
 // the asm addresses these fields by number: the sizes pin the layout
-typedef char SegCtxLayout[(sizeof(ReplayState) == 56 && sizeof(SegCtx) == 92) ? 1 : -1];
+typedef char SegCtxLayout[(sizeof(SegCtx) == 92) ? 1 : -1];
 
 extern "C" void rasterSeg(RasterState *st, long count);
 extern "C" void polyWalk(PolyState *st);
-extern "C" void segReplay(ReplayState *st);
 extern "C" void shpBlit(const void *data, uint8_t *dst, long rows);
 
 extern "C" void fillRowAsm(uint16_t *row, uint16_t *prow, long x, long x1,
@@ -2917,18 +2976,6 @@ bool ST_segCacheOn() {
 	return g_segArena != 0 && ST_cutscenePalMode() && !(g_options.ab & kAbCutNoSegCache);
 }
 
-// the C route to a recorded polygon, for draws segHit does not see (a
-// shape sprite's bake)
-const void *ST_segFind(const void *key) {
-	for (SegEntry *e = g_segHash[segBucket(key)]; e; e = e->next) {
-		if (e->key == key) {
-			++g_segCtx.hits;
-			return e;
-		}
-	}
-	return 0;
-}
-
 void ST_segCacheStats(uint32_t *hits, uint32_t *misses) {
 	*hits = g_segCtx.hits;
 	*misses = g_segMisses;
@@ -3235,7 +3282,7 @@ void ST_segShapeEnd() {
 // Record a polygon given relative to its shape's origin; the three
 // kinds ST_drawPolygonFast draws, the same way. Null when it is not
 // one of them, or cannot fit.
-const void *ST_segRecord(const void *key, const void *ptsv, int n) {
+static const void *segRecord(const void *key, const void *ptsv, int n) {
 	const Point *pts = (const Point *)ptsv;
 	if (!g_segArena || n < 2 || n > (int)(sizeof(g_segPts) / sizeof(g_segPts[0]))) {
 		return 0;
@@ -3287,10 +3334,16 @@ const void *ST_segRecord(const void *key, const void *ptsv, int n) {
 			g_segPts[i].x = pts[i].x;
 			g_segPts[i].y = pts[i].y - ytop;
 		}
+		// what the walk reads, set one by one: a memset of the state
+		// was a 740-cycle library call on every new polygon
 		PolyState st;
-		memset(&st, 0, sizeof(st));
-		st.fn = 2 << 4;
 		st.fa = st.fb = (int32_t)pts[imin].x << 16;
+		st.sa = st.sb = 0;
+		st.row = st.prow = 0;
+		st.f01 = st.f23 = st.pv = st.lim = 0;
+		st.fn = 2 << 4;
+		st.ya = st.yb = st.y = 0;
+		st.crx = 0;
 		st.pts = g_segPts;
 		st.n = n;
 		st.imax = imax;
@@ -3312,40 +3365,17 @@ const void *ST_segRecord(const void *key, const void *ptsv, int n) {
 	return e;
 }
 
-// Draw a recorded polygon with its origin at (x, y) in the clip rect:
-// ST_drawPolygonFast's clipping and box, then the fill cores.
-void ST_segDraw(uint8_t *layer, const void *entry, int x, int y, uint8_t colour8,
-		int crx, int cry, int crw, int crh) {
-	const SegEntry *e = (const SegEntry *)entry;
-	const int xlo = e->xlo + x, xhi = e->xhi + x;
-	const int ytop = e->ytop + y, ybot = ytop + e->rows - 1;
-	const int xmaxv = (crw < kSTLayerW - crx ? crw : kSTLayerW - crx) - 1;
-	pageTouch(layer, crx + (xlo < 1 ? 0 : xlo - 1), crx + (xhi >= xmaxv ? xmaxv : xhi + 1) + 1,
-		cry + (ytop < 0 ? 0 : ytop), cry + (ybot > crh - 1 ? crh - 1 : ybot) + 1);
-	int ylast = crh - 1;
-	if (ylast > kSTLayerH - 1 - cry) {
-		ylast = kSTLayerH - 1 - cry;
+// A polygon new to the cache, relative to its shape's origin: kept, and
+// drawn with its origin at (x, y) in the clip rect as every later
+// sighting will be (segHit), within the shape's box. The C route it
+// replaced set up a replay of its own, 2.5K cycles a new polygon.
+bool ST_segRecordDraw(const void *key, const void *pts, int n, int x, int y, uint8_t colour8) {
+	if (!segRecord(key, pts, n)) {
+		return false;
 	}
-	if (ylast > ybot) {
-		ylast = ybot;
-	}
-	const int first = (ytop < 0) ? 0 : ytop;
-	if (first > ylast) {
-		return;
-	}
-	const uint8_t v = ST_getRemap()[colour8] & 15;
-	ReplayState st;
-	st.f01 = kFill01[v];
-	st.f23 = kFill23[v];
-	st.pv = (colour8 & 0x80) ? 0xFFFFul : 0ul;
-	st.lim = ((unsigned long)crx << 16) | (unsigned)(crx + xmaxv);
-	st.fn = v | (prioMode(colour8, xlo >= 0 && xhi <= xmaxv) << 4);
-	st.row = (uint16_t *)(layer + (cry + first) * kSTRowBytes);
-	st.prow = (uint16_t *)(layer + kSTPlaneBytes + (cry + first) * kSTPrioRowBytes);
-	st.span = (const int16_t *)(e + 1) + 2 * (first - ytop);
-	st.rows = ylast - first + 1;
-	st.xo = x + crx;
-	segReplay(&st);
+	segHit(key, x, y, colour8);
+	--g_segCtx.hits;            // a miss, counted as one (segRecord)
+	return true;
 }
 
 // Row fill with the colour already remapped: fillArea resolves the
