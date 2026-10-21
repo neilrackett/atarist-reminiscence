@@ -67,8 +67,8 @@ to read (an ELF from elsewhere) into `tmp/` first.
 **STDL** is the `stdl/` submodule, a library with its own repository,
 releases and `AGENTS.md`; the Makefile builds `stdl/libstdl.a` from it.
 Never change it from here: a library change is made there and released,
-and the port moves to it in a commit of its own ("STDL v1.15.1: ...",
-currently v1.15.1), measured like any other change.
+and the port moves to it in a commit of its own ("STDL v1.15.2: ...",
+currently v1.15.2), measured like any other change.
 
 The desktop SDL build shares most of the engine and CI does not build it,
 so build it by hand after touching shared files: the sources in
