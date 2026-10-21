@@ -291,6 +291,37 @@ bool ModPlayer_impl::load(File *f) {
 			}
 		}
 	}
+#ifdef ATARIST
+	// A short loop written out again, end to end, to a kilobyte or
+	// more. STDL's mixer pays ~800 cycles each time a voice reaches
+	// the end of a stretch - a loop of 8 to 300 bytes ends several
+	// times in each 128-frame block - and that overhead was a fifth of
+	// what the music cost an STE during a cutscene (the mixer took
+	// ~40% of the machine). A loop of k copies plays the same samples:
+	// a voice plays up to the loop's end and then loops it (see
+	// ST_playPaulaVoice), so the copies only move the ends further
+	// apart. A sample there is no memory for keeps its short loop.
+	enum { kStMinLoop = 1024 };
+	for (int s = 0; s < NUM_SAMPLES; ++s) {
+		SampleInfo *si = &_modInfo.samples[s];
+		if (si->data && si->repeatLen > 2 && si->repeatLen < kStMinLoop) {
+			const uint32_t loopLen = si->repeatLen;
+			const uint32_t copies = (kStMinLoop + loopLen - 1) / loopLen;
+			const uint32_t newLen = si->repeatPos + copies * loopLen;
+			int8_t *data = (int8_t *)malloc(newLen);
+			if (data) {
+				memcpy(data, si->data, si->repeatPos + loopLen);
+				for (uint32_t c = 1; c < copies; ++c) {
+					memcpy(data + si->repeatPos + c * loopLen, si->data + si->repeatPos, loopLen);
+				}
+				free(si->data);
+				si->data = data;
+				si->len = (uint16_t)newLen;
+				si->repeatLen = (uint16_t)(copies * loopLen);
+			}
+		}
+	}
+#endif
 
 	_currentPatternOrder = 0;
 	_currentPatternPos = 0;
