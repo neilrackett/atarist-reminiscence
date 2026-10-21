@@ -14,6 +14,7 @@ extern "C" {
 #include <mint/osbind.h>
 #include "util.h"
 #include "video_st.h"
+#include "displaylist_st.h"
 
 // Drawing from chunky costs a per-pixel gather every frame: the source
 // byte is mapped, then scattered a bit at a time into four plane words.
@@ -1005,10 +1006,6 @@ static void drawChunky(uint8_t *layer, int kind, const uint8_t *data, int w, int
 	ST_drawSprite(layer, src, pitch, x, y, w, h, map16, flags, setPrio);
 }
 
-uint8_t ST_sprToken(uint8_t colMask) {
-	return palToken(colMask);
-}
-
 // the draw itself, apart from the front below: most calls only write
 // an entry in the display list, and this one's registers cost them
 // a dozen saves and restores each
@@ -1035,12 +1032,40 @@ static __attribute__((noinline)) void sprDrawNow(uint8_t *layer, int kind, const
 	blitRec(layer, r, x, y, (flags & kSTSpriteRespectPrio) != 0, setPrio);
 }
 
+// The sprite written into the display list rather than drawn: false when
+// the list took it no further (full, and drawn there and then), so the
+// caller draws it. The tokens are fixed at the frame's first entry: the
+// logic, which runs first, may move the colours.
+static inline __attribute__((always_inline)) bool dlAddSprite(int kind, const uint8_t *data, uint32_t ident, int w, int h, int x, int y,
+                    uint8_t colMask, unsigned flags, bool setPrio) {
+	DlEntry *e = dlNewEntry(x, y, w, h);
+	if (!e) {
+		return g_stDlRec;
+	}
+	e->type = 0;
+	e->kind = (uint8_t)kind;
+	e->data = data;
+	e->ident = ident;
+	e->w = (uint8_t)w;
+	e->h = (uint8_t)h;
+	e->colMask = colMask;
+	if (!g_dlTokOpen) {
+		g_dlTokOpen = true;
+		ST_sprTokensBegin();
+	}
+	e->token = palToken(colMask);
+	e->flags = (uint8_t)flags;
+	e->setPrio = setPrio ? 1 : 0;
+	e->hash = dlEntryHash(e);
+	return true;
+}
+
 void ST_sprDraw(uint8_t *layer, int kind, const uint8_t *data, uint32_t ident, int w, int h,
                 int x, int y, uint8_t colMask, unsigned flags, bool setPrio) {
 	if (w <= 0 || h <= 0 || x >= kSTLayerW || y >= kSTLayerH || x + w <= 0 || y + h <= 0) {
 		return;
 	}
-	if (ST_dlRecording(layer) && ST_dlAddSprite(kind, data, ident, w, h, x, y, colMask, flags, setPrio)) {
+	if (ST_dlRecording(layer) && dlAddSprite(kind, data, ident, w, h, x, y, colMask, flags, setPrio)) {
 		return;
 	}
 	sprDrawNow(layer, kind, data, ident, w, h, x, y, colMask, flags, setPrio);

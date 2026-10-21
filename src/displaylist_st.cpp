@@ -13,6 +13,7 @@ extern "C" {
 }
 #include "util.h"
 #include "video_st.h"
+#include "displaylist_st.h"
 
 // The engine draws every object in view on every frame: the restore
 // puts the room back under last frame's sprites, and everything is
@@ -39,37 +40,13 @@ extern "C" {
 // layer, draws on the front layer outside the list, or refreshes the
 // whole screen tells this module, and the next frame redraws that.
 
-// A frame draws a few dozen things at most - sprites, an icon or two, a
-// line of text; one that draws more is redrawn whole
-enum { kDlMax = 160 };
-
-struct DlEntry {
-	const uint8_t *data;        // sprite bytes, or the glyph's pixels
-	uint32_t ident;             // sprite identity, or the glyph's pitch
-	int16_t x, y;
-	uint16_t hash;              // the fields below folded, compared first
-	uint16_t bmask;             // block columns covered
-	uint8_t by0, by1;           // block rows covered
-	uint8_t type;               // 0 sprite, 1 glyph
-	uint8_t kind;               // sprite kind
-	uint8_t w, h;
-	uint8_t colMask;            // sprite colour bank
-	uint8_t token;              // sprite palette token, or the glyph's hardware colour
-	uint8_t flags;              // kSTSprite*
-	uint8_t setPrio;
-	uint8_t matched;            // has a twin in the other frame
-	uint8_t in;                 // redrawn this frame
-	uint8_t pad[4];             // 32 bytes: an index is a shift, not a multiply
-};
-typedef char DlEntrySizeCheck[(sizeof(DlEntry) == 32) ? 1 : -1];
-
 static DlEntry g_dl[2][kDlMax];
 static int g_dlN[2];
 static int g_cur;                // the list being written
-static DlEntry *g_next;          // where its next entry goes
-static DlEntry *g_end;
+DlEntry *g_dlNext;
+DlEntry *g_dlEnd;
 bool g_stDlRec;                      // writing it (ST_dlRecording)
-static bool g_tokOpen;           // the palette tokens are fixed for the frame's draws
+bool g_dlTokOpen;
 uint8_t *g_stDlFront;
 static bool g_prevValid;         // the other list is what the front layer shows
 static bool g_flushed;           // drawn early this frame; the rest went straight to the layer
@@ -84,20 +61,20 @@ void ST_dlSetFlush(void (*fn)(void *), void *ctx) {
 
 void ST_dlBegin(uint8_t *front) {
 	g_stDlFront = front;
-	g_next = g_dl[g_cur];
-	g_end = g_next + kDlMax;
+	g_dlNext = g_dl[g_cur];
+	g_dlEnd = g_dlNext + kDlMax;
 	g_flushed = false;
 	g_stDlRec = true;
-	g_tokOpen = false;               // fixed at the first draw: the logic runs first, and may move the colours
+	g_dlTokOpen = false;               // fixed at the first draw: the logic runs first, and may move the colours
 }
 
 // the end of the frame's fixed palette tokens: false if the colours
 // moved under its draws
 static bool closeTokens() {
-	if (!g_tokOpen) {
+	if (!g_dlTokOpen) {
 		return true;
 	}
-	g_tokOpen = false;
+	g_dlTokOpen = false;
 	return ST_sprTokensEnd();
 }
 
@@ -128,86 +105,26 @@ void ST_dlFlushNow() {
 	if (g_flushFn) {
 		g_flushFn(g_flushCtx);       // the room back on the front layer
 	}
-	for (const DlEntry *e = g_dl[g_cur]; e < g_next; ++e) {
+	for (const DlEntry *e = g_dl[g_cur]; e < g_dlNext; ++e) {
 		drawEntry(e);
 	}
+}
+
+DlEntry *ST_dlFull() {
+	if (!g_warned) {
+		g_warned = true;
+		warning("Display list full: a frame drew more than %d things", (int)kDlMax);
+	}
+	ST_dlFlushNow();
+	return 0;
 }
 
 bool ST_dlFlushed() {
 	return g_flushed;
 }
 
-// A new entry for something drawn over [x, x+w) x [y, y+h), clipped to
-// the layer: 0 when none of it is on the layer, or when there is no
-// room left - then the list is drawn there and then (ST_dlFlushNow), and
-// g_stDlRec is false: whoever asked draws it directly.
-static inline __attribute__((always_inline)) DlEntry *newEntry(int x, int y, int w, int h) {
-	int x1 = x + w, y1 = y + h;
-	int cx = x, cy = y;
-	if (cx < 0) {
-		cx = 0;
-	}
-	if (cy < 0) {
-		cy = 0;
-	}
-	if (x1 > kSTLayerW) {
-		x1 = kSTLayerW;
-	}
-	if (y1 > kSTLayerH) {
-		y1 = kSTLayerH;
-	}
-	if (x1 <= cx || y1 <= cy) {
-		return 0;
-	}
-	if (g_next == g_end) {
-		if (!g_warned) {
-			g_warned = true;
-			warning("Display list full: a frame drew more than %d things", (int)kDlMax);
-		}
-		ST_dlFlushNow();
-		return 0;
-	}
-	DlEntry *e = g_next++;
-	e->by0 = (uint8_t)(cy >> 3);
-	e->by1 = (uint8_t)((y1 - 1) >> 3);
-	e->bmask = (uint16_t)(kSTColsFrom[cx >> 4] & kSTColsTo[(x1 - 1) >> 4]);
-	e->x = (int16_t)x;
-	e->y = (int16_t)y;
-	return e;
-}
-
-static inline uint16_t entryHash(const DlEntry *e) {
-	const uint32_t d = (uint32_t)e->data;
-	return (uint16_t)((uint16_t)(d >> 2) ^ (uint16_t)(d >> 13) ^ (uint16_t)e->x ^ (uint16_t)(e->y << 7)
-	                  ^ (uint16_t)(e->token << 3) ^ e->flags ^ (uint16_t)e->ident);
-}
-
-bool ST_dlAddSprite(int kind, const uint8_t *data, uint32_t ident, int w, int h, int x, int y,
-                    uint8_t colMask, unsigned flags, bool setPrio) {
-	DlEntry *e = newEntry(x, y, w, h);  // (ST_sprDraw has turned away an empty size)
-	if (!e) {
-		return g_stDlRec;
-	}
-	e->type = 0;
-	e->kind = (uint8_t)kind;
-	e->data = data;
-	e->ident = ident;
-	e->w = (uint8_t)w;
-	e->h = (uint8_t)h;
-	e->colMask = colMask;
-	if (!g_tokOpen) {
-		g_tokOpen = true;
-		ST_sprTokensBegin();
-	}
-	e->token = ST_sprToken(colMask);
-	e->flags = (uint8_t)flags;
-	e->setPrio = setPrio ? 1 : 0;
-	e->hash = entryHash(e);
-	return true;
-}
-
 bool ST_dlAddGlyph(const uint8_t *src, int pitch, int x, int y, uint8_t v, bool setPrio) {
-	DlEntry *e = newEntry(x, y, 8, 8);
+	DlEntry *e = dlNewEntry(x, y, 8, 8);
 	if (!e) {
 		return g_stDlRec;
 	}
@@ -221,7 +138,7 @@ bool ST_dlAddGlyph(const uint8_t *src, int pitch, int x, int y, uint8_t v, bool 
 	e->token = v;
 	e->flags = 0;
 	e->setPrio = setPrio ? 1 : 0;
-	e->hash = entryHash(e);
+	e->hash = dlEntryHash(e);
 	return true;
 }
 
@@ -256,7 +173,7 @@ void ST_dlEnd(uint16_t *R, bool full) {
 		full = true;                 // the colours moved under the frame's draws
 	}
 	DlEntry *C = g_dl[g_cur];
-	g_dlN[g_cur] = (int)(g_next - C);
+	g_dlN[g_cur] = (int)(g_dlNext - C);
 	const int nc = g_dlN[g_cur];
 	DlEntry *P = g_dl[g_cur ^ 1];
 	const int np = g_dlN[g_cur ^ 1];

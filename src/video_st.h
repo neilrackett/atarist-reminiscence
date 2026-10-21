@@ -397,10 +397,8 @@ void ST_roomCacheRelease();
 void ST_releaseRamCaches();
 // the layer as an STDL surface; masked: with the priority plane as its mask
 STDL_Surface *ST_layerView(uint8_t *layer, bool masked);
-// the palette token a sprite in this colour bank would be baked with;
-// between Begin and End the remap is taken as fixed, and End says
-// whether it really was
-uint8_t ST_sprToken(uint8_t colMask);
+// the palette tokens sprites are baked with: between Begin and End the
+// remap is taken as fixed, and End says whether it really was
 void ST_sprTokensBegin();
 bool ST_sprTokensEnd();
 
@@ -428,8 +426,6 @@ extern uint8_t *g_stDlFront;
 inline bool ST_dlRecording(const uint8_t *layer) {
 	return g_stDlRec && layer == g_stDlFront;
 }
-bool ST_dlAddSprite(int kind, const uint8_t *data, uint32_t ident, int w, int h, int x, int y,
-                    uint8_t colMask, unsigned flags, bool setPrio);
 bool ST_dlAddGlyph(const uint8_t *src, int pitch, int x, int y, uint8_t v, bool setPrio);
 void ST_dlFlushNow();
 bool ST_dlFlushed();
