@@ -141,20 +141,7 @@ static void initClz8() {
 // to the frame, so every iteration of these was three memory
 // read-modify-writes before it moved a byte.
 static void restorePlanes(uint8_t *dst, const uint8_t *src, int groups, int lines) {
-	if (ST_copyGroupRows(dst, kSTRowBytes, src, kSTRowBytes, groups, lines)) {
-		return;
-	}
-	uint32_t *d = (uint32_t *)dst;
-	const uint32_t *s = (const uint32_t *)src;
-	const int skip = (kSTRowBytes >> 2) - groups * 2;
-	for (int line = lines; --line >= 0; ) {
-		for (int n = groups; --n >= 0; ) {
-			*d++ = *s++;
-			*d++ = *s++;
-		}
-		s += skip;
-		d += skip;
-	}
+	ST_copyGroupRows(dst, kSTRowBytes, src, kSTRowBytes, groups, lines);
 }
 
 // the priority plane, two bytes a group: long moves where a pair of

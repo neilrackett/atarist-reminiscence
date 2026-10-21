@@ -346,5 +346,8 @@ tools/cutbench/prof.sh OUT MACHINE SCENE       # a Hatari profile; prof.py OUT r
 - **`verify.sh`** plays the intro, every level opening, a mid-level
   scene and the credits with `replay_hash=true`. Every drawn frame's
   pixels go into `CUTHASH.BIN` and the colours it was shown in into
-  `CUTPAL.BIN`, and it compares both with run `REF`, by default `cref`,
-  made by the first run. A change has to match every frame.
+  `CUTPAL.BIN`, and it compares both with run `REF`, by default `cref`.
+  A change has to match every frame. `cref`'s pixels are r30's own:
+  r30 built with nothing added but `cutscene=` and this hash. Its
+  colours are those of the first harness build's old-palette run
+  (`ab=0x20000`). A run with no `REF` yet becomes one.

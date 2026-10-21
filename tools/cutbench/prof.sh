@@ -3,12 +3,14 @@
 #
 # Plays SCENE as tools/cutbench/run.sh does (every frame drawn, no
 # music unless CFG says otherwise), with the profiler on from the
-# scene's start line in the log to its first CUTSUM line, and saves
-# the profile to OUT. tools/cutbench/prof.py OUT reads it. Symbols come
-# from build/flashbak.elf, so build first and keep the binary that
-# matches it in dist/.
+# scene's start line in the log to its first per-frame line (written
+# once the scene's first part is over), and saves the profile to OUT.
+# tools/cutbench/prof.py OUT reads it. Symbols come from
+# build/flashbak.elf, so it profiles dist/FLASHBAK.TOS, the binary
+# built with them: build first.
 #
 #   CFG   extra RS.CFG lines, ;-separated
+#   MEM   Hatari --memsize: 4 (default) or 2560 for a 2.5MB machine
 set -u
 OUT=$(cd "$(dirname "$1")" && pwd)/$(basename "$1"); M=$2; S=$3
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -30,7 +32,7 @@ printf 'skip_intro=true\nlogging=true\nframe_skip=false\nmusic=false\ncutscene=%
 # over before the fifo has been read.
 W="waitfile CUT.[0-9A-F]*.f0: $D/RS.LOG"
 FF=off TOS="tmp/tos/TOS 2.06 - UK - Original.IMG" \
-EXTRA="--cpu-exact on --compatible on --memsize 4" MACHINE=$M \
+EXTRA="--cpu-exact on --compatible on --memsize ${MEM:-4}" MACHINE=$M \
 	stdl/tests/hatari/run.sh "cbprof_${M}_$S" "$D"/FLASHBAK.TOS 8 \
 	"waitfile REminiscence $D/RS.LOG; fifo hatari-debug symbols $SYM 0x149f2 0x149f2 0x149f2; waitfile Cutscene $D/RS.LOG; fifo hatari-debug profile on; $W; $W; $W; fifo hatari-debug profile save $OUT; sleep 3" >/dev/null 2>&1
 grep -h "CUTSUM" "$D"/RS.LOG | head -1

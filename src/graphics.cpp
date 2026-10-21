@@ -331,7 +331,7 @@ void Graphics::fillArea(uint8_t color, bool hasAlpha) {
 	int16_t x1 = pts[1];
 	if (x1 >= 0) {
 		const bool orMode = (hasAlpha && color > 0xC7);
-		if (orMode) {
+		if (orMode && ST_cutscenePalMode()) {
 			ST_hspanOrArea(_layer, _areaPoints, _crx, _cry, _crw, color);
 		} else {
 			ST_fillArea(_layer, _areaPoints, _crx, _cry, _crw,

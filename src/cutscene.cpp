@@ -77,16 +77,34 @@ const uint8_t *Cutscene::getPolygonData() const {
 
 #ifdef ATARIST
 static inline uint32_t stRot(uint32_t h, uint32_t v) {
-	return ((h << 5) | (h >> 27)) ^ v;
+	return ST_rol5(h) ^ v;
+}
+
+// the per-frame stats' fields saturate
+static inline uint8_t stSat8(uint32_t v) {
+	return (uint8_t)(v > 255 ? 255 : v);
+}
+
+static inline uint16_t stSat16(uint32_t v) {
+	return (uint16_t)(v > 0xFFFF ? 0xFFFF : v);
+}
+
+// a scene part's bit in _stCopyParts (parts past the 16th share one)
+static inline uint16_t stPartBit(int part) {
+	return (uint16_t)(1 << (part < 15 ? part : 15));
 }
 
 // a drawn frame's planes from the clip's top row down, folded: the
-// rows a scene can draw (shapes, then the captions under them)
+// rows a scene can draw (shapes, then the captions under them). h * 33
+// + each long, not a rotation XORed: a row is 32 longs, so five bits a
+// long turned a whole row back to where it started, and every row
+// folded in alike - a shape moved up or down over a plain background
+// hashed the same.
 static uint32_t stHashPage(const uint8_t *page, int y0) {
 	const uint32_t *w = (const uint32_t *)(page + y0 * kSTRowBytes);
 	uint32_t h = 0x811C9DC5;
 	for (int n = (Video::GAMESCREEN_H - y0) * (kSTRowBytes / 4); --n >= 0; ) {
-		h = stRot(h, *w++);
+		h = (h << 5) + h + *w++;
 	}
 	return h;
 }
@@ -216,7 +234,7 @@ void Cutscene::updateScreen() {
 			_stub->updateScreen(0);
 			const uint32_t dt = _stub->getTimeStamp() - t0;
 			_statCopy += dt;
-			_stCur.push = _stLastPush = (uint8_t)(dt > 255 ? 255 : dt);
+			_stCur.push = _stLastPush = stSat8(dt);
 		}
 	}
 	if (_stPalHash && !(flags & kStFSkipped) && _stPalHashN < kStHashMax) {
@@ -319,12 +337,6 @@ void Cutscene::stDecideSkip() {
 		_stSkipRun = 0;
 	}
 }
-#endif
-
-#ifdef ATARIST
-static inline uint8_t stSat8(uint32_t v) {
-	return (uint8_t)(v > 255 ? 255 : v);
-}
 
 void Cutscene::stStatsBegin() {
 	_stRing = 0;
@@ -337,6 +349,7 @@ void Cutscene::stStatsBegin() {
 	}
 	_stRing = (StFrameStat *)malloc(kStRing * sizeof(StFrameStat));
 	_stRingN = 0;
+	g_stCutStats = _stRing != 0;
 	memset(_stHist, 0, sizeof(_stHist));
 	ST_segCacheStats(&_stSegHit0, &_stSegMiss0);
 	ST_shpStats(&_stShpDrawn0, &_stShpBaked0);
@@ -390,7 +403,7 @@ void Cutscene::stStatsFrame(uint8_t flags) {
 	if (_clearScreen != 0) {
 		f.flags |= kStFClear;
 	}
-	f.work = (uint16_t)(_stLastDelay < 0 ? 0 : (_stLastDelay > 0xFFFF ? 0xFFFF : _stLastDelay));
+	f.work = stSat16(_stLastDelay < 0 ? 0 : (uint32_t)_stLastDelay);
 	f.budget4 = stSat8((uint32_t)_stLastBudget >> 2);
 	uint32_t hit, miss, drawn, baked;
 	ST_segCacheStats(&hit, &miss);
@@ -405,7 +418,7 @@ void Cutscene::stStatsFrame(uint8_t flags) {
 	_stShpBaked0 = baked;
 	{
 		const uint32_t t = g_stCutTouchGR - _stTouch0;
-		f.touchGR = (uint16_t)(t > 0xFFFF ? 0xFFFF : t);
+		f.touchGR = stSat16(t);
 		_stTouch0 = g_stCutTouchGR;
 	}
 	if (_stKeys) {
@@ -504,6 +517,7 @@ void Cutscene::stStatsEnd() {
 		}
 		free(_stRing);
 		_stRing = 0;
+		g_stCutStats = false;
 	}
 	// appended scene by scene: "CUTH", the scene id, the count, then
 	// a big-endian word per drawn frame - the pixels in CUTHASH.BIN,
@@ -745,9 +759,9 @@ void Cutscene::clearBackPage() {
 	if (_stRing && _stRingN != 0) {
 		StFrameStat &f = _stRing[_stRingN - 1];
 		const uint32_t dt = _stub->getTimeStamp() - t0 + f.restore;
-		f.restore = (uint8_t)(dt > 255 ? 255 : dt);
+		f.restore = stSat8(dt);
 		const uint32_t gr = g_stCutCopyGR - c0 + f.restoreGR;
-		f.restoreGR = (uint16_t)(gr > 0xFFFF ? 0xFFFF : gr);
+		f.restoreGR = stSat16(gr);
 	}
 #endif
 }
@@ -891,7 +905,7 @@ void Cutscene::op_refreshScreen() {
 			ST_cutscenePalLock(_stPart);
 			ST_shpColoursChanged(); // sprites are baked in colour
 			if (!(g_options.ab & kAbCutHideAlways)) {
-				_stUsesCopyScreen = ((_stCopyParts >> (_stPart < 15 ? _stPart : 15)) & 1) != 0;
+				_stUsesCopyScreen = (_stCopyParts & stPartBit(_stPart)) != 0;
 			}
 		}
 #endif
@@ -1088,18 +1102,8 @@ const void *Cutscene::stBakeShape(uint16_t key, const uint8_t *shapeData, uint16
 	_stBakePage = scratch;
 	ST_segShapeBegin(scratch, 0, 0, Video::GAMESCREEN_W, Video::GAMESCREEN_H);
 	ST_segBakeMode(true);
-	p = shapeData;
-	for (uint16_t i = 0; i < count; ++i) {
-		p = stReadPrim(p, verticesOffsetTable, verticesDataTable, &prim);
-		_hasAlphaColor = prim.alpha;
-		_primitiveColor = prim.colour;
-		// a recorded polygon or ellipse through segHit, as on a page
-		if (*prim.vertices != 0
-		    && segHit(prim.vertices, sox + prim.dx, soy + prim.dy, _primitiveColor)) {
-			continue;
-		}
-		drawShape(prim.vertices, sox + prim.dx, soy + prim.dy);
-	}
+	// a bake's shape is a foreground one: its colours the second bank
+	stDrawPrims(shapeData, count, verticesOffsetTable, verticesDataTable, sox, soy, 0xD0);
 	ST_segBakeMode(false);
 	_stBakePage = 0;
 	_gfx._crx = crx;
@@ -1112,6 +1116,33 @@ const void *Cutscene::stBakeShape(uint16_t key, const uint8_t *shapeData, uint16
 		_stBakeMs = t;
 	}
 	return e;
+}
+
+// A shape's primitives with the polygon cache on (ST_segShapeBegin
+// done): segWalk draws the cached polygons and ellipses itself and
+// hands the rest to drawShape. cadd is added to each colour byte (the
+// second bank's 0xD0 unless the frame clears the screen); the colour
+// and alpha are left as the last primitive's, as op_drawShape's loop
+// leaves them.
+void Cutscene::stDrawPrims(const uint8_t *shapeData, uint16_t count, const uint8_t *verticesOffsetTable,
+		const uint8_t *verticesDataTable, int16_t x, int16_t y, uint8_t cadd) {
+	SegWalk w;
+	w.data = shapeData;
+	w.vot = verticesOffsetTable;
+	w.vdt = verticesDataTable;
+	w.count = count;
+	w.x = x;
+	w.y = y;
+	w.cadd = cadd;
+	w.colour = _primitiveColor;
+	w.alpha = _hasAlphaColor;
+	while (segWalk(&w)) {
+		_hasAlphaColor = w.alpha != 0;
+		_primitiveColor = w.colour;
+		drawShape(w.verts, w.px, w.py);
+	}
+	_hasAlphaColor = w.alpha != 0;
+	_primitiveColor = w.colour;
 }
 
 // Bake queued shapes in the time a frame would otherwise sleep: a
@@ -1291,23 +1322,8 @@ void Cutscene::op_drawShape() {
 	if (segOn) {
 		// the loop below in asm, drawing the polygons drawn before
 		ST_segShapeBegin(_backPage, _gfx._crx, _gfx._cry, _gfx._crw, _gfx._crh);
-		SegWalk w;
-		w.data = shapeData;
-		w.vot = verticesOffsetTable;
-		w.vdt = verticesDataTable;
-		w.count = primitiveCount;
-		w.x = x;
-		w.y = y;
-		w.cadd = (_clearScreen == 0) ? 0xD0 : 0xC0;
-		w.colour = _primitiveColor;
-		w.alpha = _hasAlphaColor;
-		while (segWalk(&w)) {
-			_hasAlphaColor = w.alpha != 0;
-			_primitiveColor = w.colour;
-			drawShape(w.verts, w.px, w.py);
-		}
-		_hasAlphaColor = w.alpha != 0;
-		_primitiveColor = w.colour;
+		stDrawPrims(shapeData, primitiveCount, verticesOffsetTable, verticesDataTable, x, y,
+			(_clearScreen == 0) ? 0xD0 : 0xC0);
 		primitiveCount = 0;
 	}
 #endif
@@ -1952,7 +1968,7 @@ void Cutscene::op_copyScreen() {
 		// frames build on the one before: skipping any would lose
 		// its additions for good, so this part draws them all (a part
 		// starts on a wiped page, so the next one need not)
-		_stCopyParts |= (uint16_t)(1 << (_stPart < 15 ? _stPart : 15));
+		_stCopyParts |= stPartBit(_stPart);
 	}
 #endif
 	_frameDelay = 10;
@@ -1999,12 +2015,11 @@ void Cutscene::op_drawTextAtPos() {
 			if (g_options.ab & kAbCutNoText) {
 				str = 0;
 			}
-#endif
-#ifdef ATARIST
-			// 'voyage' redraws its string 74 times in one frame, 15ms
-			// apart (below), with nothing in between: the same pixels on
-			// the same page each time, which on an 8MHz ST took 10ms a
-			// redraw on top of each wait. Only the first is drawn.
+			// The same string at the same place straight after itself,
+			// no opcode between, draws the same pixels on the same page:
+			// only the first is drawn. 'voyage' does it 74 times in one
+			// frame, 15ms apart (below), which on an 8MHz ST took 10ms a
+			// redraw on top of each wait.
 			if (str && _stPrevOp == 13 && strId == _stTextId && x == _stTextX && y == _stTextY) {
 				str = 0;
 			}
@@ -2137,7 +2152,7 @@ void Cutscene::stPrescanPalette(uint16_t num) {
 	_interrupted = false;
 	_stop = false;
 	_stPart = 0;
-	_stUsesCopyScreen = (g_options.ab & kAbCutHideAlways) ? _stCopyParts != 0 : (_stCopyParts & 1) != 0;
+	_stUsesCopyScreen = (g_options.ab & kAbCutHideAlways) ? _stCopyParts != 0 : (_stCopyParts & stPartBit(0)) != 0;
 	ST_cutscenePalLock(0);
 }
 #endif
@@ -2236,12 +2251,13 @@ void Cutscene::mainLoop(uint16_t num) {
 		// Input once a frame, not after every opcode: a frame is a few
 		// dozen opcodes, and each poll cost ~2.9K cycles (2.9ms of a
 		// level 1 frame). Polled after the opcodes that end a frame or
-		// wait (frame end, wait, caption, refresh, copy screen) and
-		// before the two that read keys (op_handleKeys, and
+		// wait (frame end, wait, caption, refresh, copy screen, and
+		// the text that 'voyage' redraws 15ms apart for over a second)
+		// and before the two that read keys (op_handleKeys, and
 		// op_refreshAll, which ends in it), so a key is never seen
 		// later than the frame it was pressed in.
 		enum {
-			kPollAfter = (1 << 0) | (1 << 2) | (1 << 5) | (1 << 6) | (1 << 9) | (1 << 12),
+			kPollAfter = (1 << 0) | (1 << 2) | (1 << 5) | (1 << 6) | (1 << 9) | (1 << 12) | (1 << 13),
 			kPollBefore = (1 << 9) | (1 << 14)
 		};
 		const bool pollAll = (g_options.ab & kAbCutPollAlways) != 0;

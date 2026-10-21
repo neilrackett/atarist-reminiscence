@@ -116,6 +116,8 @@ struct Cutscene {
 		uint16_t count, const uint8_t *verticesOffsetTable, const uint8_t *verticesDataTable);
 	const void *stBakeShape(uint16_t key, const uint8_t *shapeData, uint16_t count,
 		const uint8_t *verticesOffsetTable, const uint8_t *verticesDataTable);
+	void stDrawPrims(const uint8_t *shapeData, uint16_t count, const uint8_t *verticesOffsetTable,
+		const uint8_t *verticesDataTable, int16_t x, int16_t y, uint8_t cadd);
 	void stIdleBake(int32_t ms);
 	void stQueueBake(uint16_t key);
 	bool _stop;

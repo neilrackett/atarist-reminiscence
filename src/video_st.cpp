@@ -18,6 +18,7 @@ extern "C" {
 // group-rows the drawing on a tracked page touched, box by box (the
 // per-frame stats: what one box per page costs against these)
 uint32_t g_stCutTouchGR;
+bool g_stCutStats;
 
 // see ST_pageBandStart; the whole page when no band is in force
 static int16_t g_bandY0 = 0, g_bandY1 = kSTLayerH;
@@ -121,7 +122,9 @@ static inline __attribute__((always_inline)) void pageTouch(const uint8_t *layer
 	}
 	if (TrkBox *b = trkBoxOf(layer)) {
 		boxAdd(b, g0, g1, y0, y1);
-		g_stCutTouchGR += STDL_MulU16((uint16_t)(g1 - g0), (uint16_t)(y1 - y0));
+		if (g_stCutStats) {
+			g_stCutTouchGR += STDL_MulU16((uint16_t)(g1 - g0), (uint16_t)(y1 - y0));
+		}
 	}
 }
 
@@ -1864,9 +1867,8 @@ __asm__(
 "    RS_STORE\n"
 "    movem.l (%sp)+,%d2-%d7/%a2-%a6\n"
 "    rts\n"
-/* count rows from the registers; stack: ret, count, sa, sb */
-"rs_run:\n"
-"rs_row:\n"
+/* the row's two edges' x from the 16.16 edges, sorted: d2 <= d3 */
+".macro RS_EDGES\n"
 "    move.l %a3,%d2\n"
 "    move.l %a4,%d3\n"
 "    swap   %d2\n"
@@ -1874,7 +1876,11 @@ __asm__(
 "    cmp.w  %d3,%d2\n"
 "    ble.s  1f\n"
 "    exg    %d2,%d3\n"
-"1:  cmp.w  %d6,%d3\n"               /* xhi */
+"1:\n"
+".endm\n"
+/* the span to the clip (d6 = xlo:xhi); to skip when nothing is left */
+".macro RS_CLAMP skip\n"
+"    cmp.w  %d6,%d3\n"               /* xhi */
 "    ble.s  2f\n"
 "    move.w %d6,%d3\n"
 "2:  swap   %d6\n"
@@ -1883,10 +1889,14 @@ __asm__(
 "    move.w %d6,%d2\n"
 "3:  swap   %d6\n"
 "    cmp.w  %d3,%d2\n"
-"    bgt.s  rs_skip\n"
+"    bgt.s  \\skip\n"
+".endm\n"
+/* the priority modes' row (0, 1): a0 the group pointer, a1 the
+ * priority word's, a6 prow; into the variant at a2 */
+".macro RS_PRIO_BODY\n"
 "    move.w %d2,%d4\n"
 "    asr.w  #4,%d4\n"                /* g0 */
-"    move.w %d3,%d7\n"
+"    move.w %d3,%d7\n"                /* (low word: sp1's count is high) */
 "    asr.w  #4,%d7\n"
 "    sub.w  %d4,%d7\n"               /* d7 = g1 - g0 */
 "    lea    rs_lmask(%pc),%a1\n"
@@ -1904,14 +1914,27 @@ __asm__(
 "    lea    (%a5,%d4.w),%a0\n"       /* dst = row + g0*8 */
 "    move.l %d3,%d4\n"
 "    tst.w  %d7\n"
-"    beq.s  rs_single\n"
+"    beq.s  4f\n"
 "    subq.w #1,%d7\n"                /* full groups between the ends */
 "    move.l %d2,%d3\n"
 "    not.l  %d3\n"
 "    jmp    (%a2)\n"                 /* left end, run, right end */
-"rs_single:\n"
-"    and.l  %d2,%d4\n"               /* one group: m = lm & rm */
+"4:  and.l  %d2,%d4\n"               /* one group: m = lm & rm */
 "    jmp    -20(%a2)\n"              /* the variant's right end alone */
+".endm\n"
+/* a recorded row's span (spans at a3), moved to the origin's x (a4) */
+".macro SP_SPAN\n"
+"    move.w (%a3)+,%d2\n"
+"    move.w (%a3)+,%d3\n"
+"    add.w  %a4,%d2\n"
+"    add.w  %a4,%d3\n"
+".endm\n"
+/* count rows from the registers; stack: ret, count, sa, sb */
+"rs_run:\n"
+"rs_row:\n"
+"    RS_EDGES\n"
+"    RS_CLAMP rs_skip\n"
+"    RS_PRIO_BODY\n"
 "rs_skip:\n"
 "    add.l  8(%sp),%a3\n"            /* fa += sa */
 "    add.l  12(%sp),%a4\n"           /* fb += sb */
@@ -1955,23 +1978,8 @@ __asm__(
 ".endm\n"
 "rs2_run:\n"
 "rs2_row:\n"
-"    move.l %a3,%d2\n"
-"    move.l %a4,%d3\n"
-"    swap   %d2\n"
-"    swap   %d3\n"
-"    cmp.w  %d3,%d2\n"
-"    ble.s  1f\n"
-"    exg    %d2,%d3\n"
-"1:  cmp.w  %d6,%d3\n"               /* xhi */
-"    ble.s  2f\n"
-"    move.w %d6,%d3\n"
-"2:  swap   %d6\n"
-"    cmp.w  %d6,%d2\n"               /* xlo */
-"    bge.s  3f\n"
-"    move.w %d6,%d2\n"
-"3:  swap   %d6\n"
-"    cmp.w  %d3,%d2\n"
-"    bgt.s  rs2_skip\n"
+"    RS_EDGES\n"
+"    RS_CLAMP rs2_skip\n"
 "    RS_PAGE_BODY\n"
 "rs2_skip:\n"
 "    add.l  4(%a0),%a3\n"            /* fa += sa */
@@ -1981,14 +1989,8 @@ __asm__(
 "    rts\n"
 "rs3_run:\n"
 "rs3_row:\n"
-"    move.l %a3,%d2\n"
-"    move.l %a4,%d3\n"
-"    swap   %d2\n"
-"    swap   %d3\n"
-"    cmp.w  %d3,%d2\n"
-"    ble.s  1f\n"
-"    exg    %d2,%d3\n"
-"1:  RS_PAGE_BODY\n"
+"    RS_EDGES\n"
+"    RS_PAGE_BODY\n"
 "rs3_skip:\n"
 "    add.l  4(%a0),%a3\n"
 "    add.l  %a6,%a4\n"
@@ -2022,7 +2024,7 @@ __asm__(
  * set-up cost a third as much as the rows of a cached polygon. sp_go
  * (segHit's) fills d7 rows (1..) from the spans at a3 for fn in d2
  * (colour | mode << 4): d0/d1 fill, d6 lim, a4 xo, a5 row, a6 prow
- * (a bake), a0 the state (pv at 32). Page modes 2 and 3: d5 the dbra count and
+ * (a bake), a0 the context (pv at 0, see SegCtx). Page modes 2 and 3: d5 the dbra count and
  * a6 the header, which each variant's tail loops back to (sp_mtab,
  * SP_ROW). Mode 1, a shape sprite's bake, marks coverage in the
  * priority plane like rs_run, with its row count in d7's high word
@@ -2047,51 +2049,13 @@ __asm__(
 "    lea    sp1_mtab(%pc),%a2\n"
 "    move.w (%a2,%d3.w),%d3\n"
 "    lea    (%a2,%d3.w),%a2\n"
-"    move.l 32(%a0),%d5\n"            /* pv */
+"    move.l (%a0),%d5\n"              /* pv */
 "    subq.w #1,%d7\n"
 "    swap   %d7\n"
 "sp1_row:\n"
-"    move.w (%a3)+,%d2\n"
-"    move.w (%a3)+,%d3\n"
-"    add.w  %a4,%d2\n"
-"    add.w  %a4,%d3\n"
-"    cmp.w  %d6,%d3\n"                /* xhi */
-"    ble.s  1f\n"
-"    move.w %d6,%d3\n"
-"1:  swap   %d6\n"
-"    cmp.w  %d6,%d2\n"                /* xlo */
-"    bge.s  2f\n"
-"    move.w %d6,%d2\n"
-"2:  swap   %d6\n"
-"    cmp.w  %d3,%d2\n"
-"    bgt.s  sp1_skip\n"
-"    move.w %d2,%d4\n"
-"    asr.w  #4,%d4\n"                 /* g0 */
-"    move.w %d3,%d7\n"                /* (the low word: the count is high) */
-"    asr.w  #4,%d7\n"
-"    sub.w  %d4,%d7\n"                /* d7 = g1 - g0 */
-"    lea    rs_lmask(%pc),%a1\n"
-"    and.w  #15,%d2\n"
-"    add.w  %d2,%d2\n"
-"    add.w  %d2,%d2\n"
-"    move.l (%a1,%d2.w),%d2\n"        /* left mask m:m */
-"    and.w  #15,%d3\n"
-"    add.w  %d3,%d3\n"
-"    add.w  %d3,%d3\n"
-"    move.l 64(%a1,%d3.w),%d3\n"      /* right mask (rs_rmask) */
-"    add.w  %d4,%d4\n"
-"    lea    (%a6,%d4.w),%a1\n"        /* prio = prow + g0 */
-"    lsl.w  #2,%d4\n"
-"    lea    (%a5,%d4.w),%a0\n"        /* dst = row + g0*8 */
-"    move.l %d3,%d4\n"
-"    tst.w  %d7\n"
-"    beq.s  3f\n"
-"    subq.w #1,%d7\n"                 /* full groups between the ends */
-"    move.l %d2,%d3\n"
-"    not.l  %d3\n"
-"    jmp    (%a2)\n"
-"3:  and.l  %d2,%d4\n"                /* one group: m = lm & rm */
-"    jmp    -20(%a2)\n"
+"    SP_SPAN\n"
+"    RS_CLAMP sp1_skip\n"
+"    RS_PRIO_BODY\n"
 "sp1_skip:\n"
 "    lea    128(%a5),%a5\n"
 "    lea    32(%a6),%a6\n"
@@ -2101,40 +2065,25 @@ __asm__(
 "1:  swap   %d7\n"
 "    bra    sp1_row\n"
 "sp2_row:\n"                          /* clamped to the clip */
-"    move.w (%a3)+,%d2\n"
-"    move.w (%a3)+,%d3\n"
-"    add.w  %a4,%d2\n"
-"    add.w  %a4,%d3\n"
-"    cmp.w  %d6,%d3\n"
-"    ble.s  1f\n"
-"    move.w %d6,%d3\n"
-"1:  swap   %d6\n"
-"    cmp.w  %d6,%d2\n"
-"    bge.s  2f\n"
-"    move.w %d6,%d2\n"
-"2:  swap   %d6\n"
-"    cmp.w  %d3,%d2\n"
-"    bgt.s  sp2_skip\n"
+"    SP_SPAN\n"
+"    RS_CLAMP sp2_skip\n"
 "    RS_PAGE_BODY 26\n"
 "sp2_skip:\n"
 "    lea    128(%a5),%a5\n"
 "    dbra   %d5,sp2_row\n"
 "    rts\n"
 "sp3_row:\n"                          /* inside it: nothing to clamp */
-"    move.w (%a3)+,%d2\n"
-"    move.w (%a3)+,%d3\n"
-"    add.w  %a4,%d2\n"
-"    add.w  %a4,%d3\n"
+"    SP_SPAN\n"
 "    RS_PAGE_BODY 26\n"
 /* segHit(key, x, y, colour8): a cached polygon drawn start to finish -
  * the lookup, the clipping, and the spans - where a C path's setup
  * cost as much as the fill. 0 when the key is not cached (the caller
  * records it). The shape's box grows in g_segCtx and is applied once
- * per shape (ST_segShapeEnd). SegCtx offsets past RasterState: layer
- * 44, remap 48, fill01 52, fill23 56, hash 60, lim 64, crx 68, cry 70,
- * xmaxv 72, ylast 74, box xlo 76 xhi 78 y0 80 y1 82, hits 84, bake 88
- * (a shape sprite's bake: mode 1, which marks coverage in the priority
- * plane, and prow for it). */
+ * per shape (ST_segShapeEnd). SegCtx offsets: pv 0, layer 4, remap 8,
+ * fill01 12, fill23 16, hash 20, lim 24, crx 28, cry 30, xmaxv 32,
+ * ylast 34, box xlo 36 xhi 38 y0 40 y1 42, hits 44, bake 48 (a shape
+ * sprite's bake: mode 1, which marks coverage in the priority plane,
+ * and prow for it). */
 "    .globl _segHit\n"                  /* called from cutscene.cpp */
 "_segHit:\n"
 "    movem.l %d2-%d7/%a2-%a6,-(%sp)\n"
@@ -2156,7 +2105,7 @@ __asm__(
 "    and.w  #255,%d1\n"
 "    add.w  %d1,%d1\n"
 "    add.w  %d1,%d1\n"
-"    move.l 60(%a0),%a1\n"
+"    move.l 20(%a0),%a1\n"
 "    move.l (%a1,%d1.w),%a1\n"
 "1:  move.l %a1,%d1\n"
 "    beq.s  sh_miss\n"
@@ -2167,12 +2116,12 @@ __asm__(
 "sh_miss:\n"
 "    moveq  #0,%d0\n"
 "    rts\n"
-"2:  addq.l #1,84(%a0)\n"
+"2:  addq.l #1,44(%a0)\n"
 "    move.w %d2,%a4\n"                 /* xo = x + crx */
-"    add.w  68(%a0),%a4\n"
+"    add.w  28(%a0),%a4\n"
 "    moveq  #0,%d1\n"                  /* v = remap[colour8] & 15 */
 "    move.b %d4,%d1\n"
-"    move.l 48(%a0),%a3\n"
+"    move.l 8(%a0),%a3\n"
 "    move.b (%a3,%d1.w),%d1\n"
 "    and.w  #15,%d1\n"
 "    move.w %d3,%d4\n"                 /* y */
@@ -2181,7 +2130,7 @@ __asm__(
 "    add.w  14(%a1),%d3\n"             /* xhi */
 "    tst.w  %d3\n"
 "    bmi    sh_done\n"                 /* wholly left of the clip */
-"    cmp.w  72(%a0),%d2\n"
+"    cmp.w  32(%a0),%d2\n"
 "    bgt    sh_done\n"                 /* wholly right of it */
 "    add.w  8(%a1),%d4\n"              /* ytop */
 "    move.w %d4,%d6\n"                 /* first = max(ytop, 0) */
@@ -2190,23 +2139,23 @@ __asm__(
 "3:  move.w %d4,%d7\n"                 /* last = min(ybot, ylast) */
 "    add.w  10(%a1),%d7\n"
 "    subq.w #1,%d7\n"
-"    cmp.w  74(%a0),%d7\n"
+"    cmp.w  34(%a0),%d7\n"
 "    ble.s  4f\n"
-"    move.w 74(%a0),%d7\n"
+"    move.w 34(%a0),%d7\n"
 "4:  cmp.w  %d7,%d6\n"
 "    bgt    sh_done\n"                 /* wholly above or below */
-"    cmp.w  76(%a0),%d2\n"             /* the shape's box */
+"    cmp.w  36(%a0),%d2\n"             /* the shape's box */
 "    bge.s  5f\n"
-"    move.w %d2,76(%a0)\n"
-"5:  cmp.w  78(%a0),%d3\n"
+"    move.w %d2,36(%a0)\n"
+"5:  cmp.w  38(%a0),%d3\n"
 "    ble.s  5f\n"
-"    move.w %d3,78(%a0)\n"
-"5:  cmp.w  80(%a0),%d6\n"
+"    move.w %d3,38(%a0)\n"
+"5:  cmp.w  40(%a0),%d6\n"
 "    bge.s  5f\n"
-"    move.w %d6,80(%a0)\n"
-"5:  cmp.w  82(%a0),%d7\n"
+"    move.w %d6,40(%a0)\n"
+"5:  cmp.w  42(%a0),%d7\n"
 "    ble.s  5f\n"
-"    move.w %d7,82(%a0)\n"
+"    move.w %d7,42(%a0)\n"
 "5:  move.w %d6,%d5\n"                 /* skip = first - ytop */
 "    sub.w  %d4,%d5\n"
 "    add.w  %d5,%d5\n"
@@ -2214,36 +2163,36 @@ __asm__(
 "    lea    16(%a1,%d5.w),%a3\n"       /* the first row's span */
 "    sub.w  %d6,%d7\n"                 /* rows = last - first + 1 */
 "    addq.w #1,%d7\n"
-"    add.w  70(%a0),%d6\n"             /* row = layer + (cry + first) * 128 */
+"    add.w  30(%a0),%d6\n"             /* row = layer + (cry + first) * 128 */
 "    ext.l  %d6\n"
 "    lsl.l  #7,%d6\n"
-"    move.l 44(%a0),%a5\n"
+"    move.l 4(%a0),%a5\n"
 "    add.l  %d6,%a5\n"
-"    tst.b  88(%a0)\n"                 /* a bake: prow for the priority core */
+"    tst.b  48(%a0)\n"                 /* a bake: prow for the priority core */
 "    beq.s  9f\n"
 "    lsr.l  #2,%d6\n"
 "    add.l  #28672,%d6\n"              /* kSTPlaneBytes */
-"    move.l 44(%a0),%a6\n"
+"    move.l 4(%a0),%a6\n"
 "    add.l  %d6,%a6\n"
 "9:  moveq  #0x20,%d5\n"               /* mode 3 if it cannot need clamping */
 "    tst.w  %d2\n"
 "    bmi.s  6f\n"
-"    cmp.w  72(%a0),%d3\n"
+"    cmp.w  32(%a0),%d3\n"
 "    bgt.s  6f\n"
 "    moveq  #0x30,%d5\n"
-"6:  tst.b  88(%a0)\n"
+"6:  tst.b  48(%a0)\n"
 "    beq.s  8f\n"
 "    moveq  #0x10,%d5\n"               /* a bake: mode 1 marks coverage */
 "8:  move.w %d1,%d2\n"
 "    or.w   %d5,%d2\n"                 /* fn */
 "    add.w  %d1,%d1\n"
 "    add.w  %d1,%d1\n"
-"    move.l 56(%a0),%a1\n"
+"    move.l 16(%a0),%a1\n"
 "    move.l (%a1,%d1.w),%d3\n"         /* f23 */
-"    move.l 52(%a0),%a1\n"
+"    move.l 12(%a0),%a1\n"
 "    move.l (%a1,%d1.w),%d0\n"         /* f01 */
 "    move.l %d3,%d1\n"
-"    move.l 64(%a0),%d6\n"             /* lim */
+"    move.l 24(%a0),%d6\n"             /* lim */
 "    bsr    sp_go\n"
 "sh_done:\n"
 "    moveq  #1,%d0\n"
@@ -2634,7 +2583,8 @@ struct SegEntry;
 
 // segHit's context (offsets in the asm): the page and clip of the
 // shape being drawn, its colour tables, and the box its hits grow
-struct SegCtx : RasterState {
+struct SegCtx {
+	unsigned long pv;            // a bake's priority word (sp_go's mode 1)
 	uint8_t *layer;
 	const uint8_t *remap;
 	const unsigned long *fill01, *fill23;
@@ -2648,7 +2598,7 @@ struct SegCtx : RasterState {
 extern "C" SegCtx g_segCtx;
 SegCtx g_segCtx;
 // the asm addresses these fields by number: the sizes pin the layout
-typedef char SegCtxLayout[(sizeof(SegCtx) == 92) ? 1 : -1];
+typedef char SegCtxLayout[(sizeof(SegCtx) == 52 && __builtin_offsetof(SegCtx, bake) == 48) ? 1 : -1];
 typedef char SegWalkLayout[(sizeof(SegWalk) == 30 && __builtin_offsetof(SegWalk, verts) == 20) ? 1 : -1];
 
 extern "C" void rasterSeg(RasterState *st, long count);
@@ -3496,15 +3446,54 @@ void ST_segShapeEnd() {
 		c.cry + c.by0, c.cry + c.by1 + 1);
 }
 
+// A new entry's bytes: the header and a span a row, longs
+static inline uint32_t segBytes(int rows) {
+	return (sizeof(SegEntry) + rows * 4 + 3) & ~3u;
+}
+
+// Room for a new entry of rows spans, the arena emptied first when it
+// is full; null when it could never fit. It counts as a miss.
+static SegEntry *segAlloc(int rows) {
+	const uint32_t need = segBytes(rows);
+	if (!g_segArena || need > g_segArenaSize) {
+		return 0;
+	}
+	if (g_segUsed + need > g_segArenaSize) {
+		segFlush();
+	}
+	++g_segMisses;
+	return (SegEntry *)(g_segArena + g_segUsed);
+}
+
+// File the entry segAlloc gave, its spans written, under its key
+static void segCommit(SegEntry *e, const void *key, int16_t ytop, int rows, int16_t xlo, int16_t xhi) {
+	e->key = key;
+	e->ytop = ytop;
+	e->rows = rows;
+	e->xlo = xlo;
+	e->xhi = xhi;
+	const unsigned b = segBucket(key);
+	e->next = g_segHash[b];
+	g_segHash[b] = e;
+	g_segUsed += segBytes(rows);
+}
+
+// Draw an entry just filed with its origin at (x, y) in the clip rect,
+// as every later sighting will be (segHit), within the shape's box:
+// a miss, so not counted as a hit
+static void segDrawNew(const void *key, int x, int y, uint8_t colour8) {
+	segHit(key, x, y, colour8);
+	--g_segCtx.hits;
+}
+
 // Record a polygon given relative to its shape's origin; the three
 // kinds ST_drawPolygonFast draws, the same way. Null when it is not
 // one of them, or cannot fit.
 static const void *segRecord(const void *key, const void *ptsv, int n) {
 	const Point *pts = (const Point *)ptsv;
-	if (!g_segArena || n < 2 || n > (int)(sizeof(g_segPts) / sizeof(g_segPts[0]))) {
+	if (n < 2 || n > (int)(sizeof(g_segPts) / sizeof(g_segPts[0]))) {
 		return 0;
 	}
-	++g_segMisses;
 	initRecip16();
 	int imin = 0, imax = 0;
 	int16_t xlo = pts[0].x, xhi = xlo;
@@ -3518,14 +3507,10 @@ static const void *segRecord(const void *key, const void *ptsv, int n) {
 	}
 	// a span per row
 	const int rows = ybot - ytop + 1;
-	const uint32_t need = (sizeof(SegEntry) + rows * 4 + 3) & ~3u;
-	if (need > g_segArenaSize) {
+	SegEntry *e = segAlloc(rows);
+	if (!e) {
 		return 0;
 	}
-	if (g_segUsed + need > g_segArenaSize) {
-		segFlush();
-	}
-	SegEntry *e = (SegEntry *)(g_segArena + g_segUsed);
 	int16_t *span = (int16_t *)(e + 1);
 	if (ytop == ybot) {
 		span[0] = xlo;
@@ -3570,28 +3555,18 @@ static const void *segRecord(const void *key, const void *ptsv, int n) {
 		st.rec = (uint8_t *)span;
 		polyWalk(&st);
 	}
-	e->key = key;
-	e->ytop = ytop;
-	e->rows = rows;
-	e->xlo = xlo;
-	e->xhi = xhi;
-	const unsigned b = segBucket(key);
-	e->next = g_segHash[b];
-	g_segHash[b] = e;
-	g_segUsed += need;
+	segCommit(e, key, ytop, rows, xlo, xhi);
 	return e;
 }
 
 // A polygon new to the cache, relative to its shape's origin: kept, and
-// drawn with its origin at (x, y) in the clip rect as every later
-// sighting will be (segHit), within the shape's box. The C route it
+// drawn as every later sighting will be (segDrawNew). The C route it
 // replaced set up a replay of its own, 2.5K cycles a new polygon.
 bool ST_segRecordDraw(const void *key, const void *pts, int n, int x, int y, uint8_t colour8) {
 	if (!segRecord(key, pts, n)) {
 		return false;
 	}
-	segHit(key, x, y, colour8);
-	--g_segCtx.hits;            // a miss, counted as one (segRecord)
+	segDrawNew(key, x, y, colour8);
 	return true;
 }
 
@@ -3601,15 +3576,10 @@ bool ST_segRecordDraw(const void *key, const void *pts, int n, int x, int y, uin
 // 8MHz ST.
 bool ST_segRecordSpans(const void *key, int ox, int oy, int rows, const int16_t *spans,
 		int x, int y, uint8_t colour8) {
-	const uint32_t need = (sizeof(SegEntry) + rows * 4 + 3) & ~3u;
-	if (!g_segArena || need > g_segArenaSize) {
+	SegEntry *e = segAlloc(rows);
+	if (!e) {
 		return false;
 	}
-	if (g_segUsed + need > g_segArenaSize) {
-		segFlush();
-	}
-	++g_segMisses;
-	SegEntry *e = (SegEntry *)(g_segArena + g_segUsed);
 	int16_t *out = (int16_t *)(e + 1);
 	int16_t xlo = 0x7FFF, xhi = -0x7FFF;
 	for (int i = 0; i < rows * 2; i += 2) {
@@ -3619,17 +3589,8 @@ bool ST_segRecordSpans(const void *key, int ox, int oy, int rows, const int16_t 
 		if (a < xlo) xlo = a;
 		if (b > xhi) xhi = b;
 	}
-	e->key = key;
-	e->ytop = oy;
-	e->rows = rows;
-	e->xlo = xlo;
-	e->xhi = xhi;
-	const unsigned b = segBucket(key);
-	e->next = g_segHash[b];
-	g_segHash[b] = e;
-	g_segUsed += need;
-	segHit(key, x, y, colour8);
-	--g_segCtx.hits;
+	segCommit(e, key, oy, rows, xlo, xhi);
+	segDrawNew(key, x, y, colour8);
 	return true;
 }
 
@@ -3655,8 +3616,8 @@ void ST_hspanV(uint8_t *layer, int x1, int x2, int y, uint8_t v, bool setPrio) {
 // the artist's shadow variant of whatever is underneath. In hardware
 // colour space that becomes a per-slot lookup (ST_getOrMap): each
 // covered pixel translated through it. Outside cutscene mode (no
-// representative table) it falls back to an opaque fill. A whole
-// shadow polygon, fillArea's run list (y, then x1,x2 pairs until
+// representative table) the caller fills it opaque (ST_fillArea). A
+// whole shadow polygon, fillArea's run list (y, then x1,x2 pairs until
 // x1 < 0), in one call: the map once, the box once.
 //
 // All sixteen pixels of a group are translated together (bitsliced):
@@ -3703,13 +3664,15 @@ void ST_hspanOrArea(uint8_t *layer, const int16_t *pts, int crx, int cry, int cr
 	if (x1 < 0) {
 		return;
 	}
-	const bool pal = ST_cutscenePalMode();
 	// output plane j: for each value of planes 3 and 2 (k), the truth
-	// table over planes 1 and 0 (an index into orGroup's F)
-	uint8_t prog[16];
-	if (pal) {
-		uint8_t orMap[16];
-		ST_getOrMap(colour8, orMap);
+	// table over planes 1 and 0 (an index into orGroup's F). Kept for
+	// the map it came from: worked out afresh it was ~5K cycles a
+	// shadow polygon, and a scene's shadows use a map or two.
+	static uint8_t lastMap[16], prog[16];
+	static bool progValid;
+	uint8_t orMap[16];
+	ST_getOrMap(colour8, orMap);
+	if (!progValid || memcmp(orMap, lastMap, sizeof(orMap)) != 0) {
 		for (int j = 0; j < 4; ++j) {
 			for (int k = 0; k < 4; ++k) {
 				uint8_t t = 0;
@@ -3719,6 +3682,8 @@ void ST_hspanOrArea(uint8_t *layer, const int16_t *pts, int crx, int cry, int cr
 				prog[j * 4 + k] = t;
 			}
 		}
+		memcpy(lastMap, orMap, sizeof(lastMap));
+		progValid = true;
 	}
 	const int yFirst = y;
 	int xMin = kSTLayerW, xMax = -1;
@@ -3734,13 +3699,9 @@ void ST_hspanOrArea(uint8_t *layer, const int16_t *pts, int crx, int cry, int cr
 			if (xa <= xb) {
 				if (xa < xMin) xMin = xa;
 				if (xb > xMax) xMax = xb;
-				if (!pal) {
-					fillRow(layer, xa, xb - xa + 1, y, ST_getRemap()[colour8], (colour8 & 0x80) != 0);
-				} else {
-					uint16_t *g = groupPtr(layer, xa, y);
-					for (int gi = xa >> 4; gi <= (xb >> 4); ++gi, g += 4) {
-						orGroup(g, groupMask(gi, xa, xb), prog);
-					}
+				uint16_t *g = groupPtr(layer, xa, y);
+				for (int gi = xa >> 4; gi <= (xb >> 4); ++gi, g += 4) {
+					orGroup(g, groupMask(gi, xa, xb), prog);
 				}
 			}
 		}
@@ -3805,12 +3766,19 @@ static inline void copyBlock(uint8_t *dst, const uint8_t *src) {
 #endif
 }
 
-// copyBlock for a length known only at run time (a multiple of 16,
-// under 3MB: the burst count is a divu.w, not a __divsi3 call)
+// The 48-byte movem bursts in bytes (under 3MB), and the bytes left
+// over: a divu.w, not a __divsi3 call
+static inline int bursts48(int bytes, int *rest) {
+	const int n = STDL_DivU16((uint32_t)bytes, 48);
+	*rest = bytes - (n << 5) - (n << 4);
+	return n;
+}
+
+// copyBlock for a length known only at run time (a multiple of 16)
 static void copyBytes(uint8_t *dst, const uint8_t *src, int bytes) {
 #ifdef __m68k__
-	int bursts = STDL_DivU16((uint32_t)bytes, 48);
-	const int rest = bytes - (bursts << 5) - (bursts << 4);
+	int rest;
+	int bursts = bursts48(bytes, &rest);
 	if (bursts > 0) {
 		__asm__ volatile(
 			"subq.w #1,%2\n"
@@ -3838,13 +3806,9 @@ static void copyBytes(uint8_t *dst, const uint8_t *src, int bytes) {
 // stores downward from the end, 48 bytes a burst
 static void fillBytes(uint8_t *dst, int bytes, uint32_t a, uint32_t b) {
 	uint32_t *d32 = (uint32_t *)dst;
-#ifdef __m68k__
-	int bursts = STDL_DivU16((uint32_t)bytes, 48);   // a divu.w, not __divsi3
-	const int tail = (bytes - (bursts << 5) - (bursts << 4)) >> 2;
-#else
-	int bursts = bytes / 48;
-	const int tail = (bytes % 48) / 4;
-#endif
+	int rest;
+	int bursts = bursts48(bytes, &rest);
+	const int tail = rest >> 2;
 	// even: 48 and 16 keep the pair phase
 	for (int n = tail / 2; --n >= 0; ) {
 		*d32++ = a;
@@ -3912,26 +3876,25 @@ void ST_copyLayer(uint8_t *dst, const uint8_t *src) {
 	copyBlock<kSTPlaneBytes + kSTPrioRowBytes * kSTLayerH>(dst, src);
 }
 
-bool ST_copyGroupRows(uint8_t *d, int dStride, const uint8_t *s, int sStride, int groups, int h) {
+void ST_copyGroupRows(uint8_t *d, int dStride, const uint8_t *s, int sStride, int groups, int h) {
 	switch (groups) {
-	case 1: copyRowsN<2>(d, dStride, s, sStride, h); return true;
-	case 2: copyRowsN<4>(d, dStride, s, sStride, h); return true;
-	case 3: copyRowsN<6>(d, dStride, s, sStride, h); return true;
-	case 4: copyRowsN<8>(d, dStride, s, sStride, h); return true;
-	case 5: copyRowsN<10>(d, dStride, s, sStride, h); return true;
-	case 6: copyRowsN<12>(d, dStride, s, sStride, h); return true;
-	case 7: copyRowsN<14>(d, dStride, s, sStride, h); return true;
-	case 8: copyRowsN<16>(d, dStride, s, sStride, h); return true;
-	case 9: copyRowsN<18>(d, dStride, s, sStride, h); return true;
-	case 10: copyRowsN<20>(d, dStride, s, sStride, h); return true;
-	case 11: copyRowsN<22>(d, dStride, s, sStride, h); return true;
-	case 12: copyRowsN<24>(d, dStride, s, sStride, h); return true;
-	case 13: copyRowsN<26>(d, dStride, s, sStride, h); return true;
-	case 14: copyRowsN<28>(d, dStride, s, sStride, h); return true;
-	case 15: copyRowsN<30>(d, dStride, s, sStride, h); return true;
-	case 16: copyRowsN<32>(d, dStride, s, sStride, h); return true;
+	case 1: copyRowsN<2>(d, dStride, s, sStride, h); return;
+	case 2: copyRowsN<4>(d, dStride, s, sStride, h); return;
+	case 3: copyRowsN<6>(d, dStride, s, sStride, h); return;
+	case 4: copyRowsN<8>(d, dStride, s, sStride, h); return;
+	case 5: copyRowsN<10>(d, dStride, s, sStride, h); return;
+	case 6: copyRowsN<12>(d, dStride, s, sStride, h); return;
+	case 7: copyRowsN<14>(d, dStride, s, sStride, h); return;
+	case 8: copyRowsN<16>(d, dStride, s, sStride, h); return;
+	case 9: copyRowsN<18>(d, dStride, s, sStride, h); return;
+	case 10: copyRowsN<20>(d, dStride, s, sStride, h); return;
+	case 11: copyRowsN<22>(d, dStride, s, sStride, h); return;
+	case 12: copyRowsN<24>(d, dStride, s, sStride, h); return;
+	case 13: copyRowsN<26>(d, dStride, s, sStride, h); return;
+	case 14: copyRowsN<28>(d, dStride, s, sStride, h); return;
+	case 15: copyRowsN<30>(d, dStride, s, sStride, h); return;
+	case 16: copyRowsN<32>(d, dStride, s, sStride, h); return;
 	}
-	return false;
 }
 
 uint32_t g_stCutCopyGR;
@@ -3948,7 +3911,9 @@ static void copyBox(uint8_t *dst, const uint8_t *src, const TrkBox *b) {
 		return;
 	}
 	const int n = b->g1 - b->g0;
-	g_stCutCopyGR += STDL_MulU16((uint16_t)n, (uint16_t)(y1 - y0));
+	if (g_stCutStats) {
+		g_stCutCopyGR += STDL_MulU16((uint16_t)n, (uint16_t)(y1 - y0));
+	}
 	if (n == kSTLayerW / 16) {
 		const int off = y0 * kSTRowBytes;
 		copyBytes(dst + off, src + off, (y1 - y0) * kSTRowBytes);

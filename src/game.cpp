@@ -437,8 +437,6 @@ void Game::run() {
 		_res.fini();
 		return;
 	}
-#endif
-#ifdef ATARIST
 	if (!g_options.skip_intro && g_options.replay < 0) {
 #else
 	if (!g_options.skip_intro) {
@@ -1700,9 +1698,11 @@ void Game::playCutscene(int id) {
 	if (_cut._id != 0xFFFF) {
 		info("Cutscene %02X start", _cut._id);
 #ifdef ATARIST
-		// A cutscene takes about 140K for its caches and pages. On a
-		// 2.5MB machine the sprite bakes and kept rooms can leave less
-		// than that: they go, and come back as play needs them.
+		// A cutscene takes about 140K for its caches and pages (a 4MB
+		// machine's four-times arenas only where 400K is left over
+		// beside them, segArenaSize). On a 2.5MB machine the sprite
+		// bakes and kept rooms can leave less than that: they go, and
+		// come back as play needs them.
 		if (ST_freeK() < 200) {
 			ST_releaseRamCaches();
 		}

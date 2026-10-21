@@ -53,128 +53,49 @@ COPY_ROW_N(6, "%%d0-%%d5", "d0","d1","d2","d3","d4","d5")
 COPY_ROW_N(8, "%%d0-%%d7", "d0","d1","d2","d3","d4","d5","d6","d7")
 COPY_ROW_N(10, "%%d0-%%d7/%%a2-%%a3", "d0","d1","d2","d3","d4","d5","d6","d7","a2","a3")
 #undef COPY_ROW_N
-// 6-15 groups: two or three bursts of up to eleven longs, the most
-// movem can carry here; a C loop of longs ran ~21 cycles a long
-template <> inline void copyRowN<12>(uint32_t *dst, const uint32_t *src) {
-	__asm__ volatile(
-		"movem.l (%1)+,%%d0-%%d5\n\t"
-		"movem.l %%d0-%%d5,(%0)\n\t"
-		"movem.l (%1)+,%%d0-%%d5\n\t"
-		"movem.l %%d0-%%d5,24(%0)"
-		: "+a"(dst), "+a"(src)
-		:
-		: "d0", "d1", "d2", "d3", "d4", "d5", "memory");
-}
-template <> inline void copyRowN<14>(uint32_t *dst, const uint32_t *src) {
-	__asm__ volatile(
-		"movem.l (%1)+,%%d0-%%d6\n\t"
-		"movem.l %%d0-%%d6,(%0)\n\t"
-		"movem.l (%1)+,%%d0-%%d6\n\t"
-		"movem.l %%d0-%%d6,28(%0)"
-		: "+a"(dst), "+a"(src)
-		:
-		: "d0", "d1", "d2", "d3", "d4", "d5", "d6", "memory");
-}
-template <> inline void copyRowN<16>(uint32_t *dst, const uint32_t *src) {
-	__asm__ volatile(
-		"movem.l (%1)+,%%d0-%%d7\n\t"
-		"movem.l %%d0-%%d7,(%0)\n\t"
-		"movem.l (%1)+,%%d0-%%d7\n\t"
-		"movem.l %%d0-%%d7,32(%0)"
-		: "+a"(dst), "+a"(src)
-		:
-		: "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7", "memory");
-}
-template <> inline void copyRowN<18>(uint32_t *dst, const uint32_t *src) {
-	__asm__ volatile(
-		"movem.l (%1)+,%%d0-%%d7/%%a2\n\t"
-		"movem.l %%d0-%%d7/%%a2,(%0)\n\t"
-		"movem.l (%1)+,%%d0-%%d7/%%a2\n\t"
-		"movem.l %%d0-%%d7/%%a2,36(%0)"
-		: "+a"(dst), "+a"(src)
-		:
-		: "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7", "a2", "memory");
-}
-template <> inline void copyRowN<20>(uint32_t *dst, const uint32_t *src) {
-	__asm__ volatile(
-		"movem.l (%1)+,%%d0-%%d7/%%a2-%%a3\n\t"
-		"movem.l %%d0-%%d7/%%a2-%%a3,(%0)\n\t"
-		"movem.l (%1)+,%%d0-%%d7/%%a2-%%a3\n\t"
-		"movem.l %%d0-%%d7/%%a2-%%a3,40(%0)"
-		: "+a"(dst), "+a"(src)
-		:
-		: "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7", "a2", "a3", "memory");
-}
-template <> inline void copyRowN<22>(uint32_t *dst, const uint32_t *src) {
-	__asm__ volatile(
-		"movem.l (%1)+,%%d0-%%d7/%%a2-%%a4\n\t"
-		"movem.l %%d0-%%d7/%%a2-%%a4,(%0)\n\t"
-		"movem.l (%1)+,%%d0-%%d7/%%a2-%%a4\n\t"
-		"movem.l %%d0-%%d7/%%a2-%%a4,44(%0)"
-		: "+a"(dst), "+a"(src)
-		:
-		: "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7", "a2", "a3", "a4", "memory");
-}
-template <> inline void copyRowN<24>(uint32_t *dst, const uint32_t *src) {
-	__asm__ volatile(
-		"movem.l (%1)+,%%d0-%%d7\n\t"
-		"movem.l %%d0-%%d7,(%0)\n\t"
-		"movem.l (%1)+,%%d0-%%d7\n\t"
-		"movem.l %%d0-%%d7,32(%0)\n\t"
-		"movem.l (%1)+,%%d0-%%d7\n\t"
-		"movem.l %%d0-%%d7,64(%0)"
-		: "+a"(dst), "+a"(src)
-		:
-		: "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7", "memory");
-}
-template <> inline void copyRowN<26>(uint32_t *dst, const uint32_t *src) {
-	__asm__ volatile(
-		"movem.l (%1)+,%%d0-%%d7/%%a2\n\t"
-		"movem.l %%d0-%%d7/%%a2,(%0)\n\t"
-		"movem.l (%1)+,%%d0-%%d7/%%a2\n\t"
-		"movem.l %%d0-%%d7/%%a2,36(%0)\n\t"
-		"movem.l (%1)+,%%d0-%%d7\n\t"
-		"movem.l %%d0-%%d7,72(%0)"
-		: "+a"(dst), "+a"(src)
-		:
-		: "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7", "a2", "memory");
-}
-template <> inline void copyRowN<28>(uint32_t *dst, const uint32_t *src) {
-	__asm__ volatile(
-		"movem.l (%1)+,%%d0-%%d7/%%a2-%%a3\n\t"
-		"movem.l %%d0-%%d7/%%a2-%%a3,(%0)\n\t"
-		"movem.l (%1)+,%%d0-%%d7/%%a2\n\t"
-		"movem.l %%d0-%%d7/%%a2,40(%0)\n\t"
-		"movem.l (%1)+,%%d0-%%d7/%%a2\n\t"
-		"movem.l %%d0-%%d7/%%a2,76(%0)"
-		: "+a"(dst), "+a"(src)
-		:
-		: "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7", "a2", "a3", "memory");
-}
-template <> inline void copyRowN<30>(uint32_t *dst, const uint32_t *src) {
-	__asm__ volatile(
-		"movem.l (%1)+,%%d0-%%d7/%%a2-%%a3\n\t"
-		"movem.l %%d0-%%d7/%%a2-%%a3,(%0)\n\t"
-		"movem.l (%1)+,%%d0-%%d7/%%a2-%%a3\n\t"
-		"movem.l %%d0-%%d7/%%a2-%%a3,40(%0)\n\t"
-		"movem.l (%1)+,%%d0-%%d7/%%a2-%%a3\n\t"
-		"movem.l %%d0-%%d7/%%a2-%%a3,80(%0)"
-		: "+a"(dst), "+a"(src)
-		:
-		: "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7", "a2", "a3", "memory");
-}
-template <> inline void copyRowN<32>(uint32_t *dst, const uint32_t *src) {
-	__asm__ volatile(
-		"movem.l (%1)+,%%d0-%%d7/%%a2-%%a4\n\t"
-		"movem.l %%d0-%%d7/%%a2-%%a4,(%0)\n\t"
-		"movem.l (%1)+,%%d0-%%d7/%%a2-%%a4\n\t"
-		"movem.l %%d0-%%d7/%%a2-%%a4,44(%0)\n\t"
-		"movem.l (%1)+,%%d0-%%d7/%%a2-%%a3\n\t"
-		"movem.l %%d0-%%d7/%%a2-%%a3,88(%0)"
-		: "+a"(dst), "+a"(src)
-		:
-		: "d0","d1","d2","d3","d4","d5","d6","d7","a2","a3","a4","memory");
-}
+// 6-16 groups: two or three bursts of up to eleven longs, the most
+// movem can carry here; a C loop of longs ran ~21 cycles a long. R the
+// registers of each burst, OFF where each burst after the first goes.
+#define COPY_ROW_2(N, R, OFF, ...) \
+	template <> inline void copyRowN<N>(uint32_t *dst, const uint32_t *src) { \
+		__asm__ volatile( \
+			"movem.l (%1)+," R "\n\tmovem.l " R ",(%0)\n\t" \
+			"movem.l (%1)+," R "\n\tmovem.l " R "," #OFF "(%0)" \
+			: "+a"(dst), "+a"(src) : : __VA_ARGS__, "memory"); \
+	}
+#define COPY_ROW_3(N, R1, OFF2, R2, OFF3, R3, ...) \
+	template <> inline void copyRowN<N>(uint32_t *dst, const uint32_t *src) { \
+		__asm__ volatile( \
+			"movem.l (%1)+," R1 "\n\tmovem.l " R1 ",(%0)\n\t" \
+			"movem.l (%1)+," R2 "\n\tmovem.l " R2 "," #OFF2 "(%0)\n\t" \
+			"movem.l (%1)+," R3 "\n\tmovem.l " R3 "," #OFF3 "(%0)" \
+			: "+a"(dst), "+a"(src) : : __VA_ARGS__, "memory"); \
+	}
+#define ST_D0_5 "%%d0-%%d5"
+#define ST_D0_6 "%%d0-%%d6"
+#define ST_D0_7 "%%d0-%%d7"
+#define ST_D0_A2 "%%d0-%%d7/%%a2"
+#define ST_D0_A3 "%%d0-%%d7/%%a2-%%a3"
+#define ST_D0_A4 "%%d0-%%d7/%%a2-%%a4"
+COPY_ROW_2(12, ST_D0_5, 24, "d0","d1","d2","d3","d4","d5")
+COPY_ROW_2(14, ST_D0_6, 28, "d0","d1","d2","d3","d4","d5","d6")
+COPY_ROW_2(16, ST_D0_7, 32, "d0","d1","d2","d3","d4","d5","d6","d7")
+COPY_ROW_2(18, ST_D0_A2, 36, "d0","d1","d2","d3","d4","d5","d6","d7","a2")
+COPY_ROW_2(20, ST_D0_A3, 40, "d0","d1","d2","d3","d4","d5","d6","d7","a2","a3")
+COPY_ROW_2(22, ST_D0_A4, 44, "d0","d1","d2","d3","d4","d5","d6","d7","a2","a3","a4")
+COPY_ROW_3(24, ST_D0_7, 32, ST_D0_7, 64, ST_D0_7, "d0","d1","d2","d3","d4","d5","d6","d7")
+COPY_ROW_3(26, ST_D0_A2, 36, ST_D0_A2, 72, ST_D0_7, "d0","d1","d2","d3","d4","d5","d6","d7","a2")
+COPY_ROW_3(28, ST_D0_A3, 40, ST_D0_A2, 76, ST_D0_A2, "d0","d1","d2","d3","d4","d5","d6","d7","a2","a3")
+COPY_ROW_3(30, ST_D0_A3, 40, ST_D0_A3, 80, ST_D0_A3, "d0","d1","d2","d3","d4","d5","d6","d7","a2","a3")
+COPY_ROW_3(32, ST_D0_A4, 44, ST_D0_A4, 88, ST_D0_A3, "d0","d1","d2","d3","d4","d5","d6","d7","a2","a3","a4")
+#undef COPY_ROW_2
+#undef COPY_ROW_3
+#undef ST_D0_5
+#undef ST_D0_6
+#undef ST_D0_7
+#undef ST_D0_A2
+#undef ST_D0_A3
+#undef ST_D0_A4
 #else
 template <int N> static inline void copyRowN(uint32_t *dst, const uint32_t *src) {
 	memcpy(dst, src, N * 4);
@@ -190,11 +111,10 @@ template <int N> static inline void copyRowsN(uint8_t *d, int dStride, const uin
 	}
 }
 
-// h rows of a run of whole groups (1-16), through copyRowN; false for
-// any other width, which the caller copies its own way
-// one copy, not inlined into each caller: with every width it is
-// a few K a copy, and each caller pays one call per copy, not per row
-bool ST_copyGroupRows(uint8_t *d, int dStride, const uint8_t *s, int sStride, int groups, int h);
+// h rows of a run of 1-16 whole groups, through copyRowN. One copy,
+// not inlined into each caller: with every width it is a few K a copy,
+// and each caller pays one call per copy, not per row
+void ST_copyGroupRows(uint8_t *d, int dStride, const uint8_t *s, int sStride, int groups, int h);
 
 // sprite draw flags (replacing Video::drawSpriteSub1..6)
 enum {
@@ -291,6 +211,9 @@ extern STPerf g_stPerf;
 extern uint32_t g_stCutCopyGR;
 // ... and what the drawing touched, a box per shape (overlaps counted twice)
 extern uint32_t g_stCutTouchGR;
+// both counted only while the stats are kept (logging): the touch count
+// alone was a multiply on every page touch, 3-8K cycles a frame
+extern bool g_stCutStats;
 // a set of counters as one log fragment
 void ST_perfFormat(const STPerf &p, char *buf, int len);
 

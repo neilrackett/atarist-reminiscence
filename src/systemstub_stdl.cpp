@@ -163,6 +163,7 @@ struct SystemStub_STDL : SystemStub {
 	bool _haveColW;
 	void fadedColours(STDL_Colour *c);
 	void writeHwPalette();
+	void setHwColours(const STDL_Colour *c);
 	void convertRegion(int x, int y, int w, int h, const uint8_t *buf, int pitch, bool useShadow);
 	void reconvertFromShadow();
 };
@@ -219,8 +220,7 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 		if (!_ovscOpen) {
 			STDL_WaitVBL();
 		}
-		STDL_SetColours(_screen, black, 0, 16);
-		memcpy(_hwShown, black, sizeof(_hwShown));
+		setHwColours(black);
 		if (_ovscOpen) {
 			STDL_WaitVBL();
 		}
@@ -339,20 +339,7 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 	// of blocks) and were spending more time finding their rows than
 	// copying them.
 	if (_yLinear) {
-		uint8_t *d = base + _yOff[y];
-		if (ST_copyGroupRows(d, kScreenStride, s, kSTRowBytes, groups, h)) {
-			return;
-		}
-		for (int j = h; --j >= 0; ) {
-			const uint32_t *src = (const uint32_t *)s;
-			uint32_t *dst = (uint32_t *)d;
-			for (int n = groups; --n >= 0; ) {
-				*dst++ = *src++;
-				*dst++ = *src++;
-			}
-			s += kSTRowBytes;
-			d += kScreenStride;
-		}
+		ST_copyGroupRows(base + _yOff[y], kScreenStride, s, kSTRowBytes, groups, h);
 		return;
 	}
 	switch (groups) {                   // the widths ST_copyGroupRows takes
@@ -372,17 +359,6 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 	case 14: copyMappedRows<28>(base, s, y, h, _yOff, _yDrop); return;
 	case 15: copyMappedRows<30>(base, s, y, h, _yOff, _yDrop); return;
 	case 16: copyMappedRows<32>(base, s, y, h, _yOff, _yDrop); return;   // the cutscene page flip
-	}
-	for (int j = y; j < y + h; ++j, s += kSTRowBytes) {
-		if (_yDrop[j]) {
-			continue;
-		}
-		const uint32_t *src = (const uint32_t *)s;
-		uint32_t *dst = (uint32_t *)(base + _yOff[j]);
-		for (int n = groups; --n >= 0; ) {
-			*dst++ = *src++;
-			*dst++ = *src++;
-		}
 	}
 }
 
@@ -2072,11 +2048,17 @@ void SystemStub_STDL::fadedColours(STDL_Colour *c) {
 	}
 }
 
+// the registers' sixteen colours, and what they were given kept for
+// ST_hwPaletteHash
+void SystemStub_STDL::setHwColours(const STDL_Colour *c) {
+	STDL_SetColours(_screen, c, 0, 16);
+	memcpy(_hwShown, c, sizeof(_hwShown));
+}
+
 void SystemStub_STDL::writeHwPalette() {
 	STDL_Colour c[16];
 	fadedColours(c);
-	STDL_SetColours(_screen, c, 0, 16);
-	memcpy(_hwShown, c, sizeof(_hwShown));
+	setHwColours(c);
 	_hwDirty = false;
 }
 
@@ -2086,7 +2068,7 @@ uint32_t ST_hwPaletteHash() {
 	uint32_t h = 0x811C9DC5;
 	for (int i = 0; i < 16; ++i) {
 		const STDL_Colour &c = g_stub->_hwShown[i];
-		h = ((h << 5) | (h >> 27)) ^ (((uint32_t)c.r << 16) | ((uint32_t)c.g << 8) | c.b);
+		h = ST_rol5(h) ^ (((uint32_t)c.r << 16) | ((uint32_t)c.g << 8) | c.b);
 	}
 	return h;
 }
@@ -2367,8 +2349,7 @@ void SystemStub_STDL::fadeScreen() {
 			c[i].b = (uint8_t)(base[i].b * step >> 3);
 			c[i].unused = 0;
 		}
-		STDL_SetColours(_screen, c, 0, 16);
-		memcpy(_hwShown, c, sizeof(_hwShown));
+		setHwColours(c);
 		STDL_Delay(40);
 	}
 	clearScreen();

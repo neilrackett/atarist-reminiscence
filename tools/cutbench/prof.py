@@ -20,6 +20,5 @@ for l in open(sys.argv[1]):
 k=hz/1000
 T=sum(tot.values())
 print("total exclusive ms %.0f"%(T/k))
-pat=sys.argv[3] if len(sys.argv)>3 else None
 for n,v in sorted(tot.items(),key=lambda x:-x[1])[:int(sys.argv[2]) if len(sys.argv)>2 else 45]:
     print("%8.0f ms excl %8.0f ms incl %7d calls  %s"%(v/k,inc[n]/k,calls[n],n))
