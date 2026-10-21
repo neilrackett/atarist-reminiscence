@@ -213,7 +213,8 @@ enum {
 	kAbCutOldPalette = 1 << 17,    // every palette change converts and writes all 32 entries
 	kAbCutHideAlways = 1 << 18,    // copyScreen scene-wide, and late frames there hidden three in four
 	kAbRingFirst = 1 << 19,        // the sprite ring sized first, leaving the room cache what is over
-	kAbCutSkipBursts = 1 << 20     // late cutscene frames skipped up to three in a row, not spread out
+	kAbCutSkipBursts = 1 << 20,    // late cutscene frames skipped up to three in a row, not spread out
+	kAbCutSmallArenas = 1 << 21    // a 4MB machine's cutscene caches at the 2.5MB sizes
 };
 
 // ST port: the four screen modes, in the order the menu cycles them

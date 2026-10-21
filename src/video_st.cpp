@@ -2744,10 +2744,24 @@ struct SegEntry {
 enum {
 	kSegRec = 18,
 	kSegArena = 32 * 1024,
+	kSegArenaBig = 128 * 1024,     // a 4MB machine's (see ST_segCacheBegin)
 	kSegBuckets = 256,
 };
 static uint8_t *g_segArena;
 static uint32_t g_segUsed;
+static uint32_t g_segArenaSize = kSegArena;
+
+// A scene's caches four times the size on a machine with 3.5MB or more,
+// where the RAM is there when the scene starts (with 400K left over):
+// a long scene then draws more of its polygons and shapes from them
+// rather than walking and baking them again after a flush.
+static uint32_t segArenaSize(uint32_t small, uint32_t big) {
+	if (ATARIST_ramK() >= kSTResidentRamK && !(g_options.ab & kAbCutSmallArenas)
+	    && ST_freeK() >= (long)(big >> 10) + 400) {
+		return big;
+	}
+	return small;
+}
 static SegEntry *g_segHash[kSegBuckets];
 static uint32_t g_segMisses;
 static Point g_segPts[256];
@@ -2775,7 +2789,8 @@ bool ST_segCacheBegin() {
 	g_segCtx.fill01 = kFill01;
 	g_segCtx.fill23 = kFill23;
 	if (!g_segArena) {
-		g_segArena = (uint8_t *)malloc(kSegArena);
+		g_segArenaSize = segArenaSize(kSegArena, kSegArenaBig);
+		g_segArena = (uint8_t *)malloc(g_segArenaSize);
 	}
 	segFlush();
 	return g_segArena != 0;
@@ -2873,10 +2888,12 @@ struct ShpEntry {
 };
 enum {
 	kShpArena = 64 * 1024,
+	kShpArenaBig = 256 * 1024,
 	kShpBuckets = 128,
 	kShpSeen = 512,
 };
 static uint8_t *g_shpArena;
+static uint32_t g_shpArenaSize = kShpArena;
 static uint32_t g_shpUsed;
 static ShpEntry *g_shpHash[kShpBuckets];
 static uint16_t g_shpSeen[kShpSeen];
@@ -2909,7 +2926,8 @@ void ST_shpColoursChanged() {
 static void shpInit() {
 	g_shpDrawn = g_shpBaked = 0;
 	if (!g_shpArena) {
-		g_shpArena = (uint8_t *)malloc(kShpArena);
+		g_shpArenaSize = segArenaSize(kShpArena, kShpArenaBig);
+		g_shpArena = (uint8_t *)malloc(g_shpArenaSize);
 	}
 	if (!g_shpScratch) {
 		g_shpScratch = (uint8_t *)calloc(1, kSTLayerSize);
@@ -2992,8 +3010,8 @@ const void *ST_shpBakeEnd(uint16_t key, int sox, int soy, int x0, int y0, int x1
 	// at worst an op and five words per group, and an end per row
 	const uint32_t need = (sizeof(ShpEntry) + rows * (groups * 12 + 2) + 3) & ~3u;
 	ShpEntry *e = 0;
-	if (need <= kShpArena) {
-		if (g_shpUsed + need > kShpArena) {
+	if (need <= g_shpArenaSize) {
+		if (g_shpUsed + need > g_shpArenaSize) {
 			ST_shpFlush();
 		}
 		e = (ShpEntry *)(g_shpArena + g_shpUsed);
@@ -3136,7 +3154,7 @@ const void *ST_segRecord(const void *key, const void *ptsv, int n) {
 	// a walk makes at most one segment per vertex and one for the
 	// last row
 	const uint32_t need = (sizeof(SegEntry) + (n + 2) * kSegRec + 3) & ~3u;
-	if (g_segUsed + need > kSegArena) {
+	if (g_segUsed + need > g_segArenaSize) {
 		segFlush();
 	}
 	SegEntry *e = (SegEntry *)(g_segArena + g_segUsed);
