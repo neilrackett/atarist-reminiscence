@@ -39,6 +39,55 @@ void Game::col_clearState() {
 	_col_curSlot = _col_slots;
 }
 
+// col_getGridPos's work, inlined into col_preparePiegeState, which asks
+// for every piece of every object each frame and paid ~150 cycles
+// for each call on a 68000
+static inline uint16_t gridPos(const LivePGE *pge, int16_t dx, const int8_t *ctData) {
+	int16_t x = pge->pos_x + dx;
+	int16_t y = pge->pos_y;
+
+	int8_t c = pge->room_location;
+	if (c < 0) return 0xFFFF;
+
+	if (x < 0) {
+		c = ctData[Game::CT_LEFT_ROOM + c];
+		if (c < 0) return 0xFFFF;
+		x += 256;
+	} else if (x >= 256) {
+		c = ctData[Game::CT_RIGHT_ROOM + c];
+		if (c < 0) return 0xFFFF;
+		x -= 256;
+	} else if (y < 0) {
+		c = ctData[Game::CT_UP_ROOM + c];
+		if (c < 0) return 0xFFFF;
+		y += 216;
+	} else if (y >= 216) {
+		c = ctData[Game::CT_DOWN_ROOM + c];
+		if (c < 0) return 0xFFFF;
+		y -= 216;
+	}
+
+	x = (x + 8) >> 4;
+	// (y - 8) / 72 is a library call on 68000; the result only ever
+	// picks one of three rows, and C truncates toward zero, so
+	// -71..71 all land on row 0 exactly as the divide did
+	const int16_t t = y - 8;
+	if (t >= 144) {
+		y = (t >= 216) ? 3 : 2;
+	} else if (t >= 72) {
+		y = 1;
+	} else if (t > -72) {
+		y = 0;
+	} else {
+		y = -1;
+	}
+	if (x < 0 || x > 15 || y < 0 || y > 2) {
+		return 0xFFFF;
+	} else {
+		return y * 16 + x + c * 64;
+	}
+}
+
 void Game::col_preparePiegeState(LivePGE *pge) {
 	debug(DBG_COL, "Game::col_preparePiegeState() pge_num=%ld", pge - &_pgeLive[0]);
 	CollisionSlot *ct_slot1, *ct_slot2;
@@ -53,7 +102,7 @@ void Game::col_preparePiegeState(LivePGE *pge) {
 		if (ct_slot2 + 1 > &_col_slots[255])
 			return;
 		_col_curSlot = ct_slot2 + 1;
-		int16_t pos = col_getGridPos(pge, i);
+		int16_t pos = gridPos(pge, i, _res._ctData);
 		if (pos < 0) {
 			if (ct_slot1 == 0) {
 				pge->collision_slot = 0xFF;
@@ -102,49 +151,7 @@ void Game::col_preparePiegeState(LivePGE *pge) {
 }
 
 uint16_t Game::col_getGridPos(LivePGE *pge, int16_t dx) const {
-	int16_t x = pge->pos_x + dx;
-	int16_t y = pge->pos_y;
-
-	int8_t c = pge->room_location;
-	if (c < 0) return 0xFFFF;
-
-	if (x < 0) {
-		c = _res._ctData[CT_LEFT_ROOM + c];
-		if (c < 0) return 0xFFFF;
-		x += 256;
-	} else if (x >= 256) {
-		c = _res._ctData[CT_RIGHT_ROOM + c];
-		if (c < 0) return 0xFFFF;
-		x -= 256;
-	} else if (y < 0) {
-		c = _res._ctData[CT_UP_ROOM + c];
-		if (c < 0) return 0xFFFF;
-		y += 216;
-	} else if (y >= 216) {
-		c = _res._ctData[CT_DOWN_ROOM + c];
-		if (c < 0) return 0xFFFF;
-		y -= 216;
-	}
-
-	x = (x + 8) >> 4;
-	// (y - 8) / 72 is a library call on 68000; the result only ever
-	// picks one of three rows, and C truncates toward zero, so
-	// -71..71 all land on row 0 exactly as the divide did
-	const int16_t t = y - 8;
-	if (t >= 144) {
-		y = (t >= 216) ? 3 : 2;
-	} else if (t >= 72) {
-		y = 1;
-	} else if (t > -72) {
-		y = 0;
-	} else {
-		y = -1;
-	}
-	if (x < 0 || x > 15 || y < 0 || y > 2) {
-		return 0xFFFF;
-	} else {
-		return y * 16 + x + c * 64;
-	}
+	return gridPos(pge, dx, _res._ctData);
 }
 
 int16_t Game::col_findSlot(int16_t pos) const {

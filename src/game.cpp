@@ -61,7 +61,7 @@ static bool stDecode(void *ctx, int kind, const uint8_t *data, int w, int h, uin
 }
 
 // the part of a sprite on the layer, for the dirty blocks
-static void stMarkClipped(Video &vid, int x, int y, int w, int h) {
+static inline void stMarkClipped(Video &vid, int x, int y, int w, int h) {
 	if (vid.ST_dlOn() && ST_dlRecording(vid._frontLayer)) {
 		return;                      // the display list keeps its own marks
 	}
@@ -2626,6 +2626,9 @@ void Game::drawObject(const uint8_t *dataPtr, int16_t x, int16_t y, uint8_t flag
 	}
 }
 
+#ifdef ATARIST
+INLINE_ALWAYS                        // drawObject's, once for every piece of every object drawn
+#endif
 void Game::drawObjectFrame(const uint8_t *bankDataPtr, const uint8_t *dataPtr, int16_t x, int16_t y, uint8_t flags) {
 	debug(DBG_GAME, "Game::drawObjectFrame(%p, %d, %d, 0x%X)", dataPtr, x, y, flags);
 	const uint8_t *src = bankDataPtr + dataPtr[0] * 32;

@@ -146,6 +146,15 @@ void Game::pge_loadForCurrentLevel(uint16_t idx) {
 	}
 }
 
+#ifdef ATARIST
+// pge_process's helpers are inlined into it, their only caller: it
+// runs for every live object every step, and on a 68000 each call cost
+// a few hundred cycles of saving registers and passing arguments
+#define PGE_INLINE INLINE_ALWAYS
+#else
+#define PGE_INLINE
+#endif
+
 void Game::pge_process(LivePGE *pge) {
 	debug(DBG_PGE, "Game::pge_process() pge_num=%ld", pge - &_pgeLive[0]);
 	_pge_playAnimSound = true;
@@ -274,7 +283,7 @@ void Game::pge_playAnimSound(LivePGE *pge, uint16_t arg2) {
 	}
 }
 
-void Game::pge_setupAnim(LivePGE *pge) {
+PGE_INLINE void Game::pge_setupAnim(LivePGE *pge) {
 	debug(DBG_PGE, "Game::pge_setupAnim() pgeNum=%ld", pge - &_pgeLive[0]);
 	const uint8_t *anim_data = _res.getAniData(pge->obj_type);
 	if (_res.readUint16(anim_data) < pge->anim_seq) {
@@ -302,7 +311,7 @@ void Game::pge_setupAnim(LivePGE *pge) {
 	}
 }
 
-int Game::pge_execute(LivePGE *live_pge, const InitPGE *init_pge, const Object *obj) {
+PGE_INLINE int Game::pge_execute(LivePGE *live_pge, const InitPGE *init_pge, const Object *obj) {
 	debug(DBG_PGE, "Game::pge_execute() pge_num=%ld op1=0x%X op2=0x%X op3=0x%X", live_pge - &_pgeLive[0], obj->opcode1, obj->opcode2, obj->opcode3);
 	pge_OpcodeProc op;
 	ObjectOpcodeArgs args;
@@ -489,7 +498,7 @@ uint16_t Game::pge_deathAck(LivePGE *pge) {
 	return 0;
 }
 
-void Game::pge_setupOtherPieges(LivePGE *pge, const InitPGE *init_pge) {
+PGE_INLINE void Game::pge_setupOtherPieges(LivePGE *pge, const InitPGE *init_pge) {
 	const int8_t *room_ct_data = 0;
 	if (pge->pos_x <= -10) {
 		pge->pos_x += 256;
