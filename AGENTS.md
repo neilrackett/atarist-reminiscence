@@ -123,22 +123,27 @@ test. `gh` against these repositories needs `-R`.
 ## Where the time goes, and what is left
 
 Measured over the bench replays in October 2026 (r29 plus the
-busy-rooms round): they run at 25-57ms a frame on a plain ST and 17-40ms
-on a Mega STE, about 40% faster than r29. Death Tower, by share of a
-frame on a plain ST: game logic about 29%, the sprite path (bakes, the
-display list, STDL's blits) about 30%, the copy to the screen 4-5%,
-restoring blocks about 5%.
+busy-rooms round): they run at 23-55ms a frame on a plain ST and 15-38ms
+on a Mega STE, over 40% faster than r29. Death Tower, by share of a
+frame on a plain ST: game logic about 27%, the sprite path (bakes, the
+display list, STDL's blits) about 32%, the copy to the screen about 5%,
+restoring blocks about 5.5%.
 
 Each of these was measured and left for later:
 
-1. **Game logic, about 20% of a Death Tower frame in five functions**
-   (`pge_process` 6%, `pge_execute` 4%, `pge_setupAnim` 4%,
-   `col_preparePiegeState` 4%, `col_getGridPos` 1.4%). Upstream's
-   interpreter pays 500-1500 cycles a call in prologues, argument
-   shuffling and member-function-pointer dispatch, and `pge_setupAnim`'s
-   reads are byte by byte because the data's alignment is not
-   guaranteed. Each fix is worth 0.5-2%; the replays' end states catch
-   any change in behaviour.
+1. **Game logic, about 17% of a Death Tower frame in two functions**:
+   `pge_process` 12% (with `pge_execute`, `pge_setupAnim` and
+   `pge_setupOtherPieges` inlined into it, its only caller: -3.5% of a
+   frame) and `col_preparePiegeState` 5% (with `col_getGridPos` inlined:
+   -1%). What is left there is upstream's interpreter itself: each object
+   rule's opcodes are called through member-function pointers, an
+   `ObjectOpcodeArgs` on the stack each, and the opcode handlers cannot be
+   inlined through that table. Turning the table into plain functions, or
+   the commonest opcodes into a switch, is the next step and a bigger one.
+   Single-caller helpers in hot loops are worth inlining first
+   (`prepareAnimsHelper` and `drawAnimBuffer` have several callers, so
+   inlining them copies them); the replays' end states catch any change in
+   behaviour.
 2. **A level's first room** takes 1.1-2.1s on a plain ST; a level's later
    rooms 0.4-0.95s, a room seen before about 65ms. In the first: the
    palette merge (`SystemStub_STDL::quantiseClusters`) about 600ms
@@ -183,6 +188,9 @@ Measured and rejected, so not worth trying again as they were:
   are only 2-5% of a frame. The BLiTTER on or off in play: no difference.
 - The two live-object walks (`stepLogic`, `pge_prepare`) as one shared
   iterator: 1.3% slower.
+- Turning away objects with no collision data inline, before
+  `col_preparePiegeState`'s eleven-register save: 0.1%, not worth a
+  second definition in game.h.
 - Unpacked banks in a block of their own rather than in the bank arena:
   the room cache lost its slots, and level 5's revisits went from 65ms to
   800ms.

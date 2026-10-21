@@ -305,10 +305,18 @@ void Video::ST_frameEnd() {
 		_dlBackGen = _stBackGen;
 		return;
 	}
+	// The block rows' masks are walked two rows a long: 28 rows of
+	// 16-bit masks, each loop over them a handful of indexed moves a
+	// row, came to 2-3% of a frame on a plain ST. The arrays are at even
+	// addresses, which is all a 68000 asks of a long.
+	typedef char BlockRowsEven[(kBlockRows & 1) == 0 ? 1 : -1];
 	uint16_t R[kBlockRows];
-	for (int j = 0; j < kBlockRows; ++j) {
-		R[j] = _blkForce[j];
-		_blkForce[j] = 0;
+	{
+		uint32_t *r = (uint32_t *)R, *f = (uint32_t *)_blkForce;
+		for (int n = kBlockRows / 2; --n >= 0; ) {
+			*r++ = *f;
+			*f++ = 0;
+		}
 	}
 	// a decoded room, a full refresh, anything drawn over the whole
 	// front layer: nothing on it can be trusted, so it is all redrawn
@@ -322,16 +330,22 @@ void Video::ST_frameEnd() {
 		memset(_prioDirty, 0, sizeof(_prioDirty));
 	} else {
 		ST_restoreBlocks(R, _prioDirty);
-		for (int j = 0; j < kBlockRows; ++j) {
-			_prioDirty[j] &= (uint16_t)~R[j];
+		uint32_t *p = (uint32_t *)_prioDirty;
+		const uint32_t *r = (const uint32_t *)R;
+		for (int n = kBlockRows / 2; --n >= 0; ) {
+			*p++ &= ~*r++;
 		}
 	}
 	ST_dlReplay();
 	// the screen gets exactly what was redrawn, and owes nothing after
-	for (int j = 0; j < kBlockRows; ++j) {
-		_blkDirty[j] = R[j];
-		_blkOwed[j] = 0;
-		_blkShown[j] = 0;
+	{
+		uint32_t *d = (uint32_t *)_blkDirty, *o = (uint32_t *)_blkOwed, *s = (uint32_t *)_blkShown;
+		const uint32_t *r = (const uint32_t *)R;
+		for (int n = kBlockRows / 2; --n >= 0; ) {
+			*d++ = *r++;
+			*o++ = 0;
+			*s++ = 0;
+		}
 	}
 }
 
@@ -471,11 +485,15 @@ void Video::updateScreen() {
 			j = j2;
 		}
 		// a fresh mark has been blitted and now awaits its restore;
-		// a restored block has had its second blit and is done
-		for (int j = 0; j < rows; ++j) {
-			_blkShown[j] = _blkDirty[j];
-			_blkDirty[j] = 0;
-			_blkOwed[j] = 0;
+		// a restored block has had its second blit and is done (two
+		// rows a long, as ST_frameEnd walks them)
+		{
+			uint32_t *s = (uint32_t *)_blkShown, *d = (uint32_t *)_blkDirty, *o = (uint32_t *)_blkOwed;
+			for (int n = kBlockRows / 2; --n >= 0; ) {
+				*s++ = *d;
+				*d++ = 0;
+				*o++ = 0;
+			}
 		}
 		// With the display list a still frame copies nothing, but a
 		// palette change waiting for the stub must still reach the

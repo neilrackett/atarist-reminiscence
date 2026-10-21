@@ -159,9 +159,11 @@ const uint16_t kSTColsTo[16] = {
 };
 
 void ST_takePrioBlocks(uint16_t *acc) {
-	for (int j = 0; j < kSTBlockRows; ++j) {
-		acc[j] |= g_prioBlk[j];
-		g_prioBlk[j] = 0;
+	// two rows a long (see Video::ST_frameEnd)
+	uint32_t *a = (uint32_t *)acc, *b = (uint32_t *)g_prioBlk;
+	for (int n = kSTBlockRows / 2; --n >= 0; ) {
+		*a++ |= *b;
+		*b++ = 0;
 	}
 	g_prioAllBlk = false;
 }
