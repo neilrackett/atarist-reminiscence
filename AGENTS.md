@@ -7,6 +7,48 @@ anyone changing the port: how to build it, the rules the machine sets,
 how a change is shown to be right, and what is known about where the
 time goes. For playing it, see `README.md`; for the tools, `tools/README.md`.
 
+## Finding your way
+
+Most of `src/` is upstream's engine, changed in place under
+`#ifdef ATARIST` where the ST needs something else. The port's own files:
+
+| File | What it is |
+|---|---|
+| `main_atari.cpp` | entry point: reads `RS.CFG` into `g_options`, finds the data |
+| `systemstub_stdl.cpp` | the platform layer on STDL: screen modes and borders, the colour remap and its quantiser (256 logical colours to 16), input, the copy of the layer to the screen (`copyRectPlanar`), the start-up log lines |
+| `video_st.cpp`, `video_st.h` | the planar layer the engine draws into (4 planes plus a priority plane, 256x224), its drawing primitives, room tiles and SGD backgrounds, perf counters |
+| `spritecache_st.cpp` | gameplay sprites baked to planar once and kept in a RAM-sized ring |
+| `displaylist_st.cpp`, `.h` | a frame's draws written down, compared with the last frame's, only what changed redrawn |
+| `palette_st.cpp` | custom palettes (`PALETTE\`, `palette_custom=true`) |
+| `ym_sfx_st.cpp` | sound effects on the YM for an ST with no DMA sound |
+| `st_stubs.cpp` | empty stand-ins for the engine's other platforms, so their code is not linked |
+
+Also changed for the ST, among others: `game.cpp` (the title menu with
+Start and Options, the 30Hz deadline pacing in `updateTiming`, record and
+replay, the save format), `cutscene.cpp` (cached polygons and shapes as
+sprites), `resource.cpp` (`UNPACKED\`, the bank arena, resident monster
+sprites), `video.cpp` (the room decode, the room cache, the block restore
+and the frame begin and end), `mixer.cpp` and `mod_player.cpp` (ProTracker
+modules on an STE's DMA sound through STDL's voices, YM streams from
+`MUSIC\*.STM` on a plain ST). `docs/configuration.md` lists the `RS.CFG`
+options a player sees; the hidden ones (`record=`, `replay=`, `ab=`...)
+are in `src/intern.h`.
+
+## Setting up
+
+- **Game data** comes from the player's own Amiga disks and never goes in
+  git. `tools/extract-data.sh disks/*.ipf` (see `tools/README.md`) or
+  RExtract (`labs.neilrackett.com/web-rextract`) fill `dist/DATA\`;
+  `tools/make-music.sh` makes `dist/MUSIC\` and
+  `tools/make-unpacked.py` `dist/UNPACKED\`. Neil's ADFs are in
+  `tools/adf/`.
+- **Hatari** with cycle-exact emulation, and TOS images in `tmp/tos/`
+  (not in git): the bench boots `TOS 2.06 - UK - Original.IMG`.
+- **The bench scenarios** (`tmp/bench/scenarios/`) are recorded from
+  Neil's data, so a fresh clone has none: record some
+  (`tools/README.md`, "Recording"), then make the reference run before
+  using `verify.sh`.
+
 ## Build
 
 ```
@@ -21,6 +63,12 @@ symbols). Check the `.TOS`'s time after a build: a filtered log has hidden
 a link error before, and the old binary was tested. The container only
 sees this directory, so copy anything you want `m68k-atari-mint-objdump`
 to read (an ELF from elsewhere) into `tmp/` first.
+
+**STDL** is the `stdl/` submodule, a library with its own repository,
+releases and `AGENTS.md`; the Makefile builds `stdl/libstdl.a` from it.
+Never change it from here: a library change is made there and released,
+and the port moves to it in a commit of its own ("STDL v1.15.1: ...",
+currently v1.15.1), measured like any other change.
 
 The desktop SDL build shares most of the engine and CI does not build it,
 so build it by hand after touching shared files: the sources in
@@ -63,7 +111,10 @@ so build it by hand after touching shared files: the sources in
   room tile cache (`ATARIST_ramK() >= kSTResidentRamK`, 3.5MB). Big caches
   come from GEMDOS and go back at a level load (`ST_releaseRamCaches`), so
   nothing long-lived sits between one level's data and the next. Real
-  hardware has about 70K less free than Hatari.
+  hardware has less free than Hatari by whatever is resident: about 70K
+  for a hard disk driver alone, but 550K on a 4MB Mega STE with a network
+  stack, a pad driver and accessories loaded (October 2026), which cost
+  the room cache its slots and a room revisit 245ms instead of 60.
 - **Comments say why**, with the number that decided it.
 
 ## Testing
@@ -114,11 +165,53 @@ byte. RExtract's tests compare them over the real disks with
 `REXTRACT_FIXTURES` (see its README). Do not run RExtract's
 `pnpm run build`, or touch a dev server on port 5173: those are Neil's.
 
+**Traps that have each cost time:**
+
+- In zsh an unquoted `$LIST` stays one word: run scenario lists through
+  `bash -c`, or the scripts get one long scenario name.
+- Hatari's `--memsize 2.5` means 2MB (whole MiB, or KiB): 2.5MB is
+  `2560`. 2MB is not supported, so a failure there is not a bug.
+- Never boot TOS 1.02 through run.sh.
+- Two builds in the same minute show the same time on the `.TOS`: compare
+  the files, not the listing.
+- The data is too big for a floppy: the game always runs from a hard
+  disk, so floppy timing never matters.
+
 ## Shipping
 
-Neil reviews before anything is committed or pushed; commits carry no
-`Co-Authored-By` trailer. Releases are tags he makes after a hardware
-test. `gh` against these repositories needs `-R`.
+- Neil reviews before anything is committed or pushed; commits carry no
+  `Co-Authored-By` trailer, and their messages say what changed and why,
+  with the measurement.
+- **Anything that lands on `main` is a release**: `release.yml` builds
+  it, tags the next `v0.5.6-atarist.N`, moves the `latest` tag and
+  replaces the files on the `latest` release (pushes touching only
+  Markdown or `CHANGES.txt` are skipped). So work happens on a branch,
+  and reaches `main` only after Neil's hardware test. `pr.yml` only
+  builds.
+- `CHANGES.txt` lists the changes to the shared engine that every build
+  gets; Atari-only work is not listed there.
+- Some things are left out of the player's docs on purpose: the hidden
+  `RS.CFG` options, and the overscan modes' RAM gate (`kOverscanMinK`,
+  2.5MB).
+- `gh` against these repositories needs `-R owner/repo`.
+
+## Settled, parked and closed
+
+Investigations that ended, so nobody starts them again without a reason:
+
+- **The STE's audio click: closed.** Two STDL bugs fixed (v1.8.2); the
+  rare click left is the hardware's own baseline. Do not hunt it again.
+- **Overscan on hardware: parked.** The default screen is Fit (no border
+  open); the border modes stay as options.
+- **Double buffering: parked**, to be looked at with an STDL bump; measure
+  the copy pass before starting.
+- **Pacing**: the 30Hz deadline pacing shipped (about 30 game steps a
+  second on every machine); locking a Mega STE to 60Hz is deferred.
+- **A mono (SM124) build: parked**; neither prototype made a seamless
+  mono picture at colour speed on every machine.
+- **2MB machines: dropped** (2.5MB minimum since September 2026). Real
+  hardware has less free than Hatari, by 70K or a lot more depending on
+  what is resident (see "RAM" above).
 
 ## Where the time goes, and what is left
 
