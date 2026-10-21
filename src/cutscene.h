@@ -90,7 +90,9 @@ struct Cutscene {
 	// background the following frames restore from.
 	bool _stSkipDraw;
 	bool _stSkipShow;         // drawn, but not pushed to the screen
-	bool _stUsesCopyScreen;   // scene builds frames on the previous one
+	bool _stUsesCopyScreen;   // this part builds frames on the previous one
+	uint16_t _stCopyParts;    // the parts that do, a bit each (the prescan)
+	uint8_t _stLastPush;      // ms the last frame's push took
 	int _stSkipRun;
 	uint32_t _stSched;        // scripted clock, in stub time
 	uint16_t _statSkipped;
@@ -135,8 +137,56 @@ struct Cutscene {
 	// frameDelay budgets (50-116ms each)
 	uint16_t _statFrames, _statLate;
 	uint32_t _statWork, _statBudget, _statCopy;
+#ifdef ATARIST
+	// Per-frame playback stats, with logging=true: what each frame
+	// cost and what it drew, logged eight frames to a line with a
+	// summary when a scene's loop ends (stStatsEnd). replay_hash=true
+	// also hashes every drawn frame into CUTHASH.BIN - the check that
+	// an optimisation draws exactly what it replaced - and counts the
+	// shapes drawn just as on the frames before.
+	struct StFrameStat {
+		uint16_t work;            // ms since the previous frame ended
+		uint16_t polyHit, polyMiss;
+		uint16_t restoreGR;       // group-rows the restore copied
+		uint8_t budget4;          // the frame's budget, ms / 4
+		uint8_t push, restore;    // ms
+		uint8_t flags;            // kStF*
+		uint8_t shapes, xform;    // op_drawShape, and the scaled/rotated kinds
+		uint8_t sprHit, sprBake;  // shapes drawn as sprites, and baked
+		uint8_t refFirst, refClip, refShadow;  // not as sprites: not baked yet, clipped, shadow or too big
+		uint8_t ellipses, shadows;
+		uint8_t same1, same2;     // shapes as on the frame before, and the one before that
+	};
+	enum {
+		kStFSkipped = 1, kStFUnshown = 2, kStFLate = 4, kStFPalette = 8,
+		kStFCaption = 16, kStFClear = 32
+	};
+	enum { kStRing = 1024, kStHist = 80, kStKeys = 255, kStHashMax = 2048 };
+	StFrameStat *_stRing;
+	StFrameStat _stCur;
+	uint16_t _stRingN;
+	uint16_t _stHist[kStHist];    // frames by work, in 5ms steps
+	uint16_t _stSceneId;
+	uint32_t _stSegHit0, _stSegMiss0, _stShpDrawn0, _stShpBaked0;
+	int32_t _stLastDelay, _stLastBudget;
+	bool _stLastLate;
+	uint32_t *_stHash;
+	uint32_t *_stPalHash;         // the colours shown, per frame
+	uint16_t _stHashN, _stPalHashN;
+	uint32_t *_stKeys;            // shape keys: this frame's and the two before
+	uint8_t _stKeyN[3];
+	uint8_t _stKeyCur;
+	void stStatsBegin();
+	void stStatsFrame(uint8_t flags);
+	void stStatsEnd();
+	void stStatsKey(uint32_t k);
+	int stStatsSame(int a, int b) const;
+#endif
 	bool _newPal;
 	uint8_t _palBuf[16 * sizeof(uint16_t) * 2];
+#ifdef ATARIST
+	uint16_t _stPalApplied[32];  // the colours 0xC0-0xDF were last given
+#endif
 	uint16_t _baseOffset;
 	bool _creditsSequence;
 	uint32_t _rotMat[4];

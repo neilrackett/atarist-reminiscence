@@ -136,6 +136,7 @@ static void initOptions() {
 	g_options.record = -1;
 	g_options.replay = -1;
 	g_options.replay_hash = false;
+	g_options.cutscene = -1;
 	g_options.log_fps = false;
 	g_options.bench = false;
 	g_options.logging = false;
@@ -224,8 +225,11 @@ static void initOptions() {
 		// replay=N plays it back untimed and logs what it cost.
 		{ "record", &g_options.record, 0, 99 },
 		{ "replay", &g_options.replay, 0, 99 },
-		{ "ab", &g_options.ab, 0, 0xFFFF },
+		{ "ab", &g_options.ab, 0, 0xFFFFFF },
 		{ "replay_dump", &g_options.replay_dump, 0, 32767 },
+		// cutscene=N plays scene N (hex as 0x34) and quits: the
+		// cutscene benchmark
+		{ "cutscene", &g_options.cutscene, -1, 0xFF },
 		{ 0, 0, 0, 0 }
 	};
 	bool screenSet = false;
@@ -314,6 +318,10 @@ static void initOptions() {
 								v = ints[i].max;
 							} else if (*p == 'f' || *p == 'F') {
 								v = ints[i].min;
+							} else if (ints[i].value == &g_options.cutscene || ints[i].value == &g_options.ab) {
+								// a scene number or a set of bits
+								// reads best in hex: 0x34, 0x300
+								v = (int)strtol(p, 0, 0);
 							} else {
 								v = atoi(p);
 							}
@@ -341,7 +349,7 @@ static void initOptions() {
 		fclose(fp);
 	}
 	// the options whose whole output is the log
-	if (g_options.log_fps || g_options.bench || g_options.record >= 0 || g_options.replay >= 0) {
+	if (g_options.log_fps || g_options.bench || g_options.record >= 0 || g_options.replay >= 0 || g_options.cutscene >= 0) {
 		g_options.logging = true;
 	}
 	if (g_options.bench) {

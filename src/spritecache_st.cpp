@@ -204,8 +204,18 @@ static bool ringOpen() {
 	}
 	g_tried = true;
 	const long largestK = ST_freeK();
-	enum { kReserveK = 320, kMinK = 96, kMaxK = 1024, kKeepK = 128 };
-	long ringK = largestK - kReserveK;
+	enum { kReserveK = 320, kMinK = 96, kMaxK = 1024, kKeepK = 128, kRoomsFirstK = 512 };
+	// Room for a few rooms in the room cache as well, beyond its own
+	// spare (see kSTRoomSlotsKept), where that still leaves a ring of
+	// 512K: a revisit's 65ms against a decode's 250-500ms is worth
+	// more than a big ring's last few hundred K. Below that the ring
+	// comes first, as before: on 2.5MB it would shrink to its 96K
+	// minimum and every frame paid more (+7.7% in level 4 and 5's
+	// replays) for a revisit or two.
+	long ringK = largestK - (kSTRoomCacheSpareK + kSTRoomSlotsKept * ((kSTLayerSize >> 10) + 1));
+	if (ringK < kRoomsFirstK || (g_options.ab & kAbRingFirst)) {
+		ringK = largestK - kReserveK;
+	}
 	if (ringK < kMinK) {
 		ringK = (largestK - kKeepK >= kMinK) ? kMinK : largestK - kKeepK;
 	}

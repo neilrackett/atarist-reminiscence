@@ -1695,7 +1695,7 @@ struct STRoomCache {
 	int16_t level, levNum, room;
 	uint8_t hdr[16];            // the room data's header: SGD flag, palette slots
 };
-enum { kRoomCacheMax = 16, kRoomCacheSpareK = 500 };
+enum { kRoomCacheMax = 16 };
 static STRoomCache g_roomCache[kRoomCacheMax];
 static uint32_t g_roomUse;
 
@@ -1775,7 +1775,7 @@ void Video::ST_roomToCache(int level, int room, const uint8_t *hdr) {
 		for (int i = 0; i < kRoomCacheMax && !e; ++i) {
 			STRoomCache *c = &g_roomCache[i];
 			if (!c->layer) {
-				if (ST_freeK() >= (kSTLayerSize >> 10) + 1 + kRoomCacheSpareK) {
+				if (ST_freeK() >= (kSTLayerSize >> 10) + 1 + kSTRoomCacheSpareK) {
 					c->layer = (uint8_t *)Malloc(kSTLayerSize);
 					if (c->layer) {
 						e = c;

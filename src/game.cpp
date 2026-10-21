@@ -426,6 +426,19 @@ void Game::run() {
 		}
 	}
 #ifdef ATARIST
+	if (g_options.cutscene >= 0) {
+		// cutscene=N (hidden): the cutscene benchmark - that one scene,
+		// from where the intro would play, then quit; the log has its
+		// per-frame lines and summary (Cutscene::stStatsEnd)
+		playCutscene(g_options.cutscene);
+		info("Cutscene bench done");
+		_res.free_TEXT();
+		_mix.free();
+		_res.fini();
+		return;
+	}
+#endif
+#ifdef ATARIST
 	if (!g_options.skip_intro && g_options.replay < 0) {
 #else
 	if (!g_options.skip_intro) {

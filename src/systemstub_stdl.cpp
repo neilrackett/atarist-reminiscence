@@ -26,6 +26,7 @@
 
 extern "C" {
 #include <stdl/stdl.h>
+#include <stdl/stdl_math.h>
 }
 #include <osbind.h>
 
@@ -74,6 +75,7 @@ struct SystemStub_STDL : SystemStub {
 	bool _cutPending;       // a new mapping's first page is still to go up
 	void quantiseClusters(uint16_t *col, uint16_t *cnt, int n, uint8_t *alias, uint8_t *slotOf, bool perceptual);
 	bool _hwDirty;          // hardware registers need reprogramming
+	STDL_Colour _hwShown[16];  // what the registers were last given
 	int _fade;              // 256 = full brightness (uniform scale)
 	int _srcW, _srcH;
 	int _xOffset;           // horizontal centring, pixels (multiple of 16)
@@ -218,6 +220,7 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 			STDL_WaitVBL();
 		}
 		STDL_SetColours(_screen, black, 0, 16);
+		memcpy(_hwShown, black, sizeof(_hwShown));
 		if (_ovscOpen) {
 			STDL_WaitVBL();
 		}
@@ -358,6 +361,16 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 	case 3: copyMappedRows<6>(base, s, y, h, _yOff, _yDrop); return;
 	case 4: copyMappedRows<8>(base, s, y, h, _yOff, _yDrop); return;
 	case 5: copyMappedRows<10>(base, s, y, h, _yOff, _yDrop); return;
+	case 6: copyMappedRows<12>(base, s, y, h, _yOff, _yDrop); return;
+	case 7: copyMappedRows<14>(base, s, y, h, _yOff, _yDrop); return;
+	case 8: copyMappedRows<16>(base, s, y, h, _yOff, _yDrop); return;
+	case 9: copyMappedRows<18>(base, s, y, h, _yOff, _yDrop); return;
+	case 10: copyMappedRows<20>(base, s, y, h, _yOff, _yDrop); return;
+	case 11: copyMappedRows<22>(base, s, y, h, _yOff, _yDrop); return;
+	case 12: copyMappedRows<24>(base, s, y, h, _yOff, _yDrop); return;
+	case 13: copyMappedRows<26>(base, s, y, h, _yOff, _yDrop); return;
+	case 14: copyMappedRows<28>(base, s, y, h, _yOff, _yDrop); return;
+	case 15: copyMappedRows<30>(base, s, y, h, _yOff, _yDrop); return;
 	case 16: copyMappedRows<32>(base, s, y, h, _yOff, _yDrop); return;   // the cutscene page flip
 	}
 	for (int j = y; j < y + h; ++j, s += kSTRowBytes) {
@@ -1451,21 +1464,28 @@ void ST_cutscenePalLock(int part) {
 	for (int i = 0; i < kCutEntries; ++i) {
 		alias[i] = (uint8_t)i;
 	}
+	// The entries not yet merged, in order: the pairs are scanned in
+	// the order the full 32x32 walk took, so the same pair wins every
+	// time, without the walk's tests of every merged entry (this and
+	// the slot search below were ~200ms at each part start on an 8MHz
+	// ST, a visible hitch and a late frame or two)
+	uint8_t liveList[kCutEntries];
+	for (int i = 0; i < kCutEntries; ++i) {
+		liveList[i] = (uint8_t)i;
+	}
 	int live = kCutEntries;
 	while (live > 16) {
-		int bi = -1, bj = -1, best = 0x7FFF;
-		for (int i = 0; i < kCutEntries; ++i) {
-			if (alias[i] != i) {
-				continue;
-			}
-			for (int j = i + 1; j < kCutEntries; ++j) {
-				if (alias[j] != j) {
-					continue;
-				}
-				if (dm[i][j] < best) {
-					best = dm[i][j];
+		int bi = -1, bj = -1, bjAt = -1, best = 0x7FFF;
+		for (int a = 0; a < live - 1; ++a) {
+			const int i = liveList[a];
+			const uint8_t *row = dm[i];
+			for (int b = a + 1; b < live; ++b) {
+				const int d = row[liveList[b]];
+				if (d < best) {
+					best = d;
 					bi = i;
-					bj = j;
+					bj = liveList[b];
+					bjAt = b;
 				}
 			}
 		}
@@ -1478,6 +1498,9 @@ void ST_cutscenePalLock(int part) {
 			}
 		}
 		alias[bj] = (uint8_t)bi;
+		for (int b = bjAt; b < live - 1; ++b) {
+			liveList[b] = liveList[b + 1];
+		}
 		--live;
 	}
 
@@ -1494,18 +1517,30 @@ void ST_cutscenePalLock(int part) {
 	memset(slotUsed, 0, sizeof(slotUsed));
 	memset(clusterDone, 0, sizeof(clusterDone));
 	uint8_t slotOfCluster[16];
+	// every cluster's distance to every slot's colour, once, rather
+	// than again in each of the sixteen passes
+	uint16_t slotPacked[16];
+	for (int sl = 0; sl < 16; ++sl) {
+		slotPacked[sl] = pack4(stub->_hwPal[sl]);
+	}
+	uint8_t dcs[16][16];
+	for (int c = 0; c < nc; ++c) {
+		const uint16_t rc = rep[clusters[c]];
+		for (int sl = 0; sl < 16; ++sl) {
+			dcs[c][sl] = (uint8_t)dist4(rc, slotPacked[sl]);
+		}
+	}
 	for (int pass = 0; pass < nc; ++pass) {
 		int best = 0x7FFF, bc = -1, bs = -1;
 		for (int c = 0; c < nc; ++c) {
 			if (clusterDone[c]) {
 				continue;
 			}
-			const uint16_t rc = rep[clusters[c]];
 			for (int sl = 0; sl < 16; ++sl) {
 				if (slotUsed[sl]) {
 					continue;
 				}
-				const int d = dist4(rc, pack4(stub->_hwPal[sl]));
+				const int d = dcs[c][sl];
 				if (d < best) {
 					best = d;
 					bc = c;
@@ -1671,11 +1706,20 @@ void SystemStub_STDL::buildRemap() {
 	// registers from each slot's representative entry. Fades cost
 	// nothing and drawn pixels never need re-baking.
 	if (_palLocked) {
+		// only a slot's representative shows, so a change elsewhere
+		// (most of a cutscene's 32 entries) leaves the registers alone
+		bool changed = _fade != 256 || (g_options.ab & kAbCutOldPalette);
 		for (int s = 0; s < 16; ++s) {
-			_hwPal[s] = _pal[_cutsceneRep[s]];
+			const Color &c = _pal[_cutsceneRep[s]];
+			if (_hwPal[s].r != c.r || _hwPal[s].g != c.g || _hwPal[s].b != c.b) {
+				_hwPal[s] = c;
+				changed = true;
+			}
 		}
 		_fade = 256;
-		_hwDirty = true;
+		if (changed) {
+			_hwDirty = true;
+		}
 		return;
 	}
 
@@ -1977,13 +2021,24 @@ void ST_getHwColours(Color *cols) {
 // the 16 hardware colours at the current fade level; _fade can
 // exceed 256 (brightening fades), so every channel is clamped
 void SystemStub_STDL::fadedColours(STDL_Colour *c) {
-	// 16-bit operands: an int product is a __mulsi3 call, 48 of them
-	// on every palette write - 2ms a cutscene frame on an 8MHz ST
+	if (_fade == 256) {
+		// no fade - always so in a cutscene (see buildRemap)
+		for (int i = 0; i < 16; ++i) {
+			c[i].r = _hwPal[i].r;
+			c[i].g = _hwPal[i].g;
+			c[i].b = _hwPal[i].b;
+			c[i].unused = 0;
+		}
+		return;
+	}
+	// muls.w: the int16_t casts were not enough for gcc 4.6, which
+	// still called __mulsi3 48 times a write (6,000 calls in the
+	// intro, all of them multiplying by 256)
 	const int16_t fade = (int16_t)_fade;
 	for (int i = 0; i < 16; ++i) {
-		int r = (int16_t)_hwPal[i].r * fade >> 8;
-		int g = (int16_t)_hwPal[i].g * fade >> 8;
-		int b = (int16_t)_hwPal[i].b * fade >> 8;
+		int r = STDL_MulS16(_hwPal[i].r, fade) >> 8;
+		int g = STDL_MulS16(_hwPal[i].g, fade) >> 8;
+		int b = STDL_MulS16(_hwPal[i].b, fade) >> 8;
 		c[i].r = (uint8_t)(r > 255 ? 255 : r);
 		c[i].g = (uint8_t)(g > 255 ? 255 : g);
 		c[i].b = (uint8_t)(b > 255 ? 255 : b);
@@ -1995,7 +2050,19 @@ void SystemStub_STDL::writeHwPalette() {
 	STDL_Colour c[16];
 	fadedColours(c);
 	STDL_SetColours(_screen, c, 0, 16);
+	memcpy(_hwShown, c, sizeof(_hwShown));
 	_hwDirty = false;
+}
+
+// the colours the screen shows, folded: with the pixel hash, the check
+// that a frame looks exactly as it did (see Cutscene::stStatsEnd)
+uint32_t ST_hwPaletteHash() {
+	uint32_t h = 0x811C9DC5;
+	for (int i = 0; i < 16; ++i) {
+		const STDL_Colour &c = g_stub->_hwShown[i];
+		h = ((h << 5) | (h >> 27)) ^ (((uint32_t)c.r << 16) | ((uint32_t)c.g << 8) | c.b);
+	}
+	return h;
 }
 
 // Chunky to planar by table: g_c2p[c] holds the four plane bits of
@@ -2275,6 +2342,7 @@ void SystemStub_STDL::fadeScreen() {
 			c[i].unused = 0;
 		}
 		STDL_SetColours(_screen, c, 0, 16);
+		memcpy(_hwShown, c, sizeof(_hwShown));
 		STDL_Delay(40);
 	}
 	clearScreen();

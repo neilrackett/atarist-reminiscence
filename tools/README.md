@@ -319,3 +319,32 @@ another room, named `RS<level>_<room>.SAV`, so a room full of enemies is
 one title Load away for testing on hardware. Y is one of Conrad's
 floors (70, 142, 214); try the save in Hatari first, as a spot inside a
 wall or over a drop kills him.
+
+## cutbench/
+
+Cutscenes, one at a time. The hidden `cutscene=N` option (hex as `0x34`)
+plays scene N from where the intro would and quits, and with
+`logging=true` the log has a `CUT` line for every eight frames and a
+`CUTSUM` line per scene part:
+- **`CUT` lines:** work, budget, push and restore ms; frames late,
+  skipped and unshown; shapes, sprites and why the rest were refused;
+  polygons from the cache; ellipses and shadows.
+- **`CUTSUM` lines:** frames shown, the longest run not shown, and work
+  p50/p95/max.
+
+```
+tools/cutbench/run.sh TAG MACHINE SCENE...     # e.g. b1 st 0x0D 0x00 0x39
+tools/cutbench/summarise.py TAG [TAG...]       # one row per scene part
+tools/cutbench/verify.sh TAG [REF]             # frame-exact against REF
+tools/cutbench/prof.sh OUT MACHINE SCENE       # a Hatari profile; prof.py OUT reads it
+```
+
+- **`run.sh`** uses the player's settings (music on, frame skipping on,
+  Fit) unless `CFG` adds lines. `CFG="frame_skip=false;music=false"`
+  measures the work a scene takes. The runs land in
+  `tmp/cutbench/runs/TAG_MACHINE_SCENE/`.
+- **`verify.sh`** plays the intro, every level opening, a mid-level
+  scene and the credits with `replay_hash=true`. Every drawn frame's
+  pixels go into `CUTHASH.BIN` and the colours it was shown in into
+  `CUTPAL.BIN`, and it compares both with run `REF`, by default `cref`,
+  made by the first run. A change has to match every frame.

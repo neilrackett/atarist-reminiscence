@@ -53,6 +53,116 @@ COPY_ROW_N(6, "%%d0-%%d5", "d0","d1","d2","d3","d4","d5")
 COPY_ROW_N(8, "%%d0-%%d7", "d0","d1","d2","d3","d4","d5","d6","d7")
 COPY_ROW_N(10, "%%d0-%%d7/%%a2-%%a3", "d0","d1","d2","d3","d4","d5","d6","d7","a2","a3")
 #undef COPY_ROW_N
+// 6-15 groups: two or three bursts of up to eleven longs, the most
+// movem can carry here; a C loop of longs ran ~21 cycles a long
+template <> inline void copyRowN<12>(uint32_t *dst, const uint32_t *src) {
+	__asm__ volatile(
+		"movem.l (%1)+,%%d0-%%d5\n\t"
+		"movem.l %%d0-%%d5,(%0)\n\t"
+		"movem.l (%1)+,%%d0-%%d5\n\t"
+		"movem.l %%d0-%%d5,24(%0)"
+		: "+a"(dst), "+a"(src)
+		:
+		: "d0", "d1", "d2", "d3", "d4", "d5", "memory");
+}
+template <> inline void copyRowN<14>(uint32_t *dst, const uint32_t *src) {
+	__asm__ volatile(
+		"movem.l (%1)+,%%d0-%%d6\n\t"
+		"movem.l %%d0-%%d6,(%0)\n\t"
+		"movem.l (%1)+,%%d0-%%d6\n\t"
+		"movem.l %%d0-%%d6,28(%0)"
+		: "+a"(dst), "+a"(src)
+		:
+		: "d0", "d1", "d2", "d3", "d4", "d5", "d6", "memory");
+}
+template <> inline void copyRowN<16>(uint32_t *dst, const uint32_t *src) {
+	__asm__ volatile(
+		"movem.l (%1)+,%%d0-%%d7\n\t"
+		"movem.l %%d0-%%d7,(%0)\n\t"
+		"movem.l (%1)+,%%d0-%%d7\n\t"
+		"movem.l %%d0-%%d7,32(%0)"
+		: "+a"(dst), "+a"(src)
+		:
+		: "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7", "memory");
+}
+template <> inline void copyRowN<18>(uint32_t *dst, const uint32_t *src) {
+	__asm__ volatile(
+		"movem.l (%1)+,%%d0-%%d7/%%a2\n\t"
+		"movem.l %%d0-%%d7/%%a2,(%0)\n\t"
+		"movem.l (%1)+,%%d0-%%d7/%%a2\n\t"
+		"movem.l %%d0-%%d7/%%a2,36(%0)"
+		: "+a"(dst), "+a"(src)
+		:
+		: "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7", "a2", "memory");
+}
+template <> inline void copyRowN<20>(uint32_t *dst, const uint32_t *src) {
+	__asm__ volatile(
+		"movem.l (%1)+,%%d0-%%d7/%%a2-%%a3\n\t"
+		"movem.l %%d0-%%d7/%%a2-%%a3,(%0)\n\t"
+		"movem.l (%1)+,%%d0-%%d7/%%a2-%%a3\n\t"
+		"movem.l %%d0-%%d7/%%a2-%%a3,40(%0)"
+		: "+a"(dst), "+a"(src)
+		:
+		: "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7", "a2", "a3", "memory");
+}
+template <> inline void copyRowN<22>(uint32_t *dst, const uint32_t *src) {
+	__asm__ volatile(
+		"movem.l (%1)+,%%d0-%%d7/%%a2-%%a4\n\t"
+		"movem.l %%d0-%%d7/%%a2-%%a4,(%0)\n\t"
+		"movem.l (%1)+,%%d0-%%d7/%%a2-%%a4\n\t"
+		"movem.l %%d0-%%d7/%%a2-%%a4,44(%0)"
+		: "+a"(dst), "+a"(src)
+		:
+		: "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7", "a2", "a3", "a4", "memory");
+}
+template <> inline void copyRowN<24>(uint32_t *dst, const uint32_t *src) {
+	__asm__ volatile(
+		"movem.l (%1)+,%%d0-%%d7\n\t"
+		"movem.l %%d0-%%d7,(%0)\n\t"
+		"movem.l (%1)+,%%d0-%%d7\n\t"
+		"movem.l %%d0-%%d7,32(%0)\n\t"
+		"movem.l (%1)+,%%d0-%%d7\n\t"
+		"movem.l %%d0-%%d7,64(%0)"
+		: "+a"(dst), "+a"(src)
+		:
+		: "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7", "memory");
+}
+template <> inline void copyRowN<26>(uint32_t *dst, const uint32_t *src) {
+	__asm__ volatile(
+		"movem.l (%1)+,%%d0-%%d7/%%a2\n\t"
+		"movem.l %%d0-%%d7/%%a2,(%0)\n\t"
+		"movem.l (%1)+,%%d0-%%d7/%%a2\n\t"
+		"movem.l %%d0-%%d7/%%a2,36(%0)\n\t"
+		"movem.l (%1)+,%%d0-%%d7\n\t"
+		"movem.l %%d0-%%d7,72(%0)"
+		: "+a"(dst), "+a"(src)
+		:
+		: "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7", "a2", "memory");
+}
+template <> inline void copyRowN<28>(uint32_t *dst, const uint32_t *src) {
+	__asm__ volatile(
+		"movem.l (%1)+,%%d0-%%d7/%%a2-%%a3\n\t"
+		"movem.l %%d0-%%d7/%%a2-%%a3,(%0)\n\t"
+		"movem.l (%1)+,%%d0-%%d7/%%a2\n\t"
+		"movem.l %%d0-%%d7/%%a2,40(%0)\n\t"
+		"movem.l (%1)+,%%d0-%%d7/%%a2\n\t"
+		"movem.l %%d0-%%d7/%%a2,76(%0)"
+		: "+a"(dst), "+a"(src)
+		:
+		: "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7", "a2", "a3", "memory");
+}
+template <> inline void copyRowN<30>(uint32_t *dst, const uint32_t *src) {
+	__asm__ volatile(
+		"movem.l (%1)+,%%d0-%%d7/%%a2-%%a3\n\t"
+		"movem.l %%d0-%%d7/%%a2-%%a3,(%0)\n\t"
+		"movem.l (%1)+,%%d0-%%d7/%%a2-%%a3\n\t"
+		"movem.l %%d0-%%d7/%%a2-%%a3,40(%0)\n\t"
+		"movem.l (%1)+,%%d0-%%d7/%%a2-%%a3\n\t"
+		"movem.l %%d0-%%d7/%%a2-%%a3,80(%0)"
+		: "+a"(dst), "+a"(src)
+		:
+		: "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7", "a2", "a3", "memory");
+}
 template <> inline void copyRowN<32>(uint32_t *dst, const uint32_t *src) {
 	__asm__ volatile(
 		"movem.l (%1)+,%%d0-%%d7/%%a2-%%a4\n\t"
@@ -80,20 +190,11 @@ template <int N> static inline void copyRowsN(uint8_t *d, int dStride, const uin
 	}
 }
 
-// h rows of a run of whole groups, through copyRowN where it has the
-// width - 1-5 groups or a whole layer row; false for any other, which
-// the caller copies its own way
-static inline bool ST_copyGroupRows(uint8_t *d, int dStride, const uint8_t *s, int sStride, int groups, int h) {
-	switch (groups) {
-	case 1: copyRowsN<2>(d, dStride, s, sStride, h); return true;
-	case 2: copyRowsN<4>(d, dStride, s, sStride, h); return true;
-	case 3: copyRowsN<6>(d, dStride, s, sStride, h); return true;
-	case 4: copyRowsN<8>(d, dStride, s, sStride, h); return true;
-	case 5: copyRowsN<10>(d, dStride, s, sStride, h); return true;
-	case 16: copyRowsN<32>(d, dStride, s, sStride, h); return true;
-	}
-	return false;
-}
+// h rows of a run of whole groups (1-16), through copyRowN; false for
+// any other width, which the caller copies its own way
+// one copy, not inlined into each caller: with every width it is
+// a few K a copy, and each caller pays one call per copy, not per row
+bool ST_copyGroupRows(uint8_t *d, int dStride, const uint8_t *s, int sStride, int groups, int h);
 
 // sprite draw flags (replacing Video::drawSpriteSub1..6)
 enum {
@@ -150,6 +251,8 @@ bool ST_rowVisible(int y);
 // frames whose overscan border flip was missed (see STDL); 0 when
 // overscan is off
 uint32_t ST_overscanMisses();
+// the colours the hardware shows, hashed (cutscene replay_hash)
+uint32_t ST_hwPaletteHash();
 
 // What the gameplay sprite path did since the last log_fps line, so a
 // slow frame says which cache gave out instead of only how slow it
@@ -183,6 +286,9 @@ struct STPerf {
 	uint16_t tilePreps;     // room tiles packed for the tile cache: a miss
 };
 extern STPerf g_stPerf;
+// cutscenes: group-rows (8 bytes x 1 row) the page copies have moved,
+// for the per-frame stats
+extern uint32_t g_stCutCopyGR;
 // a set of counters as one log fragment
 void ST_perfFormat(const STPerf &p, char *buf, int len);
 
@@ -449,6 +555,15 @@ long ST_freeK();
 // a level's room data and the big tile table (4MB, with some to spare)
 int ATARIST_ramK();
 enum { kSTResidentRamK = 3584 };
+
+// The room cache keeps a room's two layers for a revisit while this
+// much would stay free after it (video.cpp); the sprite ring, sized
+// first, leaves room for this many such rooms on top (spritecache_st.cpp).
+// Sized independently, the 1MB ring left the room cache one slot or
+// none, and a few K either way decided which: a build 9K bigger lost
+// level 5's revisits (65ms to 320ms), as did a Mega STE with 550K of
+// drivers resident (245ms).
+enum { kSTRoomCacheSpareK = 500, kSTRoomSlotsKept = 3 };
 bool ST_screenModeAvailable(int mode);   // see kOverscanMinK
 
 // 8x8 glyph from a 16-byte-stride chunky source (AMIGA_decodeIcn

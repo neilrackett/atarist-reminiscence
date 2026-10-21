@@ -12,6 +12,20 @@
 #include "video_st.h"
 #include "util.h"
 #include "video.h"
+#ifdef ATARIST
+extern "C" {
+#include <stdl/stdl_math.h>
+}
+// Vertex transforms multiply 16-bit values (coordinates, zoom, the
+// rotation matrix's -256..256) but in int arithmetic, which gcc 4.6
+// makes a __mulsi3 call (~350 cycles): six per rotated vertex, 23,000
+// calls in level 4's second scene. A muls.w gives the same product,
+// and where the matrix product was unsigned the low 32 bits - all the
+// result keeps - are the same too.
+#define MUL16(a, b) STDL_MulS16((a), (b))
+#else
+#define MUL16(a, b) ((a) * (b))
+#endif
 
 static inline void scalePoints(Point *pt, int count, int scale, int16_t *rx = 0, int16_t *ry = 0) {
 	if (scale != 1) {
@@ -41,6 +55,8 @@ Cutscene::Cutscene(Resource *res, SystemStub *stub, Video *vid)
 	_stSkipDraw = false;
 	_stSkipShow = false;
 	_stUsesCopyScreen = false;
+	_stCopyParts = 0;
+	_stLastPush = 0;
 	_stShowFull = true;
 	_stSkipRun = 0;
 	_stSched = 0;
@@ -58,6 +74,23 @@ const uint8_t *Cutscene::getCommandData() const {
 const uint8_t *Cutscene::getPolygonData() const {
 	return _res->_pol;
 }
+
+#ifdef ATARIST
+static inline uint32_t stRot(uint32_t h, uint32_t v) {
+	return ((h << 5) | (h >> 27)) ^ v;
+}
+
+// a drawn frame's planes from the clip's top row down, folded: the
+// rows a scene can draw (shapes, then the captions under them)
+static uint32_t stHashPage(const uint8_t *page, int y0) {
+	const uint32_t *w = (const uint32_t *)(page + y0 * kSTRowBytes);
+	uint32_t h = 0x811C9DC5;
+	for (int n = (Video::GAMESCREEN_H - y0) * (kSTRowBytes / 4); --n >= 0; ) {
+		h = stRot(h, *w++);
+	}
+	return h;
+}
+#endif
 
 void Cutscene::sync(int frameDelay) {
 	if (_stPrescan) {
@@ -93,10 +126,13 @@ void Cutscene::sync(int frameDelay) {
 	}
 #endif
 #ifdef ATARIST
-	if (pause > 0 && _stBakeHead != _stBakeTail) {
+	if (pause > 0 && _stBakeHead != _stBakeTail && !(g_options.ab & kAbCutNoIdleBake)) {
 		stIdleBake(pause);
 		pause -= (int32_t)(_stub->getTimeStamp() - now);
 	}
+	_stLastDelay = delay;
+	_stLastBudget = budget;
+	_stLastLate = pause <= 0;
 #endif
 	if (pause > 0) {
 		_stub->sleep(pause);
@@ -116,10 +152,24 @@ void Cutscene::copyPalette(const uint8_t *pal, uint16_t num) {
 }
 
 void Cutscene::updatePalette() {
+#ifdef ATARIST
+	if (g_options.ab & kAbCutNoPalette) {
+		_newPal = false;
+	}
+#endif
 	if (_newPal) {
 		const uint8_t *p = _palBuf;
 		for (int i = 0; i < 32; ++i) {
 			const uint16_t color = READ_BE_UINT16(p); p += 2;
+#ifdef ATARIST
+			// a palette op sets one bank of 16, often to much the same
+			// colours: convert and pass on only the entries that moved
+			// (a change cost ~32K cycles, 4ms, about once a frame)
+			if (color == _stPalApplied[i] && !(g_options.ab & kAbCutOldPalette)) {
+				continue;
+			}
+			_stPalApplied[i] = color;
+#endif
 			Color c = Video::AMIGA_convertColor(color, _res->isSega());
 			_stub->setPaletteEntry(0xC0 + i, &c);
 		}
@@ -132,14 +182,24 @@ void Cutscene::updateScreen() {
 		return;
 	}
 	sync(_frameDelay - 1);
+#ifdef ATARIST
+	if (_newPal) {
+		_stCur.flags |= kStFPalette;
+	}
+#endif
 	updatePalette();
 #ifdef ATARIST
+	uint8_t flags = 0;
 	if (stSkipDraw()) {
 		// nothing was drawn: the front page still shows the last
 		// drawn frame
 		++_statSkipped;
+		flags = kStFSkipped;
 	} else {
 		SWAP(_frontPage, _backPage);
+		if (_stHash && _stHashN < kStHashMax) {
+			_stHash[_stHashN++] = stHashPage(_frontPage, _gfx._cry);
+		}
 		if (_stSkipShow) {
 			// The frame was drawn - it had to be, the next one builds
 			// on it - but nobody has to see it: pushing a page to the
@@ -147,13 +207,22 @@ void Cutscene::updateScreen() {
 			// scene is already behind. The pages themselves are
 			// untouched, so the next frame shown is whole.
 			++_statNoShow;
+			flags = kStFUnshown;
 		} else {
 			const uint32_t t0 = _stub->getTimeStamp();
-			stShow(_frontPage);
+			if (!(g_options.ab & kAbCutNoPush)) {
+				stShow(_frontPage);
+			}
 			_stub->updateScreen(0);
-			_statCopy += _stub->getTimeStamp() - t0;
+			const uint32_t dt = _stub->getTimeStamp() - t0;
+			_statCopy += dt;
+			_stCur.push = _stLastPush = (uint8_t)(dt > 255 ? 255 : dt);
 		}
 	}
+	if (_stPalHash && !(flags & kStFSkipped) && _stPalHashN < kStHashMax) {
+		_stPalHash[_stPalHashN++] = ST_hwPaletteHash();
+	}
+	stStatsFrame(flags);
 	stDecideSkip();
 #else
 	SWAP(_frontPage, _backPage);
@@ -180,7 +249,9 @@ void Cutscene::stBandedLoop(uint16_t num) {
 	}
 	_stBakeHead = _stBakeTail = 0;
 	_stBakeMs = 20;
+	stStatsBegin();
 	mainLoop(num);
+	stStatsEnd();
 	ST_segCacheEnd();
 	ST_pageBandEnd();
 }
@@ -218,17 +289,231 @@ void Cutscene::stDecideSkip() {
 	static const int32_t kDebtSkip = 50;
 	const int32_t debt = (int32_t)(_stub->getTimeStamp() - _stSched);
 	if (debt > kDebtSkip && _stSkipRun < kSkipMax) {
-		// A scene that builds each frame on the last has to draw
-		// them all, but it does not have to show them all.
-		if (_stUsesCopyScreen) {
-			_stSkipShow = true;
-		} else {
+		if (!_stUsesCopyScreen) {
 			_stSkipDraw = true;
+			++_stSkipRun;
+		} else if (_stLastPush * 4 >= _stLastBudget || (g_options.ab & kAbCutHideAlways)) {
+			// A part that builds each frame on the last has to draw
+			// them all; it need not show them all, but hiding one
+			// saves only its push - 2-6ms of a 64ms frame in the
+			// intro and the level 4 scenes, which hid three frames
+			// in four to pay back a debt that saving never could
+			// (0x39 was late on 123 of 127 frames either way). So a
+			// frame is hidden only where its push is a big share of
+			// the frame; otherwise it is shown, late, and the
+			// scripted clock's debt cap absorbs it.
+			_stSkipShow = true;
+			++_stSkipRun;
+		} else {
+			_stSkipRun = 0;
 		}
-		++_stSkipRun;
 	} else {
 		_stSkipRun = 0;
 	}
+}
+#endif
+
+#ifdef ATARIST
+static inline uint8_t stSat8(uint32_t v) {
+	return (uint8_t)(v > 255 ? 255 : v);
+}
+
+void Cutscene::stStatsBegin() {
+	_stRing = 0;
+	_stHash = 0;
+	_stPalHash = 0;
+	_stKeys = 0;
+	memset(&_stCur, 0, sizeof(_stCur));
+	if (!g_options.logging) {
+		return;
+	}
+	_stRing = (StFrameStat *)malloc(kStRing * sizeof(StFrameStat));
+	_stRingN = 0;
+	memset(_stHist, 0, sizeof(_stHist));
+	ST_segCacheStats(&_stSegHit0, &_stSegMiss0);
+	ST_shpStats(&_stShpDrawn0, &_stShpBaked0);
+	if (g_options.replay_hash) {
+		_stHash = (uint32_t *)malloc(kStHashMax * sizeof(uint32_t));
+		_stPalHash = (uint32_t *)malloc(kStHashMax * sizeof(uint32_t));
+		_stHashN = _stPalHashN = 0;
+		_stKeys = (uint32_t *)malloc(3 * kStKeys * sizeof(uint32_t));
+		_stKeyN[0] = _stKeyN[1] = _stKeyN[2] = 0;
+		_stKeyCur = 0;
+	}
+}
+
+void Cutscene::stStatsKey(uint32_t k) {
+	uint8_t &n = _stKeyN[_stKeyCur];
+	if (n < kStKeys) {
+		_stKeys[_stKeyCur * kStKeys + n++] = k;
+	}
+}
+
+// how many of list a's shapes are in list b: a scan, as it only runs
+// with replay_hash, where time is not being measured
+int Cutscene::stStatsSame(int a, int b) const {
+	const uint32_t *ka = _stKeys + a * kStKeys;
+	const uint32_t *kb = _stKeys + b * kStKeys;
+	int same = 0;
+	for (int i = 0; i < _stKeyN[a]; ++i) {
+		for (int j = 0; j < _stKeyN[b]; ++j) {
+			if (ka[i] == kb[j]) {
+				++same;
+				break;
+			}
+		}
+	}
+	return same;
+}
+
+// a frame has ended (updateScreen): its numbers into the ring; the
+// restore that follows it is added by clearBackPage
+void Cutscene::stStatsFrame(uint8_t flags) {
+	if (!_stRing) {
+		memset(&_stCur, 0, sizeof(_stCur));
+		return;
+	}
+	StFrameStat &f = _stCur;
+	f.flags |= flags;
+	if (_stLastLate) {
+		f.flags |= kStFLate;
+	}
+	if (_clearScreen != 0) {
+		f.flags |= kStFClear;
+	}
+	f.work = (uint16_t)(_stLastDelay < 0 ? 0 : (_stLastDelay > 0xFFFF ? 0xFFFF : _stLastDelay));
+	f.budget4 = stSat8((uint32_t)_stLastBudget >> 2);
+	uint32_t hit, miss, drawn, baked;
+	ST_segCacheStats(&hit, &miss);
+	ST_shpStats(&drawn, &baked);
+	f.polyHit = (uint16_t)(hit - _stSegHit0);
+	f.polyMiss = (uint16_t)(miss - _stSegMiss0);
+	f.sprHit = stSat8(drawn - _stShpDrawn0);
+	f.sprBake = stSat8(baked - _stShpBaked0);
+	_stSegHit0 = hit;
+	_stSegMiss0 = miss;
+	_stShpDrawn0 = drawn;
+	_stShpBaked0 = baked;
+	if (_stKeys) {
+		const int cur = _stKeyCur;
+		const int p1 = cur == 0 ? 2 : cur - 1;
+		const int p2 = cur == 2 ? 0 : cur + 1;
+		f.same1 = stSat8(stStatsSame(cur, p1));
+		f.same2 = stSat8(stStatsSame(cur, p2));
+		_stKeyCur = (uint8_t)p2;
+		_stKeyN[p2] = 0;
+	}
+	int bucket = f.work / 5;
+	if (bucket >= kStHist) {
+		bucket = kStHist - 1;
+	}
+	++_stHist[bucket];
+	if (_stRingN < kStRing) {
+		_stRing[_stRingN++] = f;
+	}
+	memset(&_stCur, 0, sizeof(_stCur));
+}
+
+// The scene's frames to the log, eight to a line, and a summary:
+//   w work ms (mean) / b budget ms (mean), p push ms, r restore ms
+//   L late, S skipped (not drawn), U unshown (drawn, not shown)
+//   pal palette changes, cap captions, clr frames that wipe the page
+//   sh shapes, xf scaled/rotated, spr sprites drawn+baked,
+//   ref sprites refused: not baked yet/clipped/shadow or too big,
+//   poly polygons from the cache/walked, el ellipses, sd shadows,
+//   box group-rows restored (mean), same shapes as on the frame
+//   before / the one before that (replay_hash only)
+void Cutscene::stStatsEnd() {
+	if (_stRing) {
+		uint32_t shown = 0, late = 0, run = 0, runMax = 0, workMax = 0;
+		uint32_t push = 0, restore = 0, budget = 0;
+		uint32_t polyHit = 0, polyMiss = 0, spr = 0, bake = 0, refF = 0, refC = 0, refS = 0;
+		for (int i = 0; i < _stRingN; i += 8) {
+			uint32_t w = 0, b = 0, p = 0, r = 0, L = 0, S = 0, U = 0, pal = 0, cap = 0, clr = 0;
+			uint32_t sh = 0, xf = 0, sp = 0, bk = 0, rf = 0, rc = 0, rs = 0, ph = 0, pm = 0;
+			uint32_t el = 0, sd = 0, box = 0, s1 = 0, s2 = 0;
+			const int n = (_stRingN - i < 8) ? _stRingN - i : 8;
+			for (int k = 0; k < n; ++k) {
+				const StFrameStat &f = _stRing[i + k];
+				w += f.work; b += f.budget4 * 4; p += f.push; r += f.restore;
+				L += (f.flags & kStFLate) ? 1 : 0;
+				S += (f.flags & kStFSkipped) ? 1 : 0;
+				U += (f.flags & kStFUnshown) ? 1 : 0;
+				pal += (f.flags & kStFPalette) ? 1 : 0;
+				cap += (f.flags & kStFCaption) ? 1 : 0;
+				clr += (f.flags & kStFClear) ? 1 : 0;
+				sh += f.shapes; xf += f.xform; sp += f.sprHit; bk += f.sprBake;
+				rf += f.refFirst; rc += f.refClip; rs += f.refShadow;
+				ph += f.polyHit; pm += f.polyMiss; el += f.ellipses; sd += f.shadows;
+				box += f.restoreGR; s1 += f.same1; s2 += f.same2;
+				if (f.flags & (kStFSkipped | kStFUnshown)) {
+					if (++run > runMax) {
+						runMax = run;
+					}
+				} else {
+					++shown;
+					run = 0;
+				}
+				if (f.work > workMax) {
+					workMax = f.work;
+				}
+			}
+			late += L; push += p; restore += r; budget += b;
+			polyHit += ph; polyMiss += pm; spr += sp; bake += bk;
+			refF += rf; refC += rc; refS += rs;
+			info("CUT %02X f%d: w%u/%u p%u r%u L%u S%u U%u pal%u cap%u clr%u sh%u xf%u spr%u+%u ref%u/%u/%u poly%u/%u el%u sd%u box%u same%u/%u",
+				_stSceneId, i, (unsigned)(w / n), (unsigned)(b / n), (unsigned)(p / n), (unsigned)(r / n),
+				(unsigned)L, (unsigned)S, (unsigned)U, (unsigned)pal, (unsigned)cap, (unsigned)clr,
+				(unsigned)sh, (unsigned)xf, (unsigned)sp, (unsigned)bk, (unsigned)rf, (unsigned)rc, (unsigned)rs,
+				(unsigned)ph, (unsigned)pm, (unsigned)el, (unsigned)sd, (unsigned)(box / n), (unsigned)s1, (unsigned)s2);
+		}
+		// work percentiles from the 5ms histogram
+		const uint32_t frames = _stRingN;
+		uint32_t p50 = 0, p95 = 0, acc = 0;
+		for (int i = 0; i < kStHist; ++i) {
+			const uint32_t before = acc;
+			acc += _stHist[i];
+			if (before * 2 < frames && acc * 2 >= frames) {
+				p50 = i * 5;
+			}
+			if (before * 20 < frames * 19 && acc * 20 >= frames * 19) {
+				p95 = i * 5;
+			}
+		}
+		if (frames != 0) {
+			info("CUTSUM %02X: %u frames, %u shown (%u%%), longest not shown %u, %u late, work p50 %u p95 %u max %u ms, budget %u, push %u, restore %u ms/frame, polygons %u from the cache of %u, sprites %u (%u baked), refused %u/%u/%u",
+				_stSceneId, (unsigned)frames, (unsigned)shown, (unsigned)(shown * 100 / frames),
+				(unsigned)runMax, (unsigned)late, (unsigned)p50, (unsigned)p95, (unsigned)workMax,
+				(unsigned)(budget / frames), (unsigned)(push / frames), (unsigned)(restore / frames),
+				(unsigned)polyHit, (unsigned)(polyHit + polyMiss), (unsigned)spr, (unsigned)bake,
+				(unsigned)refF, (unsigned)refC, (unsigned)refS);
+		}
+		free(_stRing);
+		_stRing = 0;
+	}
+	// appended scene by scene: "CUTH", the scene id, the count, then
+	// a big-endian word per drawn frame - the pixels in CUTHASH.BIN,
+	// the colours they were shown in in CUTPAL.BIN
+	for (int k = 0; k < 2; ++k) {
+		uint32_t *&hash = k ? _stPalHash : _stHash;
+		const uint16_t n = k ? _stPalHashN : _stHashN;
+		if (!hash) {
+			continue;
+		}
+		FILE *fp = fopen(k ? "CUTPAL.BIN" : "CUTHASH.BIN", "ab");
+		if (fp) {
+			const uint8_t hdr[8] = { 'C', 'U', 'T', 'H',
+				(uint8_t)(_stSceneId >> 8), (uint8_t)_stSceneId,
+				(uint8_t)(n >> 8), (uint8_t)n };
+			fwrite(hdr, 1, sizeof(hdr), fp);
+			fwrite(hash, sizeof(uint32_t), n, fp);
+			fclose(fp);
+		}
+		free(hash);
+		hash = 0;
+	}
+	free(_stKeys);
+	_stKeys = 0;
 }
 #endif
 
@@ -332,10 +617,10 @@ void Cutscene::setRotationTransform(uint16_t a, uint16_t b, uint16_t c) { // ide
 	const int16_t cos_c = COS(c);
 	const int16_t sin_b = SIN(b);
 	const int16_t cos_b = COS(b);
-	_rotMat[0] = ((cos_a * cos_b) >> 8) - ((((cos_c * sin_a) >> 8) * sin_b) >> 8);
-	_rotMat[1] = ((sin_a * cos_b) >> 8) + ((((cos_c * cos_a) >> 8) * sin_b) >> 8);
-	_rotMat[2] = ( sin_c * sin_a) >> 8;
-	_rotMat[3] = (-sin_c * cos_a) >> 8;
+	_rotMat[0] = (MUL16(cos_a, cos_b) >> 8) - (MUL16(MUL16(cos_c, sin_a) >> 8, sin_b) >> 8);
+	_rotMat[1] = (MUL16(sin_a, cos_b) >> 8) + (MUL16(MUL16(cos_c, cos_a) >> 8, sin_b) >> 8);
+	_rotMat[2] = MUL16(sin_c, sin_a) >> 8;
+	_rotMat[3] = MUL16(-sin_c, cos_a) >> 8;
 }
 
 static uint8_t getNewLineChar(const Resource *res) {
@@ -423,10 +708,14 @@ void Cutscene::clearBackPage() {
 	if (stSkipDraw()) {
 		return;
 	}
+	const uint32_t t0 = _stub->getTimeStamp();
+	const uint32_t c0 = g_stCutCopyGR;
 #endif
 	if (_clearScreen == 0) {
 #ifdef ATARIST
-		ST_copyPage(_backPage, _auxPage);
+		if (!(g_options.ab & kAbCutNoRestore)) {
+			ST_copyPage(_backPage, _auxPage);
+		}
 #else
 		memcpy(_backPage, _auxPage, _vid->_layerSize);
 #endif
@@ -437,6 +726,16 @@ void Cutscene::clearBackPage() {
 		memset(_backPage, 0xC0, _vid->_layerSize);
 #endif
 	}
+#ifdef ATARIST
+	// the restore after a frame belongs to that frame's stats
+	if (_stRing && _stRingN != 0) {
+		StFrameStat &f = _stRing[_stRingN - 1];
+		const uint32_t dt = _stub->getTimeStamp() - t0 + f.restore;
+		f.restore = (uint8_t)(dt > 255 ? 255 : dt);
+		const uint32_t gr = g_stCutCopyGR - c0 + f.restoreGR;
+		f.restoreGR = (uint16_t)(gr > 0xFFFF ? 0xFFFF : gr);
+	}
+#endif
 }
 
 void Cutscene::drawCreditsText() {
@@ -577,6 +876,9 @@ void Cutscene::op_refreshScreen() {
 		} else {
 			ST_cutscenePalLock(_stPart);
 			ST_shpColoursChanged(); // sprites are baked in colour
+			if (!(g_options.ab & kAbCutHideAlways)) {
+				_stUsesCopyScreen = ((_stCopyParts >> (_stPart < 15 ? _stPart : 15)) & 1) != 0;
+			}
 		}
 #endif
 		clearBackPage();
@@ -698,12 +1000,17 @@ bool Cutscene::stShapeSprite(uint16_t shapeOffset, int16_t x, int16_t y, const u
 	}
 	const uint16_t key = (shapeOffset & 0x7FF) | (((x + _gfx._crx) & 15) << 11);
 	if (const void *s = ST_shpFind(key)) {
-		return ST_shpDraw(_backPage, s, x, y, _gfx._crx, _gfx._cry, _gfx._crw, _gfx._crh);
+		if (ST_shpDraw(_backPage, s, x, y, _gfx._crx, _gfx._cry, _gfx._crw, _gfx._crh)) {
+			return true;
+		}
+		++_stCur.refClip;
+		return false;
 	}
 	if (!ST_shpSeen(key)) {
 		// seen once: baked while a frame waits for its time, if one
 		// has enough to spare (stIdleBake), else the next time round
 		stQueueBake(key);
+		++_stCur.refFirst;
 		return false;
 	}
 	// Seen before: bake it now, and the sprite pays back from the next
@@ -715,10 +1022,19 @@ bool Cutscene::stShapeSprite(uint16_t shapeOffset, int16_t x, int16_t y, const u
 	const int32_t slack = (int32_t)(_tstamp + (_frameDelay - 1) * 16 - _stub->getTimeStamp());
 	if (_statWork * 4 < _statBudget * 3 && slack > 0 && slack < 2 * _stBakeMs) {
 		stQueueBake(key);
+		++_stCur.refFirst;
 		return false;
 	}
 	const void *s = stBakeShape(key, shapeData, count, verticesOffsetTable, verticesDataTable);
-	return s && ST_shpDraw(_backPage, s, x, y, _gfx._crx, _gfx._cry, _gfx._crw, _gfx._crh);
+	if (!s) {
+		++_stCur.refShadow;
+		return false;
+	}
+	if (ST_shpDraw(_backPage, s, x, y, _gfx._crx, _gfx._cry, _gfx._crw, _gfx._crh)) {
+		return true;
+	}
+	++_stCur.refClip;
+	return false;
 }
 
 // Bake a foreground shape at the x phase in its key (see ST_shpFind);
@@ -840,6 +1156,9 @@ void Cutscene::drawShape(const uint8_t *data, int16_t x, int16_t y) {
 		int16_t rx = READ_BE_UINT16(data); data += 2;
 		int16_t ry = READ_BE_UINT16(data); data += 2;
 		scalePoints(&pt, 1, _vid->_layerScale, &rx, &ry);
+#ifdef ATARIST
+		++_stCur.ellipses;
+#endif
 		_gfx.drawEllipse(_primitiveColor, _hasAlphaColor, &pt, rx, ry);
 	} else if (numVertices == 0) {
 		Point pt;
@@ -902,6 +1221,11 @@ void Cutscene::drawShape(const uint8_t *data, int16_t x, int16_t y) {
 		}
 #endif
 		scalePoints(_vertices, numVertices, _vid->_layerScale);
+#ifdef ATARIST
+		if (_hasAlphaColor && _primitiveColor > 0xC7) {
+			++_stCur.shadows;
+		}
+#endif
 		if (_isConcavePolygonShape) {
 			_gfx.floodFill(_primitiveColor, _vertices, numVertices);
 		} else {
@@ -922,10 +1246,14 @@ void Cutscene::op_drawShape() {
 	}
 	checkShape(shapeOffset);
 #ifdef ATARIST
-	if (_stPrescan || stSkipDraw()) {
+	if (_stPrescan || stSkipDraw() || (g_options.ab & kAbCutNoDraw)) {
 		// the palette prescan only needs the command stream advanced;
 		// a skipped frame likewise
 		return;
+	}
+	++_stCur.shapes;
+	if (_stKeys) {
+		stStatsKey(stRot(stRot(stRot(shapeOffset, x), y), _clearScreen));
 	}
 #endif
 
@@ -1042,6 +1370,14 @@ void Cutscene::op_drawCaptionText() {
 			memset(_frontPage + y * _vid->_w, 0xC0, h * _vid->_w);
 #endif
 		}
+#ifdef ATARIST
+		if (!_stPrescan) {
+			_stCur.flags |= kStFCaption;
+		}
+		if (g_options.ab & kAbCutNoText) {
+			strId = 0xFFFF;
+		}
+#endif
 		if (strId != 0xFFFF) {
 			const uint8_t *str = _res->getCineString(strId);
 			if (str) {
@@ -1103,26 +1439,26 @@ void Cutscene::drawShapeScale(const uint8_t *data, int16_t zoom, int16_t b, int1
 		pr[1].x = -x;
 		pr[1].y =  y;
 		if (_shape_count == 0) {
-			f -= ((((_shape_ix - _shape_ox) * zoom) * 128) + 0x8000) >> 16;
-			g -= ((((_shape_iy - _shape_oy) * zoom) * 128) + 0x8000) >> 16;
+			f -= (((MUL16((_shape_ix - _shape_ox), zoom)) * 128) + 0x8000) >> 16;
+			g -= (((MUL16((_shape_iy - _shape_oy), zoom)) * 128) + 0x8000) >> 16;
 			pt->x = f;
 			pt->y = g;
 			++pt;
 			_shape_cur_x16 = f << 16;
 			_shape_cur_y16 = g << 16;
 		} else {
-			_shape_cur_x16 = _shape_prev_x16 + ((_shape_cur_x - _shape_prev_x) * zoom) * 128;
+			_shape_cur_x16 = _shape_prev_x16 + (MUL16((_shape_cur_x - _shape_prev_x), zoom)) * 128;
 			pt->x = (_shape_cur_x16 + 0x8000) >> 16;
-			_shape_cur_y16 = _shape_prev_y16 + ((_shape_cur_y - _shape_prev_y) * zoom) * 128;
+			_shape_cur_y16 = _shape_prev_y16 + (MUL16((_shape_cur_y - _shape_prev_y), zoom)) * 128;
 			pt->y = (_shape_cur_y16 + 0x8000) >> 16;
 			++pt;
 		}
 		for (int i = 0; i < 2; ++i) {
 			_shape_cur_x += pr[i].x;
-			_shape_cur_x16 += pr[i].x * zoom * 128;
+			_shape_cur_x16 += MUL16(pr[i].x, zoom) * 128;
 			pt->x = (_shape_cur_x16 + 0x8000) >> 16;
 			_shape_cur_y += pr[i].y;
-			_shape_cur_y16 += pr[i].y * zoom * 128;
+			_shape_cur_y16 += MUL16(pr[i].y, zoom) * 128;
 			pt->y = (_shape_cur_y16 + 0x8000) >> 16;
 			++pt;
 		}
@@ -1142,15 +1478,15 @@ void Cutscene::drawShapeScale(const uint8_t *data, int16_t zoom, int16_t b, int1
  		pt.x = _shape_cur_x = b + READ_BE_UINT16(data); data += 2;
 	 	pt.y = _shape_cur_y = c + READ_BE_UINT16(data); data += 2;
  		if (_shape_count == 0) {
-			f -= ((((_shape_ix - pt.x) * zoom) * 128) + 0x8000) >> 16;
-			g -= ((((_shape_iy - pt.y) * zoom) * 128) + 0x8000) >> 16;
+			f -= (((MUL16((_shape_ix - pt.x), zoom)) * 128) + 0x8000) >> 16;
+			g -= (((MUL16((_shape_iy - pt.y), zoom)) * 128) + 0x8000) >> 16;
 			pt.x = f + _shape_ix + d;
 			pt.y = g + _shape_iy + e;
 			_shape_cur_x16 = f << 16;
 			_shape_cur_y16 = g << 16;
 		} else {
-			_shape_cur_x16 = _shape_prev_x16 + ((pt.x - _shape_prev_x) * zoom) * 128;
-			_shape_cur_y16 = _shape_prev_y16 + ((pt.y - _shape_prev_y) * zoom) * 128;
+			_shape_cur_x16 = _shape_prev_x16 + (MUL16((pt.x - _shape_prev_x), zoom)) * 128;
+			_shape_cur_y16 = _shape_prev_y16 + (MUL16((pt.y - _shape_prev_y), zoom)) * 128;
 			pt.x = ((_shape_cur_x16 + 0x8000) >> 16) + _shape_ix + d;
 			pt.y = ((_shape_cur_y16 + 0x8000) >> 16) + _shape_iy + e;
 		}
@@ -1166,16 +1502,16 @@ void Cutscene::drawShapeScale(const uint8_t *data, int16_t zoom, int16_t b, int1
 		_shape_cur_x = ix = READ_BE_UINT16(data) + b; data += 2;
 		_shape_cur_y = iy = READ_BE_UINT16(data) + c; data += 2;
 		if (_shape_count == 0) {
-			f -= ((((_shape_ix - _shape_ox) * zoom) * 128) + 0x8000) >> 16;
-			g -= ((((_shape_iy - _shape_oy) * zoom) * 128) + 0x8000) >> 16;
+			f -= (((MUL16((_shape_ix - _shape_ox), zoom)) * 128) + 0x8000) >> 16;
+			g -= (((MUL16((_shape_iy - _shape_oy), zoom)) * 128) + 0x8000) >> 16;
 			pt->x = f + _shape_ix + d;
 			pt->y = g + _shape_iy + e;
 			++pt;
 			_shape_cur_x16 = f << 16;
 			_shape_cur_y16 = g << 16;
 		} else {
-			_shape_cur_x16 = _shape_prev_x16 + ((_shape_cur_x - _shape_prev_x) * zoom) * 128;
-			_shape_cur_y16 = _shape_prev_y16 + ((_shape_cur_y - _shape_prev_y) * zoom) * 128;
+			_shape_cur_x16 = _shape_prev_x16 + (MUL16((_shape_cur_x - _shape_prev_x), zoom)) * 128;
+			_shape_cur_y16 = _shape_prev_y16 + (MUL16((_shape_cur_y - _shape_prev_y), zoom)) * 128;
 			pt->x = ix = ((_shape_cur_x16 + 0x8000) >> 16) + _shape_ix + d;
 			pt->y = iy = ((_shape_cur_y16 + 0x8000) >> 16) + _shape_iy + e;
 			++pt;
@@ -1193,8 +1529,8 @@ void Cutscene::drawShapeScale(const uint8_t *data, int16_t zoom, int16_t b, int1
 				sx = 0;
 				_shape_cur_x += ix;
 				_shape_cur_y += iy;
-				_shape_cur_x16 += ix * zoom * 128;
-				_shape_cur_y16 += iy * zoom * 128;
+				_shape_cur_x16 += MUL16(ix, zoom) * 128;
+				_shape_cur_y16 += MUL16(iy, zoom) * 128;
 				pt->x = ((_shape_cur_x16 + 0x8000) >> 16) + _shape_ix + d;
 				pt->y = ((_shape_cur_y16 + 0x8000) >> 16) + _shape_iy + e;
 				++pt;
@@ -1230,6 +1566,17 @@ void Cutscene::op_drawShapeScale() {
 	uint16_t zoom = fetchNextCmdWord() + 512;
 	_shape_ix = fetchNextCmdByte();
 	_shape_iy = fetchNextCmdByte();
+#ifdef ATARIST
+	if (!_stPrescan && !stSkipDraw()) {
+		if (g_options.ab & kAbCutNoDraw) {
+			return;
+		}
+		++_stCur.xform;
+		if (_stKeys) {
+			stStatsKey(stRot(stRot(stRot(stRot(stRot(shapeOffset, x), y), zoom), (_shape_ix << 8) | _shape_iy), 0x5CA1E));
+		}
+	}
+#endif
 
 	const uint8_t *shapeOffsetTable    = _polPtr + READ_BE_UINT16(_polPtr + 0x02);
 	const uint8_t *shapeDataTable      = _polPtr + READ_BE_UINT16(_polPtr + 0x0E);
@@ -1295,33 +1642,33 @@ void Cutscene::drawShapeScaleRotate(const uint8_t *data, int16_t zoom, int16_t b
 		y = READ_BE_UINT16(data); data += 2;
 		_shape_cur_x16 = _shape_ix - ix;
 		_shape_cur_y16 = _shape_iy - iy;
-		_shape_ox = _shape_cur_x = _shape_ix + ((_shape_cur_x16 * _rotMat[0] + _shape_cur_y16 * _rotMat[1]) >> 8);
-		_shape_oy = _shape_cur_y = _shape_iy + ((_shape_cur_x16 * _rotMat[2] + _shape_cur_y16 * _rotMat[3]) >> 8);
+		_shape_ox = _shape_cur_x = _shape_ix + (((uint32_t)MUL16(_shape_cur_x16, _rotMat[0]) + (uint32_t)MUL16(_shape_cur_y16, _rotMat[1])) >> 8);
+		_shape_oy = _shape_cur_y = _shape_iy + (((uint32_t)MUL16(_shape_cur_x16, _rotMat[2]) + (uint32_t)MUL16(_shape_cur_y16, _rotMat[3])) >> 8);
 		pr[0].x =  0;
 		pr[0].y = -y;
 		pr[1].x = -x;
 		pr[1].y =  y;
 		if (_shape_count == 0) {
-			f -= ((_shape_ix - _shape_cur_x) * zoom * 128 + 0x8000) >> 16;
-			g -= ((_shape_iy - _shape_cur_y) * zoom * 128 + 0x8000) >> 16;
+			f -= (MUL16((_shape_ix - _shape_cur_x), zoom) * 128 + 0x8000) >> 16;
+			g -= (MUL16((_shape_iy - _shape_cur_y), zoom) * 128 + 0x8000) >> 16;
 			pt->x = f;
 			pt->y = g;
 			++pt;
 			_shape_cur_x16 = f << 16;
 			_shape_cur_y16 = g << 16;
 		} else {
-			_shape_cur_x16 = _shape_prev_x16 + (_shape_cur_x - _shape_prev_x) * zoom * 128;
-			_shape_cur_y16 = _shape_prev_y16 + (_shape_cur_y - _shape_prev_y) * zoom * 128;
+			_shape_cur_x16 = _shape_prev_x16 + MUL16((_shape_cur_x - _shape_prev_x), zoom) * 128;
+			_shape_cur_y16 = _shape_prev_y16 + MUL16((_shape_cur_y - _shape_prev_y), zoom) * 128;
 			pt->x = (_shape_cur_x16 + 0x8000) >> 16;
 			pt->y = (_shape_cur_y16 + 0x8000) >> 16;
 			++pt;
 		}
 		for (int i = 0; i < 2; ++i) {
 			_shape_cur_x += pr[i].x;
-			_shape_cur_x16 += pr[i].x * zoom * 128;
+			_shape_cur_x16 += MUL16(pr[i].x, zoom) * 128;
 			pt->x = (_shape_cur_x16 + 0x8000) >> 16;
 			_shape_cur_y += pr[i].y;
-			_shape_cur_y16 += pr[i].y * zoom * 128;
+			_shape_cur_y16 += MUL16(pr[i].y, zoom) * 128;
 			pt->y = (_shape_cur_y16 + 0x8000) >> 16;
 			++pt;
 		}
@@ -1342,16 +1689,16 @@ void Cutscene::drawShapeScaleRotate(const uint8_t *data, int16_t zoom, int16_t b
 		pt.y = c + READ_BE_UINT16(data); data += 2;
 		_shape_cur_x16 = _shape_ix - pt.x;
 		_shape_cur_y16 = _shape_iy - pt.y;
-		_shape_cur_x = _shape_ix + ((_rotMat[0] * _shape_cur_x16 + _rotMat[1] * _shape_cur_y16) >> 8);
-		_shape_cur_y = _shape_iy + ((_rotMat[2] * _shape_cur_x16 + _rotMat[3] * _shape_cur_y16) >> 8);
+		_shape_cur_x = _shape_ix + (((uint32_t)MUL16(_rotMat[0], _shape_cur_x16) + (uint32_t)MUL16(_rotMat[1], _shape_cur_y16)) >> 8);
+		_shape_cur_y = _shape_iy + (((uint32_t)MUL16(_rotMat[2], _shape_cur_x16) + (uint32_t)MUL16(_rotMat[3], _shape_cur_y16)) >> 8);
 		if (_shape_count != 0) {
-			_shape_cur_x16 = _shape_prev_x16 + (_shape_cur_x - _shape_prev_x) * zoom * 128;
+			_shape_cur_x16 = _shape_prev_x16 + MUL16((_shape_cur_x - _shape_prev_x), zoom) * 128;
 			pt.x = ((_shape_cur_x16 + 0x8000) >> 16) + _shape_ix + d;
-			_shape_cur_y16 = _shape_prev_y16 + (_shape_cur_y - _shape_prev_y) * zoom * 128;
+			_shape_cur_y16 = _shape_prev_y16 + MUL16((_shape_cur_y - _shape_prev_y), zoom) * 128;
 			pt.y = ((_shape_cur_y16 + 0x8000) >> 16) + _shape_iy + e;
 		} else {
-			f -= (((_shape_ix - _shape_cur_x) * zoom * 128) + 0x8000) >> 16;
-			g -= (((_shape_iy - _shape_cur_y) * zoom * 128) + 0x8000) >> 16;
+			f -= ((MUL16((_shape_ix - _shape_cur_x), zoom) * 128) + 0x8000) >> 16;
+			g -= ((MUL16((_shape_iy - _shape_cur_y), zoom) * 128) + 0x8000) >> 16;
 			_shape_cur_x16 = f << 16;
 			_shape_cur_y16 = g << 16;
 			pt.x = f + _shape_ix + d;
@@ -1373,12 +1720,12 @@ void Cutscene::drawShapeScaleRotate(const uint8_t *data, int16_t zoom, int16_t b
 		_shape_cur_x16 = _shape_ix - x;
 		_shape_cur_y16 = _shape_iy - y;
 
-		a = _shape_ix + ((_rotMat[0] * _shape_cur_x16 + _rotMat[1] * _shape_cur_y16) >> 8);
+		a = _shape_ix + (((uint32_t)MUL16(_rotMat[0], _shape_cur_x16) + (uint32_t)MUL16(_rotMat[1], _shape_cur_y16)) >> 8);
 		if (_shape_count == 0) {
 			_shape_ox = a;
 		}
 		_shape_cur_x = shape_last_x = a;
-		a = _shape_iy + ((_rotMat[2] * _shape_cur_x16 + _rotMat[3] * _shape_cur_y16) >> 8);
+		a = _shape_iy + (((uint32_t)MUL16(_rotMat[2], _shape_cur_x16) + (uint32_t)MUL16(_rotMat[3], _shape_cur_y16)) >> 8);
 		if (_shape_count == 0) {
 			_shape_oy = a;
 		}
@@ -1400,10 +1747,10 @@ void Cutscene::drawShapeScaleRotate(const uint8_t *data, int16_t zoom, int16_t b
 				sx = 0;
 				_shape_cur_x16 = _shape_ix - ix;
 				_shape_cur_y16 = _shape_iy - iy;
-				a = _shape_ix + ((_rotMat[0] * _shape_cur_x16 + _rotMat[1] * _shape_cur_y16) >> 8);
+				a = _shape_ix + (((uint32_t)MUL16(_rotMat[0], _shape_cur_x16) + (uint32_t)MUL16(_rotMat[1], _shape_cur_y16)) >> 8);
 				pt2->x = a - shape_last_x;
 				shape_last_x = a;
-				a = _shape_iy + ((_rotMat[2] * _shape_cur_x16 + _rotMat[3] * _shape_cur_y16) >> 8);
+				a = _shape_iy + (((uint32_t)MUL16(_rotMat[2], _shape_cur_x16) + (uint32_t)MUL16(_rotMat[3], _shape_cur_y16)) >> 8);
 				pt2->y = a - shape_last_y;
 				shape_last_y = a;
 				++pt2;
@@ -1413,26 +1760,26 @@ void Cutscene::drawShapeScaleRotate(const uint8_t *data, int16_t zoom, int16_t b
 		if (_shape_count == 0) {
 			ix = _shape_ox;
 			iy = _shape_oy;
-			f -= (((_shape_ix - ix) * zoom * 128) + 0x8000) >> 16;
-			g -= (((_shape_iy - iy) * zoom * 128) + 0x8000) >> 16;
+			f -= ((MUL16((_shape_ix - ix), zoom) * 128) + 0x8000) >> 16;
+			g -= ((MUL16((_shape_iy - iy), zoom) * 128) + 0x8000) >> 16;
 			pt->x = f + _shape_ix + d;
 			pt->y = g + _shape_iy + e;
 			++pt;
 			_shape_cur_x16 = f << 16;
 			_shape_cur_y16 = g << 16;
 		} else {
-			_shape_cur_x16 = _shape_prev_x16 + ((_shape_cur_x - _shape_prev_x) * zoom * 128);
+			_shape_cur_x16 = _shape_prev_x16 + (MUL16((_shape_cur_x - _shape_prev_x), zoom) * 128);
 			pt->x = _shape_ix + d + ((_shape_cur_x16 + 0x8000) >> 16);
-			_shape_cur_y16 = _shape_prev_y16 + ((_shape_cur_y - _shape_prev_y) * zoom * 128);
+			_shape_cur_y16 = _shape_prev_y16 + (MUL16((_shape_cur_y - _shape_prev_y), zoom) * 128);
 			pt->y = _shape_iy + e + ((_shape_cur_y16 + 0x8000) >> 16);
 			++pt;
 		}
 		for (int i = 0; i < numVertices; ++i) {
 			_shape_cur_x += tempVertices[i].x;
-			_shape_cur_x16 += tempVertices[i].x * zoom * 128;
+			_shape_cur_x16 += MUL16(tempVertices[i].x, zoom) * 128;
 			pt->x = d + _shape_ix + ((_shape_cur_x16 + 0x8000) >> 16);
 			_shape_cur_y += tempVertices[i].y;
-			_shape_cur_y16 += tempVertices[i].y * zoom * 128;
+			_shape_cur_y16 += MUL16(tempVertices[i].y, zoom) * 128;
 			pt->y = e + _shape_iy + ((_shape_cur_y16 + 0x8000) >> 16);
 			++pt;
 		}
@@ -1480,6 +1827,17 @@ void Cutscene::op_drawShapeScaleRotate() {
 	if (shapeOffset & 0x1000) {
 		r3 = fetchNextCmdWord();
 	}
+#ifdef ATARIST
+	if (!_stPrescan && !stSkipDraw()) {
+		if (g_options.ab & kAbCutNoDraw) {
+			return;
+		}
+		++_stCur.xform;
+		if (_stKeys) {
+			stStatsKey(stRot(stRot(stRot(stRot(stRot(stRot(shapeOffset, x), y), zoom), (_shape_ix << 8) | _shape_iy), r1), (r2 << 16) | r3));
+		}
+	}
+#endif
 	setRotationTransform(r1, r2, r3);
 
 	const uint8_t *shapeOffsetTable    = _polPtr + READ_BE_UINT16(_polPtr + 0x02);
@@ -1565,8 +1923,9 @@ void Cutscene::op_copyScreen() {
 #ifdef ATARIST
 	else {
 		// frames build on the one before: skipping any would lose
-		// its additions for good, so this scene draws them all
-		_stUsesCopyScreen = true;
+		// its additions for good, so this part draws them all (a part
+		// starts on a wiped page, so the next one need not)
+		_stCopyParts |= (uint16_t)(1 << (_stPart < 15 ? _stPart : 15));
 	}
 #endif
 	_frameDelay = 10;
@@ -1609,6 +1968,11 @@ void Cutscene::op_drawTextAtPos() {
 		int16_t y = (int8_t)fetchNextCmdByte() * 8;
 		if (!_creditsSequence) {
 			const uint8_t *str = _res->getCineString(strId & 0xFFF);
+#ifdef ATARIST
+			if (g_options.ab & kAbCutNoText) {
+				str = 0;
+			}
+#endif
 			if (str) {
 				const uint8_t color = 0xD0 + (strId >> 0xC);
 				drawText(x, y, str, color, _backPage, kTextJustifyCenter);
@@ -1713,7 +2077,7 @@ void Cutscene::stPrescanPalette(uint16_t num) {
 	const int savedTextLen = _creditsTextLen;
 
 	ST_cutscenePalReset();
-	_stUsesCopyScreen = false;
+	_stCopyParts = 0;
 	_stPrescan = true;
 	_stPrescanOps = 0;
 	_stPart = 0;
@@ -1734,6 +2098,7 @@ void Cutscene::stPrescanPalette(uint16_t num) {
 	_interrupted = false;
 	_stop = false;
 	_stPart = 0;
+	_stUsesCopyScreen = (g_options.ab & kAbCutHideAlways) ? _stCopyParts != 0 : (_stCopyParts & 1) != 0;
 	ST_cutscenePalLock(0);
 }
 #endif
@@ -1762,6 +2127,9 @@ void Cutscene::mainLoop(uint16_t num) {
 	c.r = c.g = c.b = 0;
 	for (int i = 0; i < 0x20; ++i) {
 		_stub->setPaletteEntry(0xC0 + i, &c);
+#ifdef ATARIST
+		_stPalApplied[i] = 0x000;
+#endif
 	}
 	// A scene starts on a black palette, so start its buffer black
 	// too: op_setPalette writes one 16-colour bank at a time, and
@@ -1822,10 +2190,32 @@ void Cutscene::mainLoop(uint16_t num) {
 		if (op >= NUM_OPCODES) {
 			error("Invalid cutscene opcode = 0x%02X", op);
 		}
+#ifdef ATARIST
+		// Input once a frame, not after every opcode: a frame is a few
+		// dozen opcodes, and each poll cost ~2.9K cycles (2.9ms of a
+		// level 1 frame). Polled after the opcodes that end a frame or
+		// wait (frame end, wait, caption, refresh, copy screen) and
+		// before the two that read keys (op_handleKeys, and
+		// op_refreshAll, which ends in it), so a key is never seen
+		// later than the frame it was pressed in.
+		enum {
+			kPollAfter = (1 << 0) | (1 << 2) | (1 << 5) | (1 << 6) | (1 << 9) | (1 << 12),
+			kPollBefore = (1 << 9) | (1 << 14)
+		};
+		const bool pollAll = (g_options.ab & kAbCutPollAlways) != 0;
+		if (!_stPrescan && !pollAll && ((1 << op) & kPollBefore)) {
+			_stub->processEvents();
+		}
+#endif
 		(this->*_opcodeTable[op])();
 		if (_stPrescan) {
 			continue;
 		}
+#ifdef ATARIST
+		if (!pollAll && !((1 << op) & kPollAfter)) {
+			continue;
+		}
+#endif
 		_stub->processEvents();
 		// any key skips: backspace is the original's key, but nobody
 		// guesses that. A press inside the grace period is dropped,
@@ -1962,6 +2352,7 @@ void Cutscene::playCredits() {
 		uint16_t cutOff = (int8_t)offsets[cut_id * 2 + 1];
 		if (load(cutName)) {
 #ifdef ATARIST
+			_stSceneId = cut_id;
 			stPrescanPalette(cutOff);
 			stBandedLoop(cutOff);
 #else
@@ -2098,6 +2489,7 @@ void Cutscene::play() {
 		} else if (cutName != 0xFF) {
 			if (load(cutName)) {
 #ifdef ATARIST
+				_stSceneId = _id;
 				stPrescanPalette(cutOff);
 				stBandedLoop(cutOff);
 #else

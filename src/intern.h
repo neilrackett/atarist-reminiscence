@@ -181,6 +181,7 @@ struct Options {
 	bool replay_hash;      // ST port, hidden: hash every replayed frame
 	int ab;                // ST port, hidden: kAb* bits, each turning one optimisation off
 	int replay_dump;       // ST port, hidden: replayed frame to write out as DMP.BIN, 0 none
+	int cutscene;          // ST port, hidden: play this one cutscene (cutscene=0x34) and quit, -1 none
 };
 
 // ST port: ab= in RS.CFG, for measuring an optimisation against what it
@@ -194,7 +195,24 @@ enum {
 	kAbNoDisplayList = 1 << 4,     // restore and redraw every sprite every frame
 	kAbChunkyBake = 1 << 5,        // bake through a chunky decode, not from the Amiga planes
 	kAbNoRoomCache = 1 << 6,       // decode every room afresh, revisits too
-	kAbNoPreshift = 1 << 7         // no copies shifted to a sprite's phase: the shift chain every time
+	kAbNoPreshift = 1 << 7,        // no copies shifted to a sprite's phase: the shift chain every time
+	// cutscenes: the first three switch an optimisation off, the rest
+	// switch a stage off altogether, to measure what it costs (taking
+	// the drawing out empties the change boxes, so the copies shrink
+	// with it: read those from the per-frame stats, not the total)
+	kAbCutNoSegCache = 1 << 8,     // every polygon walked afresh (no shape sprites either)
+	kAbCutNoShapeSprites = 1 << 9, // foreground shapes drawn as polygons
+	kAbCutNoIdleBake = 1 << 10,    // shapes baked only when drawn, never in a frame's wait
+	kAbCutNoDraw = 1 << 11,        // shapes parsed, not drawn
+	kAbCutNoPush = 1 << 12,        // frames never copied to the screen
+	kAbCutNoRestore = 1 << 13,     // the back page not restored from the background
+	kAbCutNoPalette = 1 << 14,     // palette changes ignored
+	kAbCutNoText = 1 << 15,        // captions and text not drawn
+	// cutscenes, the 8MHz round: each puts one change back as it was
+	kAbCutPollAlways = 1 << 16,    // input polled after every opcode, not once a frame
+	kAbCutOldPalette = 1 << 17,    // every palette change converts and writes all 32 entries
+	kAbCutHideAlways = 1 << 18,    // copyScreen scene-wide, and late frames there hidden three in four
+	kAbRingFirst = 1 << 19         // the sprite ring sized first, leaving the room cache what is over
 };
 
 // ST port: the four screen modes, in the order the menu cycles them

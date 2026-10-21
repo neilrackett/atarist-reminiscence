@@ -146,9 +146,31 @@ each optimisation off). Run a change that touches memory sizing on 2.5MB
 as well (`MEM=2560`), and one that touches the restore or the display
 list with `CFG="ab=16;replay_hash=true"` too.
 
-`tmp/cutbench/run.sh` times the intro and level 1's opening cutscene; it
-writes `dist/RS.CFG`, which goes to the hardware with the binary, so put
-that file back afterwards.
+**Cutscenes have their own bench, `tools/cutbench/`.** The hidden
+`cutscene=N` option (hex as `0x34`) plays one scene and quits, and with
+`logging=true` the log carries a `CUT` line per eight frames and a
+`CUTSUM` line per scene part (`Cutscene::stStatsEnd`), giving:
+- frames shown, and the longest run not shown;
+- work p50/p95/max against the budget;
+- the push and the restore;
+- shapes drawn as sprites, and why the rest were refused.
+
+The tools:
+- `tools/cutbench/run.sh TAG MACHINE SCENE...` plays scenes side by side,
+  with the player's defaults (music on, frame skipping on) unless `CFG`
+  says otherwise. Use `CFG="frame_skip=false;music=false"` for the work a
+  scene takes.
+- `tools/cutbench/summarise.py TAG [TAG...]` tabulates the runs.
+- `tools/cutbench/verify.sh TAG [REF]` hashes every drawn frame
+  (`CUTHASH.BIN`), and the colours it was shown in (`CUTPAL.BIN`), over
+  the intro, every level opening, a mid-level scene and the credits. It
+  compares them with run `REF`: a cutscene change must match frame for
+  frame.
+- `tools/cutbench/prof.sh OUT MACHINE SCENE` profiles one scene, and
+  `prof.py` reads the profile.
+
+The `kAbCut*` bits switch each cutscene cache and change off inside one
+binary.
 
 **Profiling.** Load symbols made from `build/flashbak.elf`
 (`m68k-atari-mint-nm -n -C`, `::` turned into `__`, only `T`/`t`/`W`

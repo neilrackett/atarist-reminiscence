@@ -10,6 +10,7 @@
 
 extern "C" {
 #include <stdl/stdl.h>
+#include <stdl/stdl_math.h>
 }
 
 #include "video_st.h"
@@ -1293,14 +1294,71 @@ void ST_perfFormat(const STPerf &p, char *buf, int len) {
 		(unsigned)p.bankLoads, (unsigned)p.bankClears, (unsigned long)(p.bankBytes >> 10));
 }
 
+// out of line: inlined with x + 8 and y + 8, gcc folds pageTouch's
+// empty-box tests away and warns that it assumed no overflow
+static __attribute__((noinline)) void glyphTouch(const uint8_t *layer, int x, int y) {
+	pageTouch(layer, x, x + 8, y, y + 8);
+}
+
 void ST_drawGlyph(uint8_t *layer, const uint8_t *src, int pitch, int x, int y, uint8_t colour8) {
 	const uint8_t v = ST_getRemap()[colour8];
-	if (ST_dlRecording(layer) && ST_dlAddGlyph(src, pitch, x, y, v, (colour8 & 0x80) != 0)) {
+	const bool setPrio = (colour8 & 0x80) != 0;
+	if (ST_dlRecording(layer) && ST_dlAddGlyph(src, pitch, x, y, v, setPrio)) {
 		return;
 	}
-	uint8_t map16[16];
-	memset(map16, v, sizeof(map16));
-	ST_drawSprite(layer, src, pitch, x, y, 8, 8, map16, 0, (colour8 & 0x80) != 0);
+	if (x < 0 || y < 0 || x + 8 > kSTLayerW || y + 8 > kSTLayerH) {
+		uint8_t map16[16];
+		memset(map16, v, sizeof(map16));
+		ST_drawSprite(layer, src, pitch, x, y, 8, 8, map16, 0, setPrio);
+		return;
+	}
+	// A glyph is one colour through a mask, so it goes straight into
+	// the planes: what STDL_BlitIndexed8 does with it (0 transparent,
+	// anything else the colour, the priority bits marked under it), a
+	// row's eight pixels as one shifted mask over the one or two
+	// groups they fall in. The general chunky blit cost ~2ms a glyph
+	// on an 8MHz ST, and a cutscene caption is 30 of them, twice.
+	glyphTouch(layer, x, y);
+	if (setPrio) {
+		ST_prioTouchedRect(x, y, 8, 8);
+	}
+	const uint16_t f0 = (v & 1) ? 0xFFFF : 0, f1 = (v & 2) ? 0xFFFF : 0;
+	const uint16_t f2 = (v & 4) ? 0xFFFF : 0, f3 = (v & 8) ? 0xFFFF : 0;
+	const int shift = 24 - (x & 15);
+	uint16_t *g = groupPtr(layer, x, y);
+	uint16_t *pr = prioPtr(layer, x, y);
+	for (int r = 0; r < 8; ++r, src += pitch, g += kSTRowBytes / 2, pr += kSTPrioRowBytes / 2) {
+		unsigned mb = 0;
+		for (int i = 0; i < 8; ++i) {
+			mb = (mb << 1) | (src[i] != 0);
+		}
+		if (mb == 0) {
+			continue;
+		}
+		const uint32_t m32 = (uint32_t)mb << shift;
+		uint16_t m = (uint16_t)(m32 >> 16);
+		if (m) {
+			const uint16_t keep = (uint16_t)~m;
+			g[0] = (uint16_t)((g[0] & keep) | (f0 & m));
+			g[1] = (uint16_t)((g[1] & keep) | (f1 & m));
+			g[2] = (uint16_t)((g[2] & keep) | (f2 & m));
+			g[3] = (uint16_t)((g[3] & keep) | (f3 & m));
+			if (setPrio) {
+				pr[0] |= m;
+			}
+		}
+		m = (uint16_t)m32;
+		if (m) {
+			const uint16_t keep = (uint16_t)~m;
+			g[4] = (uint16_t)((g[4] & keep) | (f0 & m));
+			g[5] = (uint16_t)((g[5] & keep) | (f1 & m));
+			g[6] = (uint16_t)((g[6] & keep) | (f2 & m));
+			g[7] = (uint16_t)((g[7] & keep) | (f3 & m));
+			if (setPrio) {
+				pr[1] |= m;
+			}
+		}
+	}
 }
 
 // which pixels of 16-pixel group g lie inside [lo, hi]
@@ -2725,7 +2783,7 @@ void ST_segCacheEnd() {
 }
 
 bool ST_segCacheOn() {
-	return g_segArena != 0 && ST_cutscenePalMode();
+	return g_segArena != 0 && ST_cutscenePalMode() && !(g_options.ab & kAbCutNoSegCache);
 }
 
 // the C route to a recorded polygon, for draws segHit does not see (a
@@ -2862,7 +2920,7 @@ static void shpRelease() {
 }
 
 bool ST_shpCacheOn() {
-	return g_shpArena != 0 && g_shpScratch != 0 && ST_segCacheOn();
+	return g_shpArena != 0 && g_shpScratch != 0 && ST_segCacheOn() && !(g_options.ab & kAbCutNoShapeSprites);
 }
 
 void ST_shpStats(uint32_t *drawn, uint32_t *baked) {
@@ -3115,7 +3173,9 @@ const void *ST_segRecord(const void *key, const void *ptsv, int n) {
 	e->rows = ybot - ytop + 1;
 	e->xlo = xlo;
 	e->xhi = xhi;
-	e->nseg = (int16_t)((end - rec) / kSegRec);
+	// a divs.w: as an int division this was a __divsi3 call (~600
+	// cycles) on every polygon the cache had not seen
+	e->nseg = STDL_DivS16((int32_t)(end - rec), kSegRec);
 	e->pad = 0;
 	const unsigned b = segBucket(key);
 	e->next = g_segHash[b];
@@ -3203,30 +3263,42 @@ void ST_hspanOr(uint8_t *layer, int x1, int x2, int y, uint8_t colour8) {
 	}
 	uint8_t orMap[16];
 	ST_getOrMap(colour8, orMap);
+	// The values the map moves, and the plane bits each move flips:
+	// all sixteen pixels of a group are translated together, a value
+	// at a time - the pixels holding value v are the AND of the four
+	// planes (or their complements, by v's bits), and those pixels'
+	// planes are XORed by v ^ orMap[v]. Values the map leaves alone
+	// cost nothing. Pixel by pixel this was ~127 cycles a pixel: a
+	// full-width shadow row 3.8ms, 2.2s of level 4's second scene.
+	uint8_t mv[16], flip[16];
+	int nMoved = 0;
+	for (int v = 0; v < 16; ++v) {
+		if (orMap[v] != v) {
+			mv[nMoved] = (uint8_t)v;
+			flip[nMoved] = (uint8_t)(orMap[v] ^ v);
+			++nMoved;
+		}
+	}
 	uint16_t *dst = groupPtr(layer, x1, y);
 	uint16_t *prio = prioPtr(layer, x1, y);
 	for (int g = x1 >> 4; g <= (x2 >> 4); ++g) {
 		const uint16_t m = groupMask(g, x1, x2);
-		// translate the covered pixels through the shadow map
-		uint16_t n0 = 0, n1 = 0, n2 = 0, n3 = 0;
-		uint16_t bit = 0x8000;
-		for (int i = 0; i < 16; ++i, bit >>= 1) {
-			if (!(m & bit)) {
-				continue;
-			}
-			int v = ((dst[0] & bit) ? 1 : 0) | ((dst[1] & bit) ? 2 : 0)
-			      | ((dst[2] & bit) ? 4 : 0) | ((dst[3] & bit) ? 8 : 0);
-			const uint8_t nv = orMap[v];
-			if (nv & 1) n0 |= bit;
-			if (nv & 2) n1 |= bit;
-			if (nv & 4) n2 |= bit;
-			if (nv & 8) n3 |= bit;
+		const uint16_t p0 = dst[0], p1 = dst[1], p2 = dst[2], p3 = dst[3];
+		uint16_t d0 = 0, d1 = 0, d2 = 0, d3 = 0;
+		for (int k = 0; k < nMoved; ++k) {
+			const int v = mv[k];
+			const uint16_t sel = (uint16_t)(((v & 1) ? p0 : ~p0) & ((v & 2) ? p1 : ~p1)
+			                    & ((v & 4) ? p2 : ~p2) & ((v & 8) ? p3 : ~p3));
+			const int f = flip[k];
+			if (f & 1) d0 |= sel;
+			if (f & 2) d1 |= sel;
+			if (f & 4) d2 |= sel;
+			if (f & 8) d3 |= sel;
 		}
-		const uint16_t keep = ~m;
-		dst[0] = (dst[0] & keep) | n0;
-		dst[1] = (dst[1] & keep) | n1;
-		dst[2] = (dst[2] & keep) | n2;
-		dst[3] = (dst[3] & keep) | n3;
+		dst[0] = (uint16_t)(p0 ^ (d0 & m));
+		dst[1] = (uint16_t)(p1 ^ (d1 & m));
+		dst[2] = (uint16_t)(p2 ^ (d2 & m));
+		dst[3] = (uint16_t)(p3 ^ (d3 & m));
 		*prio |= m;
 		dst += 4;
 		++prio;
@@ -3286,10 +3358,12 @@ static inline void copyBlock(uint8_t *dst, const uint8_t *src) {
 #endif
 }
 
-// copyBlock for a length known only at run time (a multiple of 16)
+// copyBlock for a length known only at run time (a multiple of 16,
+// under 3MB: the burst count is a divu.w, not a __divsi3 call)
 static void copyBytes(uint8_t *dst, const uint8_t *src, int bytes) {
 #ifdef __m68k__
-	int bursts = bytes / 48;
+	int bursts = STDL_DivU16((uint32_t)bytes, 48);
+	const int rest = bytes - (bursts << 5) - (bursts << 4);
 	if (bursts > 0) {
 		__asm__ volatile(
 			"subq.w #1,%2\n"
@@ -3305,7 +3379,7 @@ static void copyBytes(uint8_t *dst, const uint8_t *src, int bytes) {
 	}
 	const uint32_t *s32 = (const uint32_t *)src;
 	uint32_t *d32 = (uint32_t *)dst;
-	for (int n = (bytes % 48) / 4; --n >= 0; ) {
+	for (int n = rest >> 2; --n >= 0; ) {
 		*d32++ = *s32++;
 	}
 #else
@@ -3317,13 +3391,19 @@ static void copyBytes(uint8_t *dst, const uint8_t *src, int bytes) {
 // stores downward from the end, 48 bytes a burst
 static void fillBytes(uint8_t *dst, int bytes, uint32_t a, uint32_t b) {
 	uint32_t *d32 = (uint32_t *)dst;
-	const int tail = (bytes % 48) / 4;   // even: 48 and 16 keep the pair phase
+#ifdef __m68k__
+	int bursts = STDL_DivU16((uint32_t)bytes, 48);   // a divu.w, not __divsi3
+	const int tail = (bytes - (bursts << 5) - (bursts << 4)) >> 2;
+#else
+	int bursts = bytes / 48;
+	const int tail = (bytes % 48) / 4;
+#endif
+	// even: 48 and 16 keep the pair phase
 	for (int n = tail / 2; --n >= 0; ) {
 		*d32++ = a;
 		*d32++ = b;
 	}
 #ifdef __m68k__
-	int bursts = bytes / 48;
 	if (bursts > 0) {
 		uint8_t *end = (uint8_t *)d32 + bursts * 48;
 		register uint32_t ra __asm__("d1") = a;
@@ -3385,13 +3465,35 @@ void ST_copyLayer(uint8_t *dst, const uint8_t *src) {
 	copyBlock<kSTPlaneBytes + kSTPrioRowBytes * kSTLayerH>(dst, src);
 }
 
-// Copy a box, clipped to the band: whole rows through movem when
-// it covers most of the width - a row of clean groups costs less
-// than splitting the copy - and a group (two longs) at a time
-// otherwise.
-// A box this many groups wide (of 16) is copied as whole rows
-enum { kBoxWholeRows = 10 };
+bool ST_copyGroupRows(uint8_t *d, int dStride, const uint8_t *s, int sStride, int groups, int h) {
+	switch (groups) {
+	case 1: copyRowsN<2>(d, dStride, s, sStride, h); return true;
+	case 2: copyRowsN<4>(d, dStride, s, sStride, h); return true;
+	case 3: copyRowsN<6>(d, dStride, s, sStride, h); return true;
+	case 4: copyRowsN<8>(d, dStride, s, sStride, h); return true;
+	case 5: copyRowsN<10>(d, dStride, s, sStride, h); return true;
+	case 6: copyRowsN<12>(d, dStride, s, sStride, h); return true;
+	case 7: copyRowsN<14>(d, dStride, s, sStride, h); return true;
+	case 8: copyRowsN<16>(d, dStride, s, sStride, h); return true;
+	case 9: copyRowsN<18>(d, dStride, s, sStride, h); return true;
+	case 10: copyRowsN<20>(d, dStride, s, sStride, h); return true;
+	case 11: copyRowsN<22>(d, dStride, s, sStride, h); return true;
+	case 12: copyRowsN<24>(d, dStride, s, sStride, h); return true;
+	case 13: copyRowsN<26>(d, dStride, s, sStride, h); return true;
+	case 14: copyRowsN<28>(d, dStride, s, sStride, h); return true;
+	case 15: copyRowsN<30>(d, dStride, s, sStride, h); return true;
+	case 16: copyRowsN<32>(d, dStride, s, sStride, h); return true;
+	}
+	return false;
+}
 
+uint32_t g_stCutCopyGR;
+
+// Copy a box, clipped to the band: the whole width as one run of
+// rows, anything narrower its exact width a row at a time through
+// copyRowN's movem bursts. Boxes of 10 groups or more used to be
+// copied as whole rows (the narrower ones a long at a time in C),
+// paying for up to 6 groups of clean pixels a row.
 static void copyBox(uint8_t *dst, const uint8_t *src, const TrkBox *b) {
 	int y0 = b->y0 < g_bandY0 ? g_bandY0 : b->y0;
 	int y1 = b->y1 > g_bandY1 ? g_bandY1 : b->y1;
@@ -3399,22 +3501,14 @@ static void copyBox(uint8_t *dst, const uint8_t *src, const TrkBox *b) {
 		return;
 	}
 	const int n = b->g1 - b->g0;
-	if (n >= kBoxWholeRows) {
+	g_stCutCopyGR += STDL_MulU16((uint16_t)n, (uint16_t)(y1 - y0));
+	if (n == kSTLayerW / 16) {
 		const int off = y0 * kSTRowBytes;
 		copyBytes(dst + off, src + off, (y1 - y0) * kSTRowBytes);
 		return;
 	}
-	const uint32_t *s = (const uint32_t *)(src + y0 * kSTRowBytes + b->g0 * 8);
-	uint32_t *d = (uint32_t *)(dst + y0 * kSTRowBytes + b->g0 * 8);
-	const int skip = kSTRowBytes / 4 - n * 2;
-	for (int r = y1 - y0; --r >= 0; ) {
-		for (int k = n; --k >= 0; ) {
-			*d++ = *s++;
-			*d++ = *s++;
-		}
-		s += skip;
-		d += skip;
-	}
+	const int off = y0 * kSTRowBytes + b->g0 * 8;
+	ST_copyGroupRows(dst + off, kSTRowBytes, src + off, kSTRowBytes, n, y1 - y0);
 }
 
 static void markBand(TrkBox *b) {
@@ -3497,11 +3591,8 @@ bool ST_pageShowRect(const uint8_t *page, bool full, int *x, int *y, int *w, int
 	if (r.y0 >= r.y1 || r.g0 >= r.g1) {
 		return false;
 	}
-	// most of the width: whole rows, the copy's fast path
-	if (r.g1 - r.g0 >= kBoxWholeRows) {
-		r.g0 = 0;
-		r.g1 = 16;
-	}
+	// the exact width: every width has a movem path now (copyRowN),
+	// so widening a wide box to whole rows only copies clean groups
 	*x = r.g0 * 16;
 	*w = (r.g1 - r.g0) * 16;
 	*y = r.y0;
