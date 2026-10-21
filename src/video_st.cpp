@@ -1551,7 +1551,7 @@ __asm__(
  * applied), fn 40 (colour nibble | prio mode << 4, 64 variants).
  * PolyState adds: pts 44, n 48, imax 52, ia 56, ib 60, ya 64, yb 68,
  * y 72, ylast 76, crx 80, recip 84 (n..crx as words in the low half),
- * rec 88 (non-zero: record the segments there instead of filling -
+ * rec 88 (non-zero: record each row's span there instead of filling -
  * mode 4, rs4_run).
  * regs: d0 f01, d1 f23, d5 pv, d6 lim, a2 variant entry,
  * a3 fa, a4 fb, a5 row, a6 prow; rs_run stack: ret, count, sa, sb
@@ -1840,7 +1840,7 @@ __asm__(
  * state - nothing on the stack, and the row tail is a dbra. Mode 3
  * is for a polygon whose vertices all lie inside the clip: its rows
  * cannot need clamping, so the header skips the four compares. */
-".macro RS_PAGE_BODY\n"
+".macro RS_PAGE_BODY tofs=20\n"
 "    move.w %d2,%d4\n"
 "    asr.w  #4,%d4\n"                /* g0 */
 "    move.w %d3,%d7\n"
@@ -1865,7 +1865,7 @@ __asm__(
 "    not.l  %d3\n"
 "    jmp    (%a2)\n"                 /* left end, run, right end */
 "8:  and.l  %d2,%d4\n"               /* one group: m = lm & rm */
-"    jmp    -20(%a2)\n"              /* the variant's right end alone */
+"    jmp    -\\tofs(%a2)\n"         /* the variant's right end alone */
 ".endm\n"
 "rs2_run:\n"
 "rs2_row:\n"
@@ -1910,106 +1910,163 @@ __asm__(
 "    dbra   %d5,rs3_row\n"
 "    rts\n"
 /* The record core (mode 4, see ST_segRecord): a page core's calling
- * convention, but instead of filling its rows it appends the segment
- * - fa, sa, fb, sb, rows - at the state's rec pointer (offset 88) and
- * steps the edges past them exactly as a fill would. */
+ * convention, but instead of filling its rows it appends each row's
+ * span - the two edges' x as the row header sorts them - at the
+ * state's rec pointer (offset 88), stepping the edges as a fill
+ * would. */
 "rs4_run:\n"
 "    move.l 88(%a0),%a1\n"
-"    move.l %a3,(%a1)+\n"
-"    move.l 4(%a0),(%a1)+\n"
-"    move.l %a4,(%a1)+\n"
-"    move.l %a6,(%a1)+\n"
-"    move.w %d5,%d2\n"
-"    addq.w #1,%d2\n"
-"    move.w %d2,(%a1)+\n"
-"    move.l %a1,88(%a0)\n"
-"1:  add.l  4(%a0),%a3\n"
+"1:  move.l %a3,%d2\n"
+"    move.l %a4,%d3\n"
+"    swap   %d2\n"
+"    swap   %d3\n"
+"    cmp.w  %d3,%d2\n"
+"    ble.s  2f\n"
+"    exg    %d2,%d3\n"
+"2:  move.w %d2,(%a1)+\n"
+"    move.w %d3,(%a1)+\n"
+"    add.l  4(%a0),%a3\n"
 "    add.l  %a6,%a4\n"
-"    lea    128(%a5),%a5\n"
 "    dbra   %d5,1b\n"
+"    move.l %a1,88(%a0)\n"
 "    rts\n"
-/* Replay recorded segments through the page cores (ST_segDraw).
- * ReplayState offsets past RasterState: seg 44 (next record), nseg
- * 48, xt 52 (the x translation, 16.16), skip 56 (rows above the clip
- * still to step past), left 60 (rows still to fill); counts in the
- * low words. Each record carries its own fa and fb, so a segment
- * wholly above the clip is passed over without stepping. */
+/* Replay a recorded polygon's spans (ST_segDraw). ReplayState past
+ * RasterState: span 44 (the first row to fill), rows 48, xo 52 (the
+ * origin's layer x, clip origin included), in the low words. */
 "_segReplay:\n"                      /* (state) */
 "    movem.l %d2-%d7/%a2-%a6,-(%sp)\n"
 "    move.l 48(%sp),%a0\n"
-"    RS_LOAD\n"
-"    bsr.s  sr_loop\n"
+"    move.l 16(%a0),%a5\n"            /* row */
+"    move.l 20(%a0),%a6\n"            /* prow */
+"    move.l 24(%a0),%d0\n"            /* f01 */
+"    move.l 28(%a0),%d1\n"            /* f23 */
+"    move.l 36(%a0),%d6\n"            /* lim */
+"    move.l 44(%a0),%a3\n"            /* span */
+"    move.w 50(%a0),%d7\n"            /* rows */
+"    move.w 54(%a0),%a4\n"            /* xo */
+"    move.w 42(%a0),%d2\n"            /* fn */
+"    bsr    sp_go\n"
 "    movem.l (%sp)+,%d2-%d7/%a2-%a6\n"
 "    rts\n"
-/* the segments: a0 state, d0/d1 fill, d6 lim, a2 variant, a5 row;
- * a6 prow for the priority modes (0, 1 - a shape sprite's bake marks
- * its coverage that way), which fill through rs_run */
-"sr_loop:\n"
-"sr_seg:\n"
-"    move.l 44(%a0),%a1\n"
-"    move.l (%a1)+,%a3\n"             /* fa */
-"    move.l (%a1)+,4(%a0)\n"          /* sa, where the cores read it */
-"    move.l (%a1)+,%a4\n"             /* fb */
-"    move.l (%a1)+,%d3\n"             /* sb */
-"    move.w (%a1)+,%d4\n"             /* rows */
-"    move.l %a1,44(%a0)\n"
-"    move.l 52(%a0),%d2\n"
-"    add.l  %d2,%a3\n"
-"    add.l  %d2,%a4\n"
-"    move.w 58(%a0),%d2\n"            /* skip */
-"    beq.s  2f\n"
-"    cmp.w  %d4,%d2\n"
-"    bcs.s  1f\n"
-"    sub.w  %d4,58(%a0)\n"            /* all of it above the clip */
-"    bra    sr_next\n"
-"1:  sub.w  %d2,%d4\n"
-"    clr.w  58(%a0)\n"
-"    subq.w #1,%d2\n"
-"3:  add.l  4(%a0),%a3\n"
-"    add.l  %d3,%a4\n"
-"    dbra   %d2,3b\n"
-"2:  move.w 62(%a0),%d2\n"            /* left */
-"    cmp.w  %d2,%d4\n"
-"    bls.s  4f\n"
-"    move.w %d2,%d4\n"
-"4:  sub.w  %d4,62(%a0)\n"
-"    btst   #5,43(%a0)\n"
-"    beq    7f\n"                      /* modes 0/1: the priority core */
-"    move.l %d3,%a6\n"
-"    move.w %d4,%d5\n"
+/* The span cores: a recorded polygon is its rows' spans (rs4_run),
+ * so a replay reads each row's two x where the edge cores step two
+ * 16.16 edges, and there are no segments to set up - the per-segment
+ * set-up cost a third as much as the rows of a cached polygon. sp_go
+ * fills d7 rows (1..) from the spans at a3 for fn in d2 (colour |
+ * mode << 4): d0/d1 fill, d6 lim, a4 xo, a5 row, a6 prow (a bake),
+ * a0 the state (pv at 32). Page modes 2 and 3: d5 the dbra count and
+ * a6 the header, which each variant's tail loops back to (sp_mtab,
+ * SP_ROW). Mode 1, a shape sprite's bake, marks coverage in the
+ * priority plane like rs_run, with its row count in d7's high word
+ * (sp1_mtab); mode 0 never reaches the cache (cutscene pages). */
+"sp_go:\n"
+"    moveq  #15,%d3\n"
+"    and.w  %d2,%d3\n"
+"    add.w  %d3,%d3\n"
+"    btst   #5,%d2\n"
+"    beq.s  sp_bake\n"
+"    lea    sp_mtab(%pc),%a2\n"
+"    move.w (%a2,%d3.w),%d3\n"
+"    lea    (%a2,%d3.w),%a2\n"
+"    move.w %d7,%d5\n"
 "    subq.w #1,%d5\n"
-"    btst   #4,43(%a0)\n"
-"    bne.s  5f\n"
-"    bsr    rs2_run\n"
-"    bra    6f\n"
-"5:  bsr    rs3_run\n"
-"    bra    6f\n"
-"7:  move.l %a0,-(%sp)\n"             /* rs_run takes a0 for groups */
-"    move.l %d3,-(%sp)\n"             /* sb */
-"    move.l 4(%a0),-(%sp)\n"          /* sa */
-"    ext.l  %d4\n"
-"    move.l %d4,-(%sp)\n"             /* rows */
+"    lea    sp3_row(%pc),%a6\n"
+"    btst   #4,%d2\n"
+"    bne.s  1f\n"
+"    lea    sp2_row(%pc),%a6\n"
+"1:  jmp    (%a6)\n"                  /* the core returns for us */
+"sp_bake:\n"
+"    lea    sp1_mtab(%pc),%a2\n"
+"    move.w (%a2,%d3.w),%d3\n"
+"    lea    (%a2,%d3.w),%a2\n"
 "    move.l 32(%a0),%d5\n"            /* pv */
-"    bsr    rs_run\n"
-"    lea    12(%sp),%sp\n"
-"    move.l (%sp)+,%a0\n"
-"6:  tst.w  62(%a0)\n"
-"    beq    sr_out\n"
-"sr_next:\n"
-"    subq.w #1,50(%a0)\n"
-"    bne    sr_seg\n"
-"sr_out:\n"
+"    subq.w #1,%d7\n"
+"    swap   %d7\n"
+"sp1_row:\n"
+"    move.w (%a3)+,%d2\n"
+"    move.w (%a3)+,%d3\n"
+"    add.w  %a4,%d2\n"
+"    add.w  %a4,%d3\n"
+"    cmp.w  %d6,%d3\n"                /* xhi */
+"    ble.s  1f\n"
+"    move.w %d6,%d3\n"
+"1:  swap   %d6\n"
+"    cmp.w  %d6,%d2\n"                /* xlo */
+"    bge.s  2f\n"
+"    move.w %d6,%d2\n"
+"2:  swap   %d6\n"
+"    cmp.w  %d3,%d2\n"
+"    bgt.s  sp1_skip\n"
+"    move.w %d2,%d4\n"
+"    asr.w  #4,%d4\n"                 /* g0 */
+"    move.w %d3,%d7\n"                /* (the low word: the count is high) */
+"    asr.w  #4,%d7\n"
+"    sub.w  %d4,%d7\n"                /* d7 = g1 - g0 */
+"    lea    rs_lmask(%pc),%a1\n"
+"    and.w  #15,%d2\n"
+"    add.w  %d2,%d2\n"
+"    add.w  %d2,%d2\n"
+"    move.l (%a1,%d2.w),%d2\n"        /* left mask m:m */
+"    and.w  #15,%d3\n"
+"    add.w  %d3,%d3\n"
+"    add.w  %d3,%d3\n"
+"    move.l 64(%a1,%d3.w),%d3\n"      /* right mask (rs_rmask) */
+"    add.w  %d4,%d4\n"
+"    lea    (%a6,%d4.w),%a1\n"        /* prio = prow + g0 */
+"    lsl.w  #2,%d4\n"
+"    lea    (%a5,%d4.w),%a0\n"        /* dst = row + g0*8 */
+"    move.l %d3,%d4\n"
+"    tst.w  %d7\n"
+"    beq.s  3f\n"
+"    subq.w #1,%d7\n"                 /* full groups between the ends */
+"    move.l %d2,%d3\n"
+"    not.l  %d3\n"
+"    jmp    (%a2)\n"
+"3:  and.l  %d2,%d4\n"                /* one group: m = lm & rm */
+"    jmp    -20(%a2)\n"
+"sp1_skip:\n"
+"    lea    128(%a5),%a5\n"
+"    lea    32(%a6),%a6\n"
+"    swap   %d7\n"
+"    dbra   %d7,1f\n"
 "    rts\n"
+"1:  swap   %d7\n"
+"    bra    sp1_row\n"
+"sp2_row:\n"                          /* clamped to the clip */
+"    move.w (%a3)+,%d2\n"
+"    move.w (%a3)+,%d3\n"
+"    add.w  %a4,%d2\n"
+"    add.w  %a4,%d3\n"
+"    cmp.w  %d6,%d3\n"
+"    ble.s  1f\n"
+"    move.w %d6,%d3\n"
+"1:  swap   %d6\n"
+"    cmp.w  %d6,%d2\n"
+"    bge.s  2f\n"
+"    move.w %d6,%d2\n"
+"2:  swap   %d6\n"
+"    cmp.w  %d3,%d2\n"
+"    bgt.s  sp2_skip\n"
+"    RS_PAGE_BODY 26\n"
+"sp2_skip:\n"
+"    lea    128(%a5),%a5\n"
+"    dbra   %d5,sp2_row\n"
+"    rts\n"
+"sp3_row:\n"                          /* inside it: nothing to clamp */
+"    move.w (%a3)+,%d2\n"
+"    move.w (%a3)+,%d3\n"
+"    add.w  %a4,%d2\n"
+"    add.w  %a4,%d3\n"
+"    RS_PAGE_BODY 26\n"
 /* segHit(key, x, y, colour8): a cached polygon drawn start to finish -
- * the lookup, ST_segDraw's clipping and state, and the segments - for
- * op_drawShape's loop, where the C path's setup cost as much as the
- * fill. 0 when the key is not cached (the caller records it). The
- * shape's box grows in g_segCtx and is applied once per shape
- * (ST_segShapeEnd). SegCtx offsets past ReplayState: layer 64,
- * remap 68, fill01 72, fill23 76, hash 80, lim 84, crx 88, cry 90,
- * xmaxv 92, ylast 94, box xlo 96 xhi 98 y0 100 y1 102, hits 104,
- * bake 108 (a shape sprite's bake: mode 1, which marks coverage in
- * the priority plane, and prow for it). */
+ * the lookup, ST_segDraw's clipping, and the spans - for op_drawShape's
+ * loop, where the C path's setup cost as much as the fill. 0 when the
+ * key is not cached (the caller records it). The shape's box grows in
+ * g_segCtx and is applied once per shape (ST_segShapeEnd). SegCtx
+ * offsets past RasterState: layer 44, remap 48, fill01 52, fill23 56,
+ * hash 60, lim 64, crx 68, cry 70, xmaxv 72, ylast 74, box xlo 76 xhi
+ * 78 y0 80 y1 82, hits 84, bake 88 (a shape sprite's bake: mode 1,
+ * which marks coverage in the priority plane, and prow for it). */
 "    .globl _segHit\n"                  /* called from cutscene.cpp */
 "_segHit:\n"
 "    movem.l %d2-%d7/%a2-%a6,-(%sp)\n"
@@ -2021,7 +2078,7 @@ __asm__(
 "    and.w  #255,%d1\n"
 "    add.w  %d1,%d1\n"
 "    add.w  %d1,%d1\n"
-"    move.l 80(%a0),%a1\n"
+"    move.l 60(%a0),%a1\n"
 "    move.l (%a1,%d1.w),%a1\n"
 "1:  move.l %a1,%d1\n"
 "    beq.s  sh_miss\n"
@@ -2033,14 +2090,14 @@ __asm__(
 "    moveq  #0,%d0\n"
 "    movem.l (%sp)+,%d2-%d7/%a2-%a6\n"
 "    rts\n"
-"2:  addq.l #1,104(%a0)\n"
+"2:  addq.l #1,84(%a0)\n"
 "    move.w 54(%sp),%d2\n"             /* x */
 "    move.w %d2,%d3\n"
 "    add.w  12(%a1),%d2\n"             /* xlo */
 "    add.w  14(%a1),%d3\n"             /* xhi */
 "    tst.w  %d3\n"
 "    bmi    sh_done\n"                 /* wholly left of the clip */
-"    cmp.w  92(%a0),%d2\n"
+"    cmp.w  72(%a0),%d2\n"
 "    bgt    sh_done\n"                 /* wholly right of it */
 "    move.w 58(%sp),%d4\n"             /* y */
 "    add.w  8(%a1),%d4\n"              /* ytop */
@@ -2050,78 +2107,69 @@ __asm__(
 "3:  move.w %d4,%d7\n"                 /* last = min(ybot, ylast) */
 "    add.w  10(%a1),%d7\n"
 "    subq.w #1,%d7\n"
-"    cmp.w  94(%a0),%d7\n"
+"    cmp.w  74(%a0),%d7\n"
 "    ble.s  4f\n"
-"    move.w 94(%a0),%d7\n"
+"    move.w 74(%a0),%d7\n"
 "4:  cmp.w  %d7,%d6\n"
 "    bgt    sh_done\n"                 /* wholly above or below */
-"    cmp.w  96(%a0),%d2\n"             /* the shape's box */
+"    cmp.w  76(%a0),%d2\n"             /* the shape's box */
 "    bge.s  5f\n"
-"    move.w %d2,96(%a0)\n"
-"5:  cmp.w  98(%a0),%d3\n"
+"    move.w %d2,76(%a0)\n"
+"5:  cmp.w  78(%a0),%d3\n"
 "    ble.s  5f\n"
-"    move.w %d3,98(%a0)\n"
-"5:  cmp.w  100(%a0),%d6\n"
+"    move.w %d3,78(%a0)\n"
+"5:  cmp.w  80(%a0),%d6\n"
 "    bge.s  5f\n"
-"    move.w %d6,100(%a0)\n"
-"5:  cmp.w  102(%a0),%d7\n"
+"    move.w %d6,80(%a0)\n"
+"5:  cmp.w  82(%a0),%d7\n"
 "    ble.s  5f\n"
-"    move.w %d7,102(%a0)\n"
+"    move.w %d7,82(%a0)\n"
 "5:  move.w %d6,%d5\n"                 /* skip = first - ytop */
 "    sub.w  %d4,%d5\n"
-"    move.w %d5,58(%a0)\n"
-"    sub.w  %d6,%d7\n"                 /* left = last - first + 1 */
+"    add.w  %d5,%d5\n"
+"    add.w  %d5,%d5\n"
+"    lea    16(%a1,%d5.w),%a3\n"       /* the first row's span */
+"    sub.w  %d6,%d7\n"                 /* rows = last - first + 1 */
 "    addq.w #1,%d7\n"
-"    move.w %d7,62(%a0)\n"
-"    move.w 16(%a1),50(%a0)\n"         /* nseg */
-"    lea    20(%a1),%a1\n"
-"    move.l %a1,44(%a0)\n"             /* seg */
-"    move.w 54(%sp),%d5\n"             /* xt = (x + crx) << 16 */
-"    add.w  88(%a0),%d5\n"
-"    swap   %d5\n"
-"    clr.w  %d5\n"
-"    move.l %d5,52(%a0)\n"
-"    add.w  90(%a0),%d6\n"             /* row = layer + (cry + first) * 128 */
+"    move.w 54(%sp),%a4\n"             /* xo = x + crx */
+"    add.w  68(%a0),%a4\n"
+"    add.w  70(%a0),%d6\n"             /* row = layer + (cry + first) * 128 */
 "    ext.l  %d6\n"
 "    lsl.l  #7,%d6\n"
-"    move.l 64(%a0),%a5\n"
+"    move.l 44(%a0),%a5\n"
 "    add.l  %d6,%a5\n"
-"    tst.b  108(%a0)\n"                /* a bake: prow for the priority core */
+"    tst.b  88(%a0)\n"                 /* a bake: prow for the priority core */
 "    beq.s  9f\n"
 "    lsr.l  #2,%d6\n"
 "    add.l  #28672,%d6\n"              /* kSTPlaneBytes */
-"    move.l 64(%a0),%a6\n"
+"    move.l 44(%a0),%a6\n"
 "    add.l  %d6,%a6\n"
 "9:\n"
 "    moveq  #0,%d1\n"                  /* v = remap[colour8] & 15 */
 "    move.b 63(%sp),%d1\n"
-"    move.l 68(%a0),%a1\n"
+"    move.l 48(%a0),%a1\n"
 "    move.b (%a1,%d1.w),%d1\n"
 "    and.w  #15,%d1\n"
 "    moveq  #0x20,%d5\n"               /* mode 3 if it cannot need clamping */
 "    tst.w  %d2\n"
 "    bmi.s  6f\n"
-"    cmp.w  92(%a0),%d3\n"
+"    cmp.w  72(%a0),%d3\n"
 "    bgt.s  6f\n"
 "    moveq  #0x30,%d5\n"
-"6:  tst.b  108(%a0)\n"
+"6:  tst.b  88(%a0)\n"
 "    beq.s  8f\n"
 "    moveq  #0x10,%d5\n"               /* a bake: mode 1 marks coverage */
-"8:  or.w   %d1,%d5\n"
-"    move.l %d5,40(%a0)\n"             /* fn */
-"    add.w  %d5,%d5\n"
-"    lea    rs_mtab(%pc),%a2\n"
-"    move.w (%a2,%d5.w),%d5\n"
-"    lea    (%a2,%d5.w),%a2\n"         /* variant entry */
+"8:  move.w %d1,%d2\n"
+"    or.w   %d5,%d2\n"                 /* fn */
 "    add.w  %d1,%d1\n"
 "    add.w  %d1,%d1\n"
-"    move.l 76(%a0),%a1\n"
-"    move.l (%a1,%d1.w),%d2\n"         /* f23 */
-"    move.l 72(%a0),%a1\n"
+"    move.l 56(%a0),%a1\n"
+"    move.l (%a1,%d1.w),%d3\n"         /* f23 */
+"    move.l 52(%a0),%a1\n"
 "    move.l (%a1,%d1.w),%d0\n"         /* f01 */
-"    move.l %d2,%d1\n"
-"    move.l 84(%a0),%d6\n"             /* lim */
-"    bsr    sr_loop\n"
+"    move.l %d3,%d1\n"
+"    move.l 64(%a0),%d6\n"             /* lim */
+"    bsr    sp_go\n"
 "sh_done:\n"
 "    moveq  #1,%d0\n"
 "    movem.l (%sp)+,%d2-%d7/%a2-%a6\n"
@@ -2214,15 +2262,15 @@ __asm__(
  * The full-group run is entered part way through, d7 groups from
  * its end: 6 bytes of code per group with a priority word, 4
  * without. Each mode's tail returns to its own core. */
-".macro RS_ROW p0,p1,p2,p3,pm,dst,skip\n"
-"rs_t\\p0\\p1\\p2\\p3\\pm:\n"
+".macro RS_ROW pre,p0,p1,p2,p3,pm,dst,skip\n"
+"\\pre\\()_t\\p0\\p1\\p2\\p3\\pm:\n"
 "    move.l %d4,%d2\n"
 "    move.l %d4,%d3\n"
 "    not.l  %d3\n"
 "    RS_END \\p0,\\p1,\\p2,\\p3,\\pm,\\dst\n"
 "    bra    \\skip\n"
-"    .space 20-(.-rs_t\\p0\\p1\\p2\\p3\\pm)\n"
-"rs_v\\p0\\p1\\p2\\p3\\pm:\n"
+"    .space 20-(.-\\pre\\()_t\\p0\\p1\\p2\\p3\\pm)\n"
+"\\pre\\()_v\\p0\\p1\\p2\\p3\\pm:\n"
 "    RS_END \\p0,\\p1,\\p2,\\p3,\\pm,\\dst\n"
 "    add.w  %d7,%d7\n"
 "    .if \\pm>=2\n"
@@ -2242,19 +2290,60 @@ __asm__(
 "    .endif\n"
 "    .endr\n"
 "rs_e\\@:\n"
-"    bra    rs_t\\p0\\p1\\p2\\p3\\pm\n"
+"    bra    \\pre\\()_t\\p0\\p1\\p2\\p3\\pm\n"
 ".endm\n"
-".macro RS_TAB p0,p1,p2,p3,pm\n"
-"    .word rs_v\\p0\\p1\\p2\\p3\\pm-rs_mtab\n"
+/* A span core's page variant (see sp_go): as RS_ROW's mode 2, but the
+ * right end follows the run rather than being branched to, and each
+ * tail steps the row and loops back to the header in a6 itself - two
+ * branches a row fewer. The right-end-only entry is 26 bytes before
+ * the main one. */
+".macro SP_ROW p0,p1,p2,p3\n"
+"sp_t\\p0\\p1\\p2\\p3:\n"
+"    move.l %d4,%d2\n"
+"    move.l %d4,%d3\n"
+"    not.l  %d3\n"
+"    RS_END \\p0,\\p1,\\p2,\\p3,2,%a1\n"
+"    lea    128(%a5),%a5\n"
+"    dbra   %d5,1f\n"
+"    rts\n"
+"1:  jmp    (%a6)\n"
+"    .space 26-(.-sp_t\\p0\\p1\\p2\\p3)\n"
+"sp_v\\p0\\p1\\p2\\p3:\n"
+"    RS_END \\p0,\\p1,\\p2,\\p3,2,%a1\n"
+"    add.w  %d7,%d7\n"
+"    add.w  %d7,%d7\n"
+"    neg.w  %d7\n"
+"    jmp    sp_e\\@(%pc,%d7.w)\n"
+"    .rept 16\n"
+"    move.l %d0,(%a1)+\n"
+"    move.l %d1,(%a1)+\n"
+"    .endr\n"
+"sp_e\\@:\n"
+"    move.l %d4,%d2\n"
+"    move.l %d4,%d3\n"
+"    not.l  %d3\n"
+"    RS_END \\p0,\\p1,\\p2,\\p3,2,%a1\n"
+"    lea    128(%a5),%a5\n"
+"    dbra   %d5,1f\n"
+"    rts\n"
+"1:  jmp    (%a6)\n"
+".endm\n"
+".macro SP_TAB p0,p1,p2,p3\n"
+"    .word sp_v\\p0\\p1\\p2\\p3-sp_mtab\n"
+".endm\n"
+".macro RS_TAB pre,base,p0,p1,p2,p3,pm\n"
+"    .word \\pre\\()_v\\p0\\p1\\p2\\p3\\pm-\\base\n"
 ".endm\n"
 ".irp p3,0,1\n"
 ".irp p2,0,1\n"
 ".irp p1,0,1\n"
 ".irp p0,0,1\n"
-"    RS_ROW \\p0,\\p1,\\p2,\\p3,0,%a0,rs_skip\n"
-"    RS_ROW \\p0,\\p1,\\p2,\\p3,1,%a0,rs_skip\n"
-"    RS_ROW \\p0,\\p1,\\p2,\\p3,2,%a1,rs2_skip\n"
-"    RS_ROW \\p0,\\p1,\\p2,\\p3,3,%a1,rs3_skip\n"
+"    RS_ROW rs,\\p0,\\p1,\\p2,\\p3,0,%a0,rs_skip\n"
+"    RS_ROW rs,\\p0,\\p1,\\p2,\\p3,1,%a0,rs_skip\n"
+"    RS_ROW rs,\\p0,\\p1,\\p2,\\p3,2,%a1,rs2_skip\n"
+"    RS_ROW rs,\\p0,\\p1,\\p2,\\p3,3,%a1,rs3_skip\n"
+"    RS_ROW sb,\\p0,\\p1,\\p2,\\p3,1,%a0,sp1_skip\n"
+"    SP_ROW \\p0,\\p1,\\p2,\\p3\n"
 ".endr\n"
 ".endr\n"
 ".endr\n"
@@ -2268,8 +2357,28 @@ __asm__(
 ".irp p2,0,1\n"
 ".irp p1,0,1\n"
 ".irp p0,0,1\n"
-"    RS_TAB \\p0,\\p1,\\p2,\\p3,\\pm\n"
+"    RS_TAB rs,rs_mtab,\\p0,\\p1,\\p2,\\p3,\\pm\n"
 ".endr\n"
+".endr\n"
+".endr\n"
+".endr\n"
+".endr\n"
+"sp_mtab:\n"                         /* the span cores' (sp_go) */
+".irp p3,0,1\n"
+".irp p2,0,1\n"
+".irp p1,0,1\n"
+".irp p0,0,1\n"
+"    SP_TAB \\p0,\\p1,\\p2,\\p3\n"
+".endr\n"
+".endr\n"
+".endr\n"
+".endr\n"
+"sp1_mtab:\n"
+".irp p3,0,1\n"
+".irp p2,0,1\n"
+".irp p1,0,1\n"
+".irp p0,0,1\n"
+"    RS_TAB sb,sp1_mtab,\\p0,\\p1,\\p2,\\p3,1\n"
 ".endr\n"
 ".endr\n"
 ".endr\n"
@@ -2374,22 +2483,22 @@ struct PolyState : RasterState {
 	long y, ylast;
 	long crx;
 	const uint16_t *recip;
-	uint8_t *rec;                // record mode: where the next segment goes
+	uint8_t *rec;                // record mode: where the next row's span goes
 };
 
-// segReplay's state: the segments to fill and where (see ST_segDraw)
+// segReplay's state: a recorded polygon's spans to fill and where (see
+// ST_segDraw)
 struct ReplayState : RasterState {
-	const uint8_t *seg;
-	long nseg;
-	int32_t xt;                  // x translation, 16.16, clip origin included
-	long skip, left;             // rows above the clip, rows to fill
+	const int16_t *span;         // the first row to fill: xl, xr from the origin
+	long rows;                   // rows to fill
+	long xo;                     // the origin's layer x, clip origin included
 };
 
 struct SegEntry;
 
 // segHit's context (offsets in the asm): the page and clip of the
 // shape being drawn, its colour tables, and the box its hits grow
-struct SegCtx : ReplayState {
+struct SegCtx : RasterState {
 	uint8_t *layer;
 	const uint8_t *remap;
 	const unsigned long *fill01, *fill23;
@@ -2403,7 +2512,7 @@ struct SegCtx : ReplayState {
 extern "C" SegCtx g_segCtx;
 SegCtx g_segCtx;
 // the asm addresses these fields by number: the sizes pin the layout
-typedef char SegCtxLayout[(sizeof(ReplayState) == 64 && sizeof(SegCtx) == 112) ? 1 : -1];
+typedef char SegCtxLayout[(sizeof(ReplayState) == 56 && sizeof(SegCtx) == 92) ? 1 : -1];
 
 extern "C" void rasterSeg(RasterState *st, long count);
 extern "C" void polyWalk(PolyState *st);
@@ -2716,33 +2825,35 @@ bool ST_drawPolygonFast(uint8_t *layer, const void *ptsv, int n,
  * intro's camera moves - and for a whole-pixel move the walk is the
  * same one, shifted: the edges carry the vertices' integer x and only
  * differences in y. So the first draw records the walk, relative to
- * the shape's origin and with no clipping, as the segments polyWalk
- * fills (edge positions and steps, row count), and every later draw
- * hands those straight to the fill cores - from op_drawShape's loop,
- * lookup to last row in segHit, because the C route's per-polygon
- * setup cost as much as the parse and walk it replaced. Output is the
- * same pixels, because the same walker produced the segments (checked
- * against the uncached draw over every level's opening scene and the
- * credits). Measured, cycle-exact: a fifth to a quarter less
- * cutscene work on every machine - the intro 34.7s -> 26.4s on an
- * STE, 20.8s -> 15.8s on a Mega STE, level 1's opening 9.6s -> 7.5s.
+ * the shape's origin and with no clipping, as the span of each row
+ * polyWalk fills, and every later draw hands those straight to the
+ * span cores (sp_go) - from op_drawShape's loop, lookup to last row
+ * in segHit, because the C route's per-polygon setup cost as much as
+ * the parse and walk it replaced. Output is the same pixels, because
+ * the same walker produced the spans (checked against the uncached
+ * draw over every level's opening scene and the credits). Measured,
+ * cycle-exact: a fifth to a quarter less cutscene work on every
+ * machine - the intro 34.7s -> 26.4s on an STE, 20.8s -> 15.8s on a
+ * Mega STE, level 1's opening 9.6s -> 7.5s. Spans rather than the
+ * walk's segments (edge positions and steps) took another 9.6% off a
+ * plain ST's polygon work (the intro 15.5%): no edges to step per
+ * row, and no segments to set up per polygon.
  *
  * Keyed by the primitive's vertex data, which lives as long as the
  * scene's polygon data does: ST_segCacheBegin/End bracket one played
  * pass. The arena is emptied when full rather than managed - scenes
  * reuse what they drew recently, so 32K keeps 83-85% of the hits a
- * cache of everything would.
+ * cache of everything would, as many with spans (four bytes a row)
+ * as with segments.
  */
 struct SegEntry {
 	const void *key;
 	SegEntry *next;
 	int16_t ytop, rows;          // relative to the shape's origin
 	int16_t xlo, xhi;            // vertex x extent, likewise
-	int16_t nseg, pad;
-	// nseg records follow: fa, sa, fb, sb (longs), rows (word)
+	// rows spans follow: each row's xl <= xr (words, from the origin)
 };
 enum {
-	kSegRec = 18,
 	kSegArena = 32 * 1024,
 	kSegArenaBig = 128 * 1024,     // a 4MB machine's (see ST_segCacheBegin)
 	kSegBuckets = 256,
@@ -2766,7 +2877,7 @@ static SegEntry *g_segHash[kSegBuckets];
 static uint32_t g_segMisses;
 static Point g_segPts[256];
 
-typedef char SegEntryLayout[(sizeof(SegEntry) == 20) ? 1 : -1];
+typedef char SegEntryLayout[(sizeof(SegEntry) == 16) ? 1 : -1];
 
 static inline unsigned segBucket(const void *key) {
 	const uintptr_t k = (uintptr_t)key;
@@ -3121,16 +3232,6 @@ void ST_segShapeEnd() {
 		c.cry + c.by0, c.cry + c.by1 + 1);
 }
 
-static inline uint8_t *putSeg(uint8_t *p, int32_t fa, int32_t sa, int32_t fb, int32_t sb, int rows) {
-	int32_t *l = (int32_t *)p;
-	l[0] = fa;
-	l[1] = sa;
-	l[2] = fb;
-	l[3] = sb;
-	*(int16_t *)(p + 16) = (int16_t)rows;
-	return p + kSegRec;
-}
-
 // Record a polygon given relative to its shape's origin; the three
 // kinds ST_drawPolygonFast draws, the same way. Null when it is not
 // one of them, or cannot fit.
@@ -3151,25 +3252,34 @@ const void *ST_segRecord(const void *key, const void *ptsv, int n) {
 		if (x < xlo) xlo = x;
 		if (x > xhi) xhi = x;
 	}
-	// a walk makes at most one segment per vertex and one for the
-	// last row
-	const uint32_t need = (sizeof(SegEntry) + (n + 2) * kSegRec + 3) & ~3u;
+	// a span per row
+	const int rows = ybot - ytop + 1;
+	const uint32_t need = (sizeof(SegEntry) + rows * 4 + 3) & ~3u;
+	if (need > g_segArenaSize) {
+		return 0;
+	}
 	if (g_segUsed + need > g_segArenaSize) {
 		segFlush();
 	}
 	SegEntry *e = (SegEntry *)(g_segArena + g_segUsed);
-	uint8_t *rec = (uint8_t *)(e + 1);
-	uint8_t *end;
+	int16_t *span = (int16_t *)(e + 1);
 	if (ytop == ybot) {
-		end = putSeg(rec, (int32_t)xlo << 16, 0, (int32_t)xhi << 16, 0, 1);
+		span[0] = xlo;
+		span[1] = xhi;
 	} else if (n == 2) {
 		// as the line path: a trapezoid row per row down to the one
 		// above the far end, then the far end's pixel
 		const int dy = ybot - ytop;
 		const int32_t step = edgeStep(pts[imax].x - pts[imin].x, dy);
-		const int32_t fa = (int32_t)pts[imin].x << 16;
-		end = putSeg(rec, fa, step, fa + step, step, dy);
-		end = putSeg(end, (int32_t)pts[imax].x << 16, 0, (int32_t)pts[imax].x << 16, 0, 1);
+		int32_t fa = (int32_t)pts[imin].x << 16, fb = fa + step;
+		for (int r = 0; r < dy; ++r) {
+			const int16_t a = (int16_t)(fa >> 16), b = (int16_t)(fb >> 16);
+			*span++ = a < b ? a : b;
+			*span++ = a < b ? b : a;
+			fa += step;
+			fb += step;
+		}
+		span[0] = span[1] = pts[imax].x;
 	} else {
 		// the walker's own pass, from row 0 so nothing is above its
 		// clip, filling nothing
@@ -3187,23 +3297,18 @@ const void *ST_segRecord(const void *key, const void *ptsv, int n) {
 		st.ia = st.ib = imin;
 		st.ylast = ybot - ytop;
 		st.recip = g_recip16;
-		st.rec = rec;
+		st.rec = (uint8_t *)span;
 		polyWalk(&st);
-		end = st.rec;
 	}
 	e->key = key;
 	e->ytop = ytop;
-	e->rows = ybot - ytop + 1;
+	e->rows = rows;
 	e->xlo = xlo;
 	e->xhi = xhi;
-	// a divs.w: as an int division this was a __divsi3 call (~600
-	// cycles) on every polygon the cache had not seen
-	e->nseg = STDL_DivS16((int32_t)(end - rec), kSegRec);
-	e->pad = 0;
 	const unsigned b = segBucket(key);
 	e->next = g_segHash[b];
 	g_segHash[b] = e;
-	g_segUsed += (sizeof(SegEntry) + (end - rec) + 3) & ~3u;
+	g_segUsed += need;
 	return e;
 }
 
@@ -3235,14 +3340,11 @@ void ST_segDraw(uint8_t *layer, const void *entry, int x, int y, uint8_t colour8
 	st.pv = (colour8 & 0x80) ? 0xFFFFul : 0ul;
 	st.lim = ((unsigned long)crx << 16) | (unsigned)(crx + xmaxv);
 	st.fn = v | (prioMode(colour8, xlo >= 0 && xhi <= xmaxv) << 4);
-	st.fa = st.sa = st.fb = st.sb = 0;
 	st.row = (uint16_t *)(layer + (cry + first) * kSTRowBytes);
 	st.prow = (uint16_t *)(layer + kSTPlaneBytes + (cry + first) * kSTPrioRowBytes);
-	st.seg = (const uint8_t *)(e + 1);
-	st.nseg = e->nseg;
-	st.xt = (int32_t)(x + crx) << 16;
-	st.skip = first - ytop;
-	st.left = ylast - first + 1;
+	st.span = (const int16_t *)(e + 1) + 2 * (first - ytop);
+	st.rows = ylast - first + 1;
+	st.xo = x + crx;
 	segReplay(&st);
 }
 
