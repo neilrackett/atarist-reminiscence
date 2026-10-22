@@ -25,8 +25,12 @@ Most of `src/` is upstream's engine, changed in place under
 
 Also changed for the ST, among others: `game.cpp` (the title menu with
 Start and Options, the 30Hz deadline pacing in `updateTiming`, record and
-replay, the save format), `cutscene.cpp` (cached polygons and shapes as
-sprites), `resource.cpp` (`UNPACKED\`, the bank arena, resident monster
+replay, the save format), `cutscene.cpp` (the frame skipper, shapes as
+sprites and their bakes, the per-frame stats and the `cutscene=` bench;
+its polygons and ellipses come from the cache in `video_st.cpp`, kept
+as each row's span and drawn by asm span cores, `segWalk` walking a
+shape's primitives), `graphics.cpp` (shadow fills and the ellipse
+spans the cache keeps), `resource.cpp` (`UNPACKED\`, the bank arena, resident monster
 sprites), `video.cpp` (the room decode, the room cache, the block restore
 and the frame begin and end), `mixer.cpp` and `mod_player.cpp` (ProTracker
 modules on an STE's DMA sound through STDL's voices, YM streams from
@@ -68,7 +72,15 @@ to read (an ELF from elsewhere) into `tmp/` first.
 releases and `AGENTS.md`; the Makefile builds `stdl/libstdl.a` from it.
 Never change it from here: a library change is made there and released,
 and the port moves to it in a commit of its own ("STDL v1.15.3: ...",
-currently v1.15.3), measured like any other change.
+currently v1.15.3), measured like any other change. A release is an
+annotated `v*` tag on STDL's `main`: its workflow rebuilds the rolling
+`latest` release's files, and the port pins the submodule to the tag
+and builds the library itself. `git -C stdl fetch --tags` exits
+non-zero once `latest` has moved ("would clobber"); add `--force`. To
+measure a library change before its release, copy the changed files
+into `stdl/` for one build and put them back with `git -C stdl
+checkout --`. STDL's code, docs, commits and tags never name this game:
+"one port".
 
 The desktop SDL build shares most of the engine and CI does not build it,
 so build it by hand after touching shared files: the sources in
@@ -160,17 +172,29 @@ The tools:
   with the player's defaults (music on, frame skipping on) unless `CFG`
   says otherwise. Use `CFG="frame_skip=false;music=false"` for the work a
   scene takes.
-- `tools/cutbench/summarise.py TAG [TAG...]` tabulates the runs.
+- `tools/cutbench/summarise.py TAG [TAG...]` tabulates the runs, and
+  `worksum.py MACHINE TAG...` totals their work per scene: quote the
+  total work for a code change. Frames shown is what a player sees, but
+  it moves with timing alone, and idle bakes follow spare time.
 - `tools/cutbench/verify.sh TAG [REF]` hashes every drawn frame
   (`CUTHASH.BIN`), and the colours it was shown in (`CUTPAL.BIN`), over
   the intro, every level opening, a mid-level scene and the credits. It
-  compares them with run `REF`: a cutscene change must match frame for
-  frame.
+  compares them with run `REF`, by default `cref`, whose pixels are
+  r30's own: a cutscene change must match frame for frame.
 - `tools/cutbench/prof.sh OUT MACHINE SCENE` profiles one scene, and
   `prof.py` reads the profile.
 
 The `kAbCut*` bits switch each cutscene cache and change off inside one
-binary.
+binary. A mixer change is measured on `ste` with
+`CFG="frame_skip=false;music=true"`: the gameplay replays hardly play
+music.
+
+**Test a check before trusting it.** The cutscene frame hash used to
+rotate five bits a long and XOR: a row is 32 longs, so every row folded
+in alike, and a shape drawn a row too high over a plain background hashed
+the same. It is h * 33 + each long now, and `cref` was made again from
+r30 itself. Break the code on purpose (draw a row low, flip a bit of a
+copy) and see the check fail before relying on it.
 
 **Profiling.** Load symbols made from `build/flashbak.elf`
 (`m68k-atari-mint-nm -n -C`, `::` turned into `__`, only `T`/`t`/`W`
@@ -179,7 +203,13 @@ lines kept) at TEXT `0x149f2` (TOS 2.06, as run.sh boots it), turn
 (`b pc = Game__ST_replayDone :once :file cmds.ini`). Bracket a short event
 with fast-forward off (`FF=off`), or the emulator is past it before the
 fifo is read. In the profile's listing, `== $address` is worked out from
-the registers when it was printed, not when the instruction ran.
+the registers when it was printed, not when the instruction ran. Code
+reached by a `jmp` counts towards the function that called, so the span
+cores' rows show as `sp_go`; asm labels are symbols of their own, so a
+variant table's time spreads over many small entries. A C function's
+exclusive time is not what rewriting it saves: the C around a new
+polygon's record came to 4.3K cycles by the profile, and doing that work
+in one pass instead gained 0.1%.
 
 **UNPACKED\\** is written by `tools/make-unpacked.py` and by RExtract
 (`web-rextract`, `src/core/unpacked.ts`); the two must agree byte for
@@ -195,7 +225,14 @@ byte. RExtract's tests compare them over the real disks with
   `2560`. 2MB is not supported, so a failure there is not a bug.
 - Never boot TOS 1.02 through run.sh.
 - Two builds in the same minute show the same time on the `.TOS`: compare
-  the files, not the listing.
+  the files, not the listing. A `make` straight after an edit in the same
+  second can skip the rebuild (STDL's host tests did): delete the
+  target.
+- `git checkout -- FILE` to undo an experiment also drops every other
+  uncommitted change in that file: revert experiments by hand, or commit
+  first.
+- An ST rounds each instruction's cycles up to a multiple of four on the
+  bus (a 14-cycle `move.b` costs 16): count asm that way.
 - The data is too big for a floppy: the game always runs from a hard
   disk, so floppy timing never matters.
 
@@ -234,6 +271,16 @@ Investigations that ended, so nobody starts them again without a reason:
 - **2MB machines: dropped** (2.5MB minimum since September 2026). Real
   hardware has less free than Hatari, by 70K or a lot more depending on
   what is resident (see "RAM" above).
+- **Pre-rendered cutscenes: not wanted** (Neil, October 2026). Cutscenes
+  get faster through the code, with 4MB-only caches and precomputed
+  `UNPACKED\` data as boosters where code is not enough.
+- **A retained draw list for cutscenes** (redraw only what changed): not
+  built. 36-61% of a talky scene's shapes repeat, but in frames already
+  on time; the frames that drop are rotating or zooming shapes and
+  polygons seen for the first time.
+- **An FPU (SFP-004) for cutscenes: no use.** The polygon path is
+  integer, and the coprocessor's register protocol costs more than the
+  `muls.w` it would replace.
 
 ## Where the time goes, and what is left
 
@@ -275,7 +322,7 @@ Each of these was measured and left for later:
    faster), so this is small now; a pointer from the base bake, checked
    against a per-segment flush count, would skip it.
 5. **BSS every machine pays** (2.5MB machines feel it): the display list
-   10K (`kDlMax` 160), the glyph cache 14K, the palette merge memo 9K,
+   10K (`kDlMax` 160), the glyph cache 16K (pixels and row masks), the palette merge memo 9K,
    the sprite pair tables 8K.
 6. **Monster bakes keyed on the load, not the monster**
    (`_stMonsterEpoch`): on a 2.5MB machine, where monsters share one
@@ -295,6 +342,41 @@ Each of these was measured and left for later:
 10. **Mega STE**: locking the game to 60Hz, and double buffering, are
     parked (the copy pass would have to be measured first).
 
+**Cutscenes**, after the 8MHz round (October 2026, branch
+`cutscene-speed`; Hatari, the player's settings): frames shown over the
+bench set ST 95%, STE 93%, Mega STE 96% (83/81/86% before it). The intro
+shows 96% on an ST, 87% on an STE (97% with music off: the mixer is the
+STE's whole gap), 97% on a Mega STE at 16MHz and 87% at 8MHz. Level 4's
+second part (0x39) is the worst: ST 59%, STE 54%, Mega STE 71%. In the
+intro on a plain ST the work is about a third the rows of cached polygons
+(`sp_go`), 8% their per-polygon set-up (`sh_core`), 14% the restore and
+the push (25% in level 1's opening; both are `movem` copies near the
+bus's limit), and each polygon seen for the first time about 10.7K
+cycles before its rows. On an STE with music the voice mixer is about
+25% of the machine and the module tick 4%.
+
+Each of these was measured and left for later:
+
+1. **Rotating and zooming shapes** (`op_drawShapeScaleRotate`) are what
+   drops frames in 0x39, 0x41 and 0x00: about 12K cycles a primitive
+   before its rows - the transform about 5K, already 16-bit `muls.w`,
+   `ST_drawPolygonFast`'s C set-up about 3K, the walk about 3.4K. The
+   set-up and walk in asm might take 10-15% off those frames.
+2. **A table-driven row header** in the span cores: about 25-30 of a
+   row's ~364 cycles, about 2% of the intro.
+3. **The module tick**, upstream's sequencer, about 4% of an STE.
+4. **Booster:** every polygon's spans precomputed in `UNPACKED\`, for
+   the first frames of each part (4MB machines only;
+   `tools/make-unpacked.py` and RExtract must agree byte for byte).
+5. **STDL's mixer** (written down in `stdl/src/voice.c`): the wrap
+   inside its asm loop (about 250 cycles a wrap rather than 800),
+   `voice_mix` in asm (about 1K of a voice's 1.9K cycles a block, ~2.4%
+   of an STE), eight frames a pass (-2.3% of the mixer).
+6. **Smaller:** shape sprites blitted with `movem` for long runs (1-2%
+   in still scenes); the colour lock at each part's start (~65ms); the
+   palette prescan before a scene (~1.1s before the intro on an ST - a
+   wait, not choppiness).
+
 Measured and rejected, so not worth trying again as they were:
 
 - `READ_BE_UINT16`/`32` as word loads everywhere: no gain in play or
@@ -309,3 +391,12 @@ Measured and rejected, so not worth trying again as they were:
 - Unpacked banks in a block of their own rather than in the bank arena:
   the room cache lost its slots, and level 5's revisits went from 65ms to
   800ms.
+- Cutscenes: baking a shape at its third sighting, or only in a frame's
+  spare time: 3.9% slower, as still scenes need the early bakes; in a
+  pan a bake (~29ms) only breaks even.
+- Cutscenes: shape sprites pre-shifted from another phase (no gain: few
+  were made, and clipped ones were wasted); a restore and push box per
+  shape (shapes overlap, so the boxes add up to 103-170% of the one box);
+  `drawShapeScaleRotate`'s state kept in locals (-0.3%); a new polygon's
+  parse and record in one pass (-0.1%).
+- STDL's mixer: two voices a pass (~1%).

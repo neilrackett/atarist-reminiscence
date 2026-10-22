@@ -335,6 +335,7 @@ plays scene N from where the intro would and quits, and with
 ```
 tools/cutbench/run.sh TAG MACHINE SCENE...     # e.g. b1 st 0x0D 0x00 0x39
 tools/cutbench/summarise.py TAG [TAG...]       # one row per scene part
+tools/cutbench/worksum.py MACHINE TAG [TAG...] # total work per scene, run against run
 tools/cutbench/verify.sh TAG [REF]             # frame-exact against REF
 tools/cutbench/prof.sh OUT MACHINE SCENE       # a Hatari profile; prof.py OUT reads it
 ```
@@ -343,6 +344,13 @@ tools/cutbench/prof.sh OUT MACHINE SCENE       # a Hatari profile; prof.py OUT r
   Fit) unless `CFG` adds lines. `CFG="frame_skip=false;music=false"`
   measures the work a scene takes. The runs land in
   `tmp/cutbench/runs/TAG_MACHINE_SCENE/`.
+- **`worksum.py`** adds up those runs' work, scene by scene, and the
+  total, the last tag against the first: the number to quote for a
+  code change. Frames shown (`summarise.py`, the player's settings) is
+  what a player sees, but it moves with timing alone - a 21-frame scene
+  by three frames - and idle bakes follow spare time, so a faster
+  build can bake less. `CFG="...;ab=0x200"` (no shape sprites) times
+  the polygon path on its own.
 - **`verify.sh`** plays the intro, every level opening, a mid-level
   scene and the credits with `replay_hash=true`. Every drawn frame's
   pixels go into `CUTHASH.BIN` and the colours it was shown in into
