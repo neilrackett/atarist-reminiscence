@@ -86,8 +86,10 @@ STDL_SRCS = $(wildcard $(STDL)/src/*.c) $(wildcard $(STDL)/include/stdl/*.h) \
 $(STDL_LIB): $(STDL_SRCS)
 	$(MAKE) -C $(STDL) libstdl.a
 
+# -e __st_entry: the program starts in main_atari.cpp's stub, which
+# clears the BSS whatever loaded it, and then runs mintlib's crt0.
 $(TARGET): $(OBJS) $(STDL_LIB) | dist
-	$(CXX) $(CXXFLAGS) -o build/flashbak.elf $(OBJS) $(LIBS)
+	$(CXX) $(CXXFLAGS) -Wl,-e,__st_entry -o build/flashbak.elf $(OBJS) $(LIBS)
 	cp build/flashbak.elf $@
 	$(STRIP) $@
 	@# the documented template, but never over a config in use

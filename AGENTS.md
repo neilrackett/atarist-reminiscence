@@ -115,6 +115,12 @@ so build it by hand after touching shared files: the sources in
   (`video_st.cpp`, `spritecache_st.cpp`); a source-only change to one
   (a macro, a reordering) is checked by comparing the object's
   disassembly before and after.
+- **The game clears its own BSS.** It starts in `__st_entry`
+  (`main_atari.cpp`, named by `-Wl,-e` in the Makefile), which zeroes
+  the BSS and then runs mintlib's crt0. ACSI2STM's GemDrive loader stops
+  clearing after 130,560 bytes (one 255-sector DMA run) of the 158K, so
+  a second run from a GemDrive drive started on the first run's
+  leftovers and bombed. `tools/gemdrive/run.sh` re-creates that in Hatari.
 - **Low memory is supervisor-only.** `phystop` and friends are read once
   at start-up (`ATARIST_ramK()`); the `Resource` constructor runs before
   supervisor mode, so it asks GEMDOS (`ST_freeK()`).

@@ -359,3 +359,21 @@ tools/cutbench/prof.sh OUT MACHINE SCENE       # a Hatari profile; prof.py OUT r
   r30 built with nothing added but `cutscene=` and this hash. Its
   colours are those of the first harness build's old-palette run
   (`ab=0x20000`). A run with no `REF` yet becomes one.
+
+## gemdrive/
+
+A second run from an ACSI2STM GemDrive drive. GemDrive's loader clears
+only the first 130,560 bytes of a program's BSS (one 255-sector DMA
+run), so the rest of the game's 158K started with what the last program
+left there, and the second run bombed. The game now clears its own BSS
+before mintlib starts (`__st_entry` in `main_atari.cpp`).
+
+```
+tools/gemdrive/run.sh       # PASS or FAIL; PROG= another binary, MACHINE= (default st)
+```
+
+`gdemu.c` runs the game twice in Hatari from the same address (the
+logos, `cutscene=0x40`, then quit). Before the second run it puts the
+first run's leftovers back into the BSS past that point, and scribbles
+the rest of free memory as the desktop would. r31 fails it with a bus
+error in mintlib's `localsub`; the build with the stub passes.
