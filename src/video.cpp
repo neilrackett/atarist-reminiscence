@@ -1188,6 +1188,36 @@ struct SgdPlace {
 	int16_t x, y;
 };
 
+// Between the walks every tile the first resolved must still have its
+// cells, and a wrap of the pool during it may have taken them: from a
+// tile this room found ready from an earlier room, near the start of
+// the pool, and does not name again after the wrap. Its slot was
+// emptied, and the second walk drew it from address 0 - the noise in
+// the jungle's mist once four or five rooms had been through the pool,
+// kept by the room cache for the visits after. Each such tile is
+// prepared again, which can take the cells of another of the room's,
+// so until none is missing. That ends with each tile prepared once at
+// most, as what one room takes follows on round the pool and comes to
+// less than all of it (82K of 96K at most: level 1's room 52 is 78K,
+// and a wrap skips less than one 3K tile), so it never comes back
+// round to its own start; a room bigger than the pool, none in the
+// shipped data, would stop with tiles still missing.
+static void ST_sgdRepair(const SgdPlace *list, int n, const uint8_t *data, uint8_t *buf, int bufSize) {
+	int left = n;                       // tiles, at most one a placement
+	for (bool again = true; again; ) {
+		again = false;
+		for (int i = 0; i < n; ++i) {
+			if (!list[i].tile->cells) {
+				if (--left < 0) {
+					return;
+				}
+				ST_sgdTile(data, list[i].tile->id, buf, bufSize);
+				again = true;
+			}
+		}
+	}
+}
+
 static void ST_decodeSgd(uint8_t *dst, const uint8_t *src, const uint8_t *data, int level, int room) {
 	if (!g_sgdPool) {
 		g_sgdPool = (uint8_t *)malloc(kSgdPoolSize);
@@ -1237,9 +1267,12 @@ static void ST_decodeSgd(uint8_t *dst, const uint8_t *src, const uint8_t *data, 
 		++n;
 	}
 	if (covered) {
+		ST_sgdRepair(list, n, data, buf, sizeof(buf));
 		while (--n >= 0) {
 			const SgdPlace &p = list[n];
-			ST_amigaPlaceCov(dst, p.x, p.y, p.tile->cells, p.tile->units, p.tile->rows);
+			if (p.tile->cells) {            // only ever missing in a room bigger than the pool
+				ST_amigaPlaceCov(dst, p.x, p.y, p.tile->cells, p.tile->units, p.tile->rows);
+			}
 		}
 		ST_amigaPlaceCovEnd(dst, 0);
 	}
