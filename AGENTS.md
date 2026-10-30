@@ -274,6 +274,8 @@ Investigations that ended, so nobody starts them again without a reason:
   second on every machine); locking a Mega STE to 60Hz is deferred.
 - **A mono (SM124) build: parked**; neither prototype made a seamless
   mono picture at colour speed on every machine.
+- **A TT and Falcon build: not started**; the plan, and what was
+  measured on an emulated TT, are in their own section at the end.
 - **2MB machines: dropped** (2.5MB minimum since September 2026). Real
   hardware has less free than Hatari, by 70K or a lot more depending on
   what is resident (see "RAM" above).
@@ -406,3 +408,87 @@ Measured and rejected, so not worth trying again as they were:
   `drawShapeScaleRotate`'s state kept in locals (-0.3%); a new polygon's
   parse and record in one pass (-0.1%).
 - STDL's mixer: two voices a pass (~1%).
+
+## A possible TT and Falcon build
+
+Not started (October 2026); written down so the weighing is not done
+twice. What it would be for is colour: TT Low (320x480, 256 of 4096)
+and the Falcon's 8-bit modes hold the Amiga's palette exactly, 12 bits
+a colour, so the quantiser and the palette merge have nothing to do.
+
+**Today's binary already runs on a TT**, in ST Low with 16 colours. In
+Hatari (`--machine tt`, TOS 3.06, 4MB ST-RAM) replay l1r26 matches the
+reference frame for frame at 5.4ms a frame, against 34.9 on a plain
+ST. The start-up line calls it an STE at "about 506MHz": the 68030's
+cache runs the timing loop in a fraction of a 68000's cycles, and the
+figure is only logged. On testing it:
+- **Run Hatari's TT with `--mmu off`.** With the MMU and the data cache
+  both emulated, the emulator falls to half real time once the game
+  runs (52.8s of host time for a stretch that takes 26.5s with either
+  off), which looks like the game in slow motion, picture and sound.
+  Neither TOS nor the game needs the MMU, and its core's timing looks
+  no truer: the speed loop reads 506MHz with it and 102MHz without.
+- `tmp/tos/` has no TOS 3.06 or 4.04 image; EmuTOS 1.4 runs both
+  machines.
+- Hatari's 68030 timing is less exact than its 68000's, so a TT frame
+  time from it is an estimate. Hardware testing would need a TT and a
+  Falcon.
+
+**The plan, if it is wanted:** one SDL 1.2 binary for both machines
+(Patrice Mandin's Atari port, `libSDL.a` in the toolkit image, linked
+with `-lgem`; it needs no MiNT), on upstream's chunky engine, with
+STDL for what SDL does less well:
+- **The engine builds as the desktop build does** (`ATARIST` off). The
+  planar layer, the bakes, the display list and the span cores are for
+  a 68000: they hard-code 4 planes and the 128-byte stride, and a 68030
+  with TT-RAM and multiply in hardware needs none of them.
+- **SDL owns the screen**: an 8-bit 320x240 mode with a hardware
+  palette (on a TT it doubles the lines itself), `SDL_UpdateRects` with
+  upstream's dirty blocks only, the palette set only when it changes,
+  and no scalers, libmodplug or SDL_mixer. Compile for the 68030, after
+  checking which CPU the toolkit's `libSDL.a` was built for. SDL
+  converts each update to planes in ST-RAM: a full line-doubled frame
+  is about 114K of writes, four times an ST's 28K, into RAM the TT's
+  CPU reaches slowly. Time that first.
+- **STDL owns the keyboard, all of it.** Its `ikbdsys` handler carries
+  the keys, mouse, joysticks, Xpad pads and rumble, and SDL's default
+  Atari input driver takes the keyboard interrupt itself, so the two
+  cannot split the devices: SDL is switched to a driver that only polls
+  TOS (`SDL_ATARI_EVENTSDRIVER`) and never pumped, and the input code in
+  `systemstub_stdl.cpp` carries across. Both points about SDL are from
+  memory, not checked against its source.
+- **The sound is the port's own**, on STDL's voices: MODs on DMA, mixed
+  in the VBL, so a level load does not interrupt it. It needs a define
+  of its own for `mixer.cpp`, `mod_player.cpp` and `sfx_player.cpp`
+  and the two options they read (`music`, `ste_sound`) - a small split,
+  where splitting all of `ATARIST` (nearly 300 lines in the shared
+  engine) is not worth doing. Not `STDL_Audio` with upstream's mixer as
+  its callback: it refills only from the pump, so a load longer than
+  about 150ms repeats its buffer. The TT's DMA sound is the STE's; the
+  Falcon's should play STE-style sound, untested.
+- **Record and replay** are under `ATARIST` too, and the bench needs
+  them to time the build.
+- **The two libraries in one program.** `libstdl.a` defines its own
+  `SDL_*` and `Mix_*` functions (`compat.c`, `mixer.c`), so the port's
+  Makefile builds STDL's objects for this target without them, STDL
+  itself unchanged. STDL runs the program in supervisor mode and
+  `Super()` is a toggle, so check SDL never calls it. Tear down in the
+  reverse order of start-up.
+- **To check on the way:** STDL's voices are paced by the VBL and it
+  assumes 50Hz on a TT, so measure the rate TT Low really runs at. The
+  TT has no STE enhanced joystick ports; the Falcon's use the STE's
+  registers.
+
+**The first step** is upstream's engine on a minimal SDL 1.2 stub,
+timed in Hatari as a TT. If it holds 30Hz, STDL's input and sound go
+on top; if it does not, the plane conversion is the first place to
+look.
+
+**Considered and set aside:**
+- A TT Low driver in STDL, a chunky surface it converts to 8 planes:
+  one library owning the machine, and cleaner on a TT alone, but it
+  covers only the TT (the Falcon's VIDEL needs a mode set for each
+  monitor type, which SDL already has), and it widens STDL beyond its
+  stated target of the ST, STE and Mega STE.
+- Widening the port's planar path to 8 planes: see the engine point
+  above.
