@@ -72,7 +72,7 @@ to read (an ELF from elsewhere) into `tmp/` first.
 releases and `AGENTS.md`; the Makefile builds `stdl/libstdl.a` from it.
 Never change it from here: a library change is made there and released,
 and the port moves to it in a commit of its own ("STDL v1.15.3: ...",
-currently v1.15.3), measured like any other change. A release is an
+currently v1.18.0), measured like any other change. A release is an
 annotated `v*` tag on STDL's `main`: its workflow rebuilds the rolling
 `latest` release's files, and the port pins the submodule to the tag
 and builds the library itself. `git -C stdl fetch --tags` exits
