@@ -17,6 +17,17 @@
 #undef ARRAYSIZE
 #define ARRAYSIZE(a) (int)(sizeof(a)/sizeof(a[0]))
 
+// Two Atari builds share ATARIST: STDL, RS.CFG, the title's menus, the
+// sound, record and replay. The ST build (FLASHBAK.TOS) draws its
+// picture in planar layers of its own (video_st.cpp) and quantises it
+// to 16 colours; the 030 build (ATARIST_030, FBACK030.TOS, for a TT or
+// a Falcon) keeps upstream's chunky layers and shows them in 256
+// colours. Everything that is the planar picture is ST_PLANAR, the ST
+// build's alone.
+#if defined(ATARIST) && !defined(ATARIST_030)
+#define ST_PLANAR
+#endif
+
 // gcc 4.6 will not inline into a function it considers large, and
 // the engine's per-frame workers are exactly that: the profile found
 // 45840 calls a run into an out-of-line copy of READ_BE_UINT16, 90
@@ -214,7 +225,8 @@ enum {
 	kAbCutHideAlways = 1 << 18,    // copyScreen scene-wide, and late frames there hidden three in four
 	kAbRingFirst = 1 << 19,        // the sprite ring sized first, leaving the room cache what is over
 	kAbCutSkipBursts = 1 << 20,    // late cutscene frames skipped up to three in a row, not spread out
-	kAbCutSmallArenas = 1 << 21    // a 4MB machine's cutscene caches at the 2.5MB sizes
+	kAbCutSmallArenas = 1 << 21,   // a 4MB machine's cutscene caches at the 2.5MB sizes
+	kAbCutNoBand = 1 << 22         // the 030 build: cutscene pages restored and pushed whole
 };
 
 // ST port: the four screen modes, in the order the menu cycles them
@@ -241,7 +253,7 @@ enum SoundQuality {
 
 // ST port: fixed-row text is placed on a row it survives Fit on
 // (see ST_textRow); elsewhere the row is used as written.
-#ifdef ATARIST
+#ifdef ST_PLANAR
 int ST_textRow(int y);
 #define TEXT_ROW(y) ST_textRow(y)
 #else

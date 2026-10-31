@@ -25,7 +25,7 @@ void Graphics::setClippingRect(int16_t rx, int16_t ry, int16_t rw, int16_t rh) {
 void Graphics::drawPoint(uint8_t color, const Point *pt) {
 	debug(DBG_VIDEO, "Graphics::drawPoint() col=0x%X x=%d, y=%d", color, pt->x, pt->y);
 	if (pt->x >= 0 && pt->x < _crw && pt->y >= 0 && pt->y < _crh) {
-#ifdef ATARIST
+#ifdef ST_PLANAR
 		ST_drawPoint(_layer, pt->x + _crx, pt->y + _cry, color);
 #else
 		*(_layer + (pt->y + _cry) * _layerPitch + pt->x + _crx) = color;
@@ -103,7 +103,7 @@ void Graphics::addEllipseRadius(int16_t y, int16_t x1, int16_t x2) {
 	}
 }
 
-#ifdef ATARIST
+#ifdef ST_PLANAR
 // drawEllipse's rows for a centre at (0, 0) and no clip, as xl, xr
 // pairs from row -ry down: the same steps, so the same spans wherever
 // it is drawn (only the clip, applied after, depends on where), which
@@ -327,7 +327,7 @@ void Graphics::drawEllipse(uint8_t color, bool hasAlpha, const Point *pt, int16_
 void Graphics::fillArea(uint8_t color, bool hasAlpha) {
 	debug(DBG_VIDEO, "Graphics::fillArea()");
 	int16_t *pts = _areaPoints;
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	int16_t x1 = pts[1];
 	if (x1 >= 0) {
 		const bool orMode = (hasAlpha && color > 0xC7);
@@ -476,7 +476,7 @@ static void drawPolygonHelper2(int32_t &x, int16_t &y, int32_t &step, int16_t *&
 
 void Graphics::drawPolygon(uint8_t color, bool hasAlpha, const Point *pts, uint8_t numPts) {
 	debug(DBG_VIDEO, "Graphics::drawPolygon()");
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	// alpha/shadow polygons keep the reference converter; everything
 	// else takes the port's fast rasteriser (video_st.cpp)
 	if (!(hasAlpha && color > 0xC7)

@@ -173,6 +173,10 @@ bool ST_rowVisible(int y);
 uint32_t ST_overscanMisses();
 // the colours the hardware shows, hashed (cutscene replay_hash)
 uint32_t ST_hwPaletteHash();
+#ifdef ATARIST_030
+// the 030 build's screen memory, hashed (cutscene replay_hash)
+uint32_t ST_screenHash();
+#endif
 
 // What the gameplay sprite path did since the last log_fps line, so a
 // slow frame says which cache gave out instead of only how slow it

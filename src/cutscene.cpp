@@ -65,6 +65,12 @@ Cutscene::Cutscene(Resource *res, SystemStub *stub, Video *vid)
 	_stBakePage = 0;
 	_stBakeHead = _stBakeTail = 0;
 	_stBakeMs = 20;
+#ifdef ATARIST_030
+	_bandY0 = 0;
+	_bandY1 = Video::GAMESCREEN_H;
+	_bandVer[0] = _bandVer[1] = _bandVer[2] = 0;
+	_bandScreenVer = _bandNextVer = 0;
+#endif
 }
 
 const uint8_t *Cutscene::getCommandData() const {
@@ -75,11 +81,13 @@ const uint8_t *Cutscene::getPolygonData() const {
 	return _res->_pol;
 }
 
-#ifdef ATARIST
+#ifdef ST_PLANAR
 static inline uint32_t stRot(uint32_t h, uint32_t v) {
 	return ST_rol5(h) ^ v;
 }
+#endif
 
+#ifdef ATARIST
 // the per-frame stats' fields saturate
 static inline uint8_t stSat8(uint32_t v) {
 	return (uint8_t)(v > 255 ? 255 : v);
@@ -93,7 +101,9 @@ static inline uint16_t stSat16(uint32_t v) {
 static inline uint16_t stPartBit(int part) {
 	return (uint16_t)(1 << (part < 15 ? part : 15));
 }
+#endif
 
+#ifdef ST_PLANAR
 // a drawn frame's planes from the clip's top row down, folded: the
 // rows a scene can draw (shapes, then the captions under them). h * 33
 // + each long, not a rotation XORed: a row is 32 longs, so five bits a
@@ -143,11 +153,13 @@ void Cutscene::sync(int frameDelay) {
 		}
 	}
 #endif
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	if (pause > 0 && _stBakeHead != _stBakeTail && !(g_options.ab & kAbCutNoIdleBake)) {
 		stIdleBake(pause);
 		pause -= (int32_t)(_stub->getTimeStamp() - now);
 	}
+#endif
+#ifdef ATARIST
 	_stLastDelay = delay;
 	_stLastBudget = budget;
 	_stLastLate = pause <= 0;
@@ -170,7 +182,7 @@ void Cutscene::copyPalette(const uint8_t *pal, uint16_t num) {
 }
 
 void Cutscene::updatePalette() {
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	if (g_options.ab & kAbCutNoPalette) {
 		_newPal = false;
 	}
@@ -179,7 +191,7 @@ void Cutscene::updatePalette() {
 		const uint8_t *p = _palBuf;
 		for (int i = 0; i < 32; ++i) {
 			const uint16_t color = READ_BE_UINT16(p); p += 2;
-#ifdef ATARIST
+#ifdef ST_PLANAR
 			// a palette op sets one bank of 16, often to much the same
 			// colours: convert and pass on only the entries that moved
 			// (a change cost ~32K cycles, 4ms, about once a frame)
@@ -200,13 +212,13 @@ void Cutscene::updateScreen() {
 		return;
 	}
 	sync(_frameDelay - 1);
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	if (_newPal) {
 		_stCur.flags |= kStFPalette;
 	}
 #endif
 	updatePalette();
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	uint8_t flags = 0;
 	if (stSkipDraw()) {
 		// nothing was drawn: the front page still shows the last
@@ -242,6 +254,37 @@ void Cutscene::updateScreen() {
 	}
 	stStatsFrame(flags);
 	stDecideSkip();
+#elif defined(ATARIST_030)
+	uint8_t flags = 0;
+	if (stSkipDraw()) {
+		++_statSkipped;
+		flags = kStFSkipped;
+	} else {
+		SWAP(_frontPage, _backPage);
+		if (_stSkipShow) {
+			++_statNoShow;
+			flags = kStFUnshown;
+		} else {
+			const uint32_t t0 = _stub->getTimeStamp();
+			if (!(g_options.ab & kAbCutNoPush)) {
+				bandShow(_frontPage);
+			}
+			_stub->updateScreen(0);
+			const uint32_t dt = _stub->getTimeStamp() - t0;
+			_statCopy += dt;
+			_stCur.push = _stLastPush = stSat8(dt);
+			// the screen, not the page: what the band leaves out is
+			// the conversion
+			if (_stHash && _stHashN < kStHashMax) {
+				_stHash[_stHashN++] = ST_screenHash();
+			}
+		}
+	}
+	if (_stPalHash && !(flags & kStFSkipped) && _stPalHashN < kStHashMax) {
+		_stPalHash[_stPalHashN++] = ST_hwPaletteHash();
+	}
+	stStatsFrame(flags);
+	stDecideSkip();
 #else
 	SWAP(_frontPage, _backPage);
 	_stub->copyRect(0, 0, _vid->_w, _vid->_h, _frontPage, _vid->_w);
@@ -249,7 +292,7 @@ void Cutscene::updateScreen() {
 #endif
 }
 
-#ifdef ATARIST
+#ifdef ST_PLANAR
 // A scripted scene on banded pages: all three pages and the screen
 // start cleared, so the band's outside is the same everywhere, and
 // from then on only what changed inside it moves (see
@@ -289,7 +332,89 @@ void Cutscene::stShow(const uint8_t *page) {
 	}
 	_stShowFull = false;
 }
+#endif
 
+#ifdef ATARIST_030
+// The 030 build's pages are a byte a pixel, and a Falcon's cutscene
+// frame went mostly on moving them through ST-RAM: the back page
+// restored and the front converted to the screen, whole, every frame.
+// A scripted scene's shapes are clipped to the band (the Graphics
+// rect, and the row past it the ellipse filler can reach), so those
+// rows are all that change unless text, a caption or a scene's first
+// frame goes outside them. What a page holds outside the band has a
+// version: two pages with the same one agree there byte for byte, and
+// the screen's is the version it was last converted from whole. A copy
+// or a push takes the band alone when the versions say the rest is
+// right already, and the whole page otherwise. It took 29% off the
+// cutscene bench's work on a Falcon (Hatari, music off), the intro from
+// 124% of its budget to 85%.
+enum { kBandVerClear = 1 };  // 0xC0 everywhere outside the band
+
+int Cutscene::bandIndex(const uint8_t *page) const {
+	return (page == _vid->_frontLayer) ? 0 : (page == _vid->_tempLayer) ? 1 : 2;
+}
+
+// a new scene: nothing is known to agree outside the band, the screen
+// included
+void Cutscene::bandBegin() {
+	_bandY0 = _gfx._cry;
+	_bandY1 = _gfx._cry + _gfx._crh + 1;
+	if (_bandY1 > _vid->_h || (g_options.ab & kAbCutNoBand)) {
+		_bandY0 = 0;
+		_bandY1 = _vid->_h;
+	}
+	for (int i = 0; i < 3; ++i) {
+		_bandVer[i] = kBandVerClear + 1 + i;
+	}
+	_bandScreenVer = kBandVerClear + 4;
+	_bandNextVer = kBandVerClear + 5;
+}
+
+// the whole page from here on, as for anything not a scripted scene
+void Cutscene::bandEnd() {
+	_bandY0 = 0;
+	_bandY1 = _vid->_h;
+}
+
+// rows y0 to y1 of a page were drawn on
+void Cutscene::bandTouch(const uint8_t *page, int y0, int y1) {
+	if (y0 < _bandY0 || y1 > _bandY1) {
+		_bandVer[bandIndex(page)] = _bandNextVer++;
+	}
+}
+
+void Cutscene::bandCopy(uint8_t *dst, const uint8_t *src) {
+	const int d = bandIndex(dst);
+	const int s = bandIndex(src);
+	if (_bandVer[d] == _bandVer[s]) {
+		const int o = _bandY0 * _vid->_w;
+		memcpy(dst + o, src + o, (_bandY1 - _bandY0) * _vid->_w);
+	} else {
+		memcpy(dst, src, _vid->_layerSize);
+		_bandVer[d] = _bandVer[s];
+	}
+}
+
+void Cutscene::bandShow(const uint8_t *page) {
+	const int i = bandIndex(page);
+	if (_bandVer[i] == _bandScreenVer) {
+		_stub->copyRect(0, _bandY0, _vid->_w, _bandY1 - _bandY0, page, _vid->_w);
+	} else {
+		_stub->copyRect(0, 0, _vid->_w, _vid->_h, page, _vid->_w);
+		_bandScreenVer = _bandVer[i];
+	}
+}
+
+void Cutscene::bandLoop(uint16_t num) {
+	bandBegin();
+	stStatsBegin();
+	mainLoop(num);
+	stStatsEnd();
+	bandEnd();
+}
+#endif
+
+#ifdef ATARIST
 // Called after a frame is shown: does the next one get drawn? Frames
 // are skipped one at a time while the scripted clock is more than a
 // frame ahead, a few in a row at most so the scene never freezes.
@@ -349,11 +474,15 @@ void Cutscene::stStatsBegin() {
 	}
 	_stRing = (StFrameStat *)malloc(kStRing * sizeof(StFrameStat));
 	_stRingN = 0;
+#ifdef ST_PLANAR
 	g_stCutStats = _stRing != 0;
+#endif
 	memset(_stHist, 0, sizeof(_stHist));
+#ifdef ST_PLANAR
 	ST_segCacheStats(&_stSegHit0, &_stSegMiss0);
 	ST_shpStats(&_stShpDrawn0, &_stShpBaked0);
 	_stTouch0 = g_stCutTouchGR;
+#endif
 	if (g_options.replay_hash) {
 		_stHash = (uint32_t *)malloc(kStHashMax * sizeof(uint32_t));
 		_stPalHash = (uint32_t *)malloc(kStHashMax * sizeof(uint32_t));
@@ -405,6 +534,7 @@ void Cutscene::stStatsFrame(uint8_t flags) {
 	}
 	f.work = stSat16(_stLastDelay < 0 ? 0 : (uint32_t)_stLastDelay);
 	f.budget4 = stSat8((uint32_t)_stLastBudget >> 2);
+#ifdef ST_PLANAR
 	uint32_t hit, miss, drawn, baked;
 	ST_segCacheStats(&hit, &miss);
 	ST_shpStats(&drawn, &baked);
@@ -421,6 +551,7 @@ void Cutscene::stStatsFrame(uint8_t flags) {
 		f.touchGR = stSat16(t);
 		_stTouch0 = g_stCutTouchGR;
 	}
+#endif
 	if (_stKeys) {
 		const int cur = _stKeyCur;
 		const int p1 = cur == 0 ? 2 : cur - 1;
@@ -517,7 +648,9 @@ void Cutscene::stStatsEnd() {
 		}
 		free(_stRing);
 		_stRing = 0;
+#ifdef ST_PLANAR
 		g_stCutStats = false;
+#endif
 	}
 	// appended scene by scene: "CUTH", the scene id, the count, then
 	// a big-endian word per drawn frame - the pixels in CUTHASH.BIN,
@@ -548,7 +681,10 @@ void Cutscene::stStatsEnd() {
 #ifdef ATARIST
 // (int16_t)(sin(a * M_PI / 180) * 256) for a in 0..359, tabulated:
 // the ST has no FPU, and six soft-float sin/cos calls came to ~50ms
-// per rotated shape - most of a whole frame's budget.
+// per rotated shape - most of a whole frame's budget. The 030 build is
+// soft-float too (a stock Falcon has no FPU), and the prescan pays
+// them as well: level 2's opening waited 1.7s on a TT before its first
+// frame.
 static const int16_t _sinTable[360] = {
 	   0,    4,    8,   13,   17,   22,   26,   31,   35,   40,   44,   48,
 	  53,   57,   61,   66,   70,   74,   79,   83,   87,   91,   95,  100,
@@ -726,6 +862,9 @@ void Cutscene::drawText(int16_t x, int16_t y, const uint8_t *p, uint16_t color, 
 			xPos += Video::CHAR_W;
 		}
 	}
+#ifdef ATARIST_030
+	bandTouch(page, y, yPos + Video::CHAR_H);
+#endif
 }
 
 void Cutscene::clearBackPage() {
@@ -737,21 +876,30 @@ void Cutscene::clearBackPage() {
 		return;
 	}
 	const uint32_t t0 = _stub->getTimeStamp();
+#endif
+#ifdef ST_PLANAR
 	const uint32_t c0 = g_stCutCopyGR;
 #endif
 	if (_clearScreen == 0) {
-#ifdef ATARIST
+#ifdef ST_PLANAR
 		if (!(g_options.ab & kAbCutNoRestore)) {
 			ST_copyPage(_backPage, _auxPage);
+		}
+#elif defined(ATARIST_030)
+		if (!(g_options.ab & kAbCutNoRestore)) {
+			bandCopy(_backPage, _auxPage);
 		}
 #else
 		memcpy(_backPage, _auxPage, _vid->_layerSize);
 #endif
 	} else {
-#ifdef ATARIST
+#ifdef ST_PLANAR
 		ST_clearLayer(_backPage, 0xC0);
 #else
 		memset(_backPage, 0xC0, _vid->_layerSize);
+#endif
+#ifdef ATARIST_030
+		_bandVer[bandIndex(_backPage)] = kBandVerClear;
 #endif
 	}
 #ifdef ATARIST
@@ -760,8 +908,10 @@ void Cutscene::clearBackPage() {
 		StFrameStat &f = _stRing[_stRingN - 1];
 		const uint32_t dt = _stub->getTimeStamp() - t0 + f.restore;
 		f.restore = stSat8(dt);
+#ifdef ST_PLANAR
 		const uint32_t gr = g_stCutCopyGR - c0 + f.restoreGR;
 		f.restoreGR = stSat16(gr);
+#endif
 	}
 #endif
 }
@@ -900,10 +1050,14 @@ void Cutscene::op_refreshScreen() {
 		// while nothing drawn depends on the old mapping
 		++_stPart;
 		if (_stPrescan) {
+#ifdef ST_PLANAR
 			ST_cutscenePalPart(_stPart);
+#endif
 		} else {
+#ifdef ST_PLANAR
 			ST_cutscenePalLock(_stPart);
 			ST_shpColoursChanged(); // sprites are baked in colour
+#endif
 			if (!(g_options.ab & kAbCutHideAlways)) {
 				_stUsesCopyScreen = (_stCopyParts & stPartBit(_stPart)) != 0;
 			}
@@ -925,8 +1079,10 @@ void Cutscene::op_waitForSync() {
 				_creditsTextCounter = _res->isDOS() ? 20 : 60;
 			}
 			if (!_stPrescan) {
-#ifdef ATARIST
+#ifdef ST_PLANAR
 				ST_copyPage(_backPage, _frontPage);
+#elif defined(ATARIST_030)
+				bandCopy(_backPage, _frontPage);
 #else
 				memcpy(_backPage, _frontPage, _vid->_layerSize);
 #endif
@@ -942,7 +1098,7 @@ void Cutscene::op_waitForSync() {
 	}
 }
 
-#ifdef ATARIST
+#ifdef ST_PLANAR
 // what the polygon cache takes: every polygon but the alpha shadows
 // (the reference converter's) and the Mac logo's concave fill
 bool Cutscene::stSegCacheable() const {
@@ -951,7 +1107,7 @@ bool Cutscene::stSegCacheable() const {
 }
 #endif
 
-#ifdef ATARIST
+#ifdef ST_PLANAR
 // One primitive's bounds from its data, relative to the shape's origin
 // and a pixel wider than anything its fill draws (the ellipse filler
 // can reach a row past its radius).
@@ -1177,9 +1333,13 @@ void Cutscene::checkShape(uint16_t shapeOffset) {
 void Cutscene::drawShape(const uint8_t *data, int16_t x, int16_t y) {
 	debug(DBG_CUT, "Cutscene::drawShape()");
 	
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	// a sprite's bake may fall in a skipped frame's wait (stIdleBake)
 	if (_stPrescan || (stSkipDraw() && !_stBakePage)) {
+		return;
+	}
+#elif defined(ATARIST)
+	if (_stPrescan || stSkipDraw()) {
 		return;
 	}
 #else
@@ -1187,7 +1347,7 @@ void Cutscene::drawShape(const uint8_t *data, int16_t x, int16_t y) {
 		return;
 	}
 #endif
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	uint8_t *const page = _stBakePage ? _stBakePage : _backPage;
 #else
 	uint8_t *const page = _backPage;
@@ -1200,7 +1360,7 @@ void Cutscene::drawShape(const uint8_t *data, int16_t x, int16_t y) {
 		pt.y = READ_BE_UINT16(data) + y; data += 2;
 		int16_t rx = READ_BE_UINT16(data); data += 2;
 		int16_t ry = READ_BE_UINT16(data); data += 2;
-#ifdef ATARIST
+#ifdef ST_PLANAR
 		++_stCur.ellipses;
 		// new to the cache (op_drawShape replays one seen before): its
 		// rows kept, from the shape's origin, and drawn from them
@@ -1222,7 +1382,7 @@ void Cutscene::drawShape(const uint8_t *data, int16_t x, int16_t y) {
 		scalePoints(&pt, 1, _vid->_layerScale);
 		_gfx.drawPoint(_primitiveColor, &pt);
 	} else {
-#ifdef ATARIST
+#ifdef ST_PLANAR
 		// op_drawShape (or a shape sprite's bake) has already replayed
 		// any polygon this scene drew before (segHit); a new one is
 		// read relative to its origin, recorded, and drawn from the
@@ -1257,7 +1417,7 @@ void Cutscene::drawShape(const uint8_t *data, int16_t x, int16_t y) {
 				++pt;
 			}
 		}
-#ifdef ATARIST
+#ifdef ST_PLANAR
 		if (cached) {
 			if (ST_segRecordDraw(key, _vertices, numVertices, x, y, _primitiveColor)) {
 				return;
@@ -1269,7 +1429,7 @@ void Cutscene::drawShape(const uint8_t *data, int16_t x, int16_t y) {
 		}
 #endif
 		scalePoints(_vertices, numVertices, _vid->_layerScale);
-#ifdef ATARIST
+#ifdef ST_PLANAR
 		if (_hasAlphaColor && _primitiveColor > 0xC7) {
 			++_stCur.shadows;
 		}
@@ -1293,7 +1453,7 @@ void Cutscene::op_drawShape() {
 		y = fetchNextCmdWord();
 	}
 	checkShape(shapeOffset);
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	if (_stPrescan || stSkipDraw() || (g_options.ab & kAbCutNoDraw)) {
 		// the palette prescan only needs the command stream advanced;
 		// a skipped frame likewise
@@ -1302,6 +1462,10 @@ void Cutscene::op_drawShape() {
 	++_stCur.shapes;
 	if (_stKeys) {
 		stStatsKey(stRot(stRot(stRot(shapeOffset, x), y), _clearScreen));
+	}
+#elif defined(ATARIST)
+	if (_stPrescan || stSkipDraw()) {
+		return;
 	}
 #endif
 
@@ -1312,7 +1476,7 @@ void Cutscene::op_drawShape() {
 
 	const uint8_t *shapeData = shapeDataTable + READ_BE_UINT16(shapeOffsetTable + (shapeOffset & 0x7FF) * 2);
 	uint16_t primitiveCount = READ_BE_UINT16(shapeData); shapeData += 2;
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	// a foreground shape as one sprite (see ST_shpFind); a background
 	// shape is drawn once a part, so it never pays for a bake
 	if (_clearScreen == 0 && stShapeSprite(shapeOffset, x, y, shapeData, primitiveCount, verticesOffsetTable, verticesDataTable)) {
@@ -1344,14 +1508,16 @@ void Cutscene::op_drawShape() {
 		_primitiveColor = 0xC0 + color;
 		drawShape(primitiveVertices, x + dx, y + dy);
 	}
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	if (segOn) {
 		ST_segShapeEnd();
 	}
 #endif
 	if (_clearScreen != 0 && !_stPrescan) {
-#ifdef ATARIST
+#ifdef ST_PLANAR
 		ST_copyPage(_auxPage, _backPage);
+#elif defined(ATARIST_030)
+		bandCopy(_auxPage, _backPage);
 #else
 		memcpy(_auxPage, _backPage, _vid->_layerSize);
 #endif
@@ -1365,7 +1531,7 @@ void Cutscene::op_setPalette() {
 	uint16_t off = READ_BE_UINT16(_polPtr + 6);
 	const uint8_t *p = _polPtr + off + num * 32;
 	copyPalette(p, palNum ^ 1);
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	if (_stPrescan) {
 		// the colours as AMIGA_convertColor reads them, kept at four
 		// bits a channel
@@ -1386,7 +1552,7 @@ void Cutscene::op_setPalette() {
 		_palBuf[0x21] = 0xFF;
 	}
 	_paletteNum = num;
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	// planar pages bake colours at draw time, so the palette (and
 	// therefore the colour remap) must be current before this
 	// frame's shapes are drawn, not applied at the next flip
@@ -1403,7 +1569,7 @@ void Cutscene::op_drawCaptionText() {
 		const int y = Video::GAMESCREEN_H * _vid->_layerScale - h;
 
 		if (!_stPrescan) {
-#ifdef ATARIST
+#ifdef ST_PLANAR
 			ST_fillRect(_auxPage, 0, y, Video::GAMESCREEN_W, h, 0xC0);
 			ST_fillRect(_backPage, 0, y, Video::GAMESCREEN_W, h, 0xC0);
 			ST_fillRect(_frontPage, 0, y, Video::GAMESCREEN_W, h, 0xC0);
@@ -1412,8 +1578,13 @@ void Cutscene::op_drawCaptionText() {
 			memset(_backPage + y * _vid->_w, 0xC0, h * _vid->_w);
 			memset(_frontPage + y * _vid->_w, 0xC0, h * _vid->_w);
 #endif
+#ifdef ATARIST_030
+			bandTouch(_auxPage, y, y + h);
+			bandTouch(_backPage, y, y + h);
+			bandTouch(_frontPage, y, y + h);
+#endif
 		}
-#ifdef ATARIST
+#ifdef ST_PLANAR
 		if (!_stPrescan) {
 			_stCur.flags |= kStFCaption;
 		}
@@ -1456,7 +1627,11 @@ void Cutscene::op_refreshAll() {
 void Cutscene::drawShapeScale(const uint8_t *data, int16_t zoom, int16_t b, int16_t c, int16_t d, int16_t e, int16_t f, int16_t g) {
 	
 	debug(DBG_CUT, "Cutscene::drawShapeScale(%d, %d, %d, %d, %d, %d, %d)", zoom, b, c, d, e, f, g);
-#ifdef ATARIST
+#ifdef ST_PLANAR
+	if (_stPrescan || stSkipDraw()) {
+		return;
+	}
+#elif defined(ATARIST)
 	if (_stPrescan || stSkipDraw()) {
 		return;
 	}
@@ -1609,7 +1784,7 @@ void Cutscene::op_drawShapeScale() {
 	uint16_t zoom = fetchNextCmdWord() + 512;
 	_shape_ix = fetchNextCmdByte();
 	_shape_iy = fetchNextCmdByte();
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	if (!_stPrescan && !stSkipDraw()) {
 		if (g_options.ab & kAbCutNoDraw) {
 			return;
@@ -1664,7 +1839,11 @@ void Cutscene::op_drawShapeScale() {
 void Cutscene::drawShapeScaleRotate(const uint8_t *data, int16_t zoom, int16_t b, int16_t c, int16_t d, int16_t e, int16_t f, int16_t g) {
 	
 	debug(DBG_CUT, "Cutscene::drawShapeScaleRotate(%d, %d, %d, %d, %d, %d, %d)", zoom, b, c, d, e, f, g);
-#ifdef ATARIST
+#ifdef ST_PLANAR
+	if (_stPrescan || stSkipDraw()) {
+		return;
+	}
+#elif defined(ATARIST)
 	if (_stPrescan || stSkipDraw()) {
 		return;
 	}
@@ -1870,7 +2049,7 @@ void Cutscene::op_drawShapeScaleRotate() {
 	if (shapeOffset & 0x1000) {
 		r3 = fetchNextCmdWord();
 	}
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	if (!_stPrescan && !stSkipDraw()) {
 		if (g_options.ab & kAbCutNoDraw) {
 			return;
@@ -1957,8 +2136,10 @@ void Cutscene::op_copyScreen() {
 		++_creditsTextCounter;
 	}
 	if (!_stPrescan) {
-#ifdef ATARIST
+#ifdef ST_PLANAR
 		ST_copyPage(_backPage, _frontPage);
+#elif defined(ATARIST_030)
+		bandCopy(_backPage, _frontPage);
 #else
 		memcpy(_backPage, _frontPage, _vid->_layerSize);
 #endif
@@ -2011,7 +2192,7 @@ void Cutscene::op_drawTextAtPos() {
 		int16_t y = (int8_t)fetchNextCmdByte() * 8;
 		if (!_creditsSequence) {
 			const uint8_t *str = _res->getCineString(strId & 0xFFF);
-#ifdef ATARIST
+#ifdef ST_PLANAR
 			if (g_options.ab & kAbCutNoText) {
 				str = 0;
 			}
@@ -2032,10 +2213,18 @@ void Cutscene::op_drawTextAtPos() {
 				drawText(x, y, str, color, _backPage, kTextJustifyCenter);
 			}
 			// 'voyage' - cutscene script redraws the string to refresh the screen
-			if (_id == kCineVoyage && (strId & 0xFFF) == 0x45) {
+			// (the 030 build's prescan, which only reads the script,
+			// waited 1.1s here before the scene could begin)
+			if (_id == kCineVoyage && (strId & 0xFFF) == 0x45
+#ifdef ATARIST_030
+			    && !_stPrescan
+#endif
+			    ) {
 				if ((_cmdPtr - _cmdStartPtr) == 0xA) {
-					#ifdef ATARIST
+					#ifdef ST_PLANAR
 		stShow(_backPage);
+#elif defined(ATARIST_030)
+		bandShow(_backPage);
 #else
 		_stub->copyRect(0, 0, _vid->_w, _vid->_h, _backPage, _vid->_w);
 #endif
@@ -2103,6 +2292,9 @@ uint16_t Cutscene::fetchNextCmdWord() {
 }
 
 #ifdef ATARIST
+// The 030 build's colours are exact, so it walks the script only to
+// learn which parts build each frame on the last (_stCopyParts), for
+// the frame skipper.
 void Cutscene::stPrescanPalette(uint16_t num) {
 	// Planar pages bake hardware colours into pixels as they are
 	// drawn, but scenes draw art before setting - or while fading up -
@@ -2130,12 +2322,16 @@ void Cutscene::stPrescanPalette(uint16_t num) {
 	const int savedTextIndex = _creditsTextIndex;
 	const int savedTextLen = _creditsTextLen;
 
+#ifdef ST_PLANAR
 	ST_cutscenePalReset();
+#endif
 	_stCopyParts = 0;
 	_stPrescan = true;
 	_stPrescanOps = 0;
 	_stPart = 0;
+#ifdef ST_PLANAR
 	ST_cutscenePalPart(0);
+#endif
 	mainLoop(num);
 	_stPrescan = false;
 
@@ -2153,7 +2349,9 @@ void Cutscene::stPrescanPalette(uint16_t num) {
 	_stop = false;
 	_stPart = 0;
 	_stUsesCopyScreen = (g_options.ab & kAbCutHideAlways) ? _stCopyParts != 0 : (_stCopyParts & stPartBit(0)) != 0;
+#ifdef ST_PLANAR
 	ST_cutscenePalLock(0);
+#endif
 }
 #endif
 
@@ -2181,7 +2379,7 @@ void Cutscene::mainLoop(uint16_t num) {
 	c.r = c.g = c.b = 0;
 	for (int i = 0; i < 0x20; ++i) {
 		_stub->setPaletteEntry(0xC0 + i, &c);
-#ifdef ATARIST
+#ifdef ST_PLANAR
 		_stPalApplied[i] = 0x000;
 #endif
 	}
@@ -2379,7 +2577,7 @@ void Cutscene::prepare() {
 }
 
 void Cutscene::playCredits() {
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	ST_setCutscenePalMode(true);
 #endif
 	if (_res->isMac()) {
@@ -2412,10 +2610,14 @@ void Cutscene::playCredits() {
 		uint8_t cutName = offsets[cut_id * 2];
 		uint16_t cutOff = (int8_t)offsets[cut_id * 2 + 1];
 		if (load(cutName)) {
-#ifdef ATARIST
+#ifdef ST_PLANAR
 			_stSceneId = cut_id;
 			stPrescanPalette(cutOff);
 			stBandedLoop(cutOff);
+#elif defined(ATARIST_030)
+			_stSceneId = cut_id;
+			stPrescanPalette(cutOff);
+			bandLoop(cutOff);
 #else
 			mainLoop(cutOff);
 #endif
@@ -2423,7 +2625,7 @@ void Cutscene::playCredits() {
 		}
 	}
 	_creditsSequence = false;
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	ST_cutscenePalUnlock();
 	ST_setCutscenePalMode(false);
 	_vid->ST_rebakeRoom();
@@ -2446,13 +2648,13 @@ void Cutscene::playText(const char *str) {
 		}
 	}
 	const int y = (128 - lines * 8) / 2;
-	#ifdef ATARIST
+	#ifdef ST_PLANAR
 		ST_clearLayer(_backPage, 0xC0);
 #else
 		memset(_backPage, 0xC0, _vid->_layerSize);
 #endif
 	drawText(0, y, (const uint8_t *)str, 0xC1, _backPage, kTextJustifyAlign);
-	#ifdef ATARIST
+	#ifdef ST_PLANAR
 		_stub->copyRectPlanar(0, 0, _vid->_w, _vid->_h, _backPage);
 #else
 		_stub->copyRect(0, 0, _vid->_w, _vid->_h, _backPage, _vid->_w);
@@ -2479,7 +2681,7 @@ void Cutscene::play() {
 		_statFrames = _statLate = _statSkipped = _statNoShow = 0;
 		_statWork = _statBudget = _statCopy = 0;
 		prepare();
-#ifdef ATARIST
+#ifdef ST_PLANAR
 		ST_setCutscenePalMode(true);
 		// A cutscene is a half-height picture centred in the frame,
 		// with its captions on the middle line. Fit would squash it
@@ -2549,10 +2751,14 @@ void Cutscene::play() {
 			}
 		} else if (cutName != 0xFF) {
 			if (load(cutName)) {
-#ifdef ATARIST
+#ifdef ST_PLANAR
 				_stSceneId = _id;
 				stPrescanPalette(cutOff);
 				stBandedLoop(cutOff);
+#elif defined(ATARIST_030)
+				_stSceneId = _id;
+				stPrescanPalette(cutOff);
+				bandLoop(cutOff);
 #else
 				mainLoop(cutOff);
 #endif
@@ -2561,7 +2767,7 @@ void Cutscene::play() {
 		} else if (_id == 8 && g_options.play_caillou_cutscene) {
 			playSet(_caillouSetData, 0x5E4);
 		}
-#ifdef ATARIST
+#ifdef ST_PLANAR
 		ST_cutscenePalUnlock();
 		ST_setCutscenePalMode(false);
 		if (fillForCutscene) {
@@ -2659,7 +2865,7 @@ void Cutscene::playSet(const uint8_t *p, int offset) {
 	for (int i = 0; i < frames && !_stub->_pi.quit && !_interrupted; ++i) {
 		const uint32_t timestamp = _stub->getTimeStamp();
 
-		#ifdef ATARIST
+		#ifdef ST_PLANAR
 		ST_clearLayer(_backPage, 0xC0);
 #else
 		memset(_backPage, 0xC0, _vid->_layerSize);
@@ -2710,7 +2916,7 @@ void Cutscene::playSet(const uint8_t *p, int offset) {
 			_stub->setPaletteEntry(0xC0 + j, &c);
 		}
 
-		#ifdef ATARIST
+		#ifdef ST_PLANAR
 		_stub->copyRectPlanar(0, 0, _vid->_w, _vid->_h, _backPage);
 #else
 		_stub->copyRect(0, 0, _vid->_w, _vid->_h, _backPage, _vid->_w);

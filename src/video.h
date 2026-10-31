@@ -19,7 +19,7 @@ struct Video {
 	enum {
 		GAMESCREEN_W = 256,
 		GAMESCREEN_H = 224,
-#ifdef ATARIST
+#ifdef ST_PLANAR
 		// ST_restoreDirty and copyRectPlanar both round to a 16-pixel
 		// planar group, so a finer grid only costs scanning
 		SCREENBLOCK_W = 16,
@@ -56,7 +56,7 @@ struct Video {
 	uint8_t *_backLayer;
 	uint8_t *_tempLayer;
 	uint8_t *_tempLayer2;
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	// Dirty-block bookkeeping, a bit per 16-pixel column and three
 	// masks a row: what has been drawn since the last update, what
 	// is on screen awaiting its restore, and what has been restored
@@ -101,6 +101,15 @@ struct Video {
 	// has anything been drawn in these blocks since the last update?
 	bool ST_blocksDirty(int x, int y, int w, int h) const;
 #endif
+#ifdef ATARIST_030
+	// The front layer put back to the room before a gameplay frame draws:
+	// only where the last frames drew, unless something else has had the
+	// screen since (see restoreFront).
+	uint32_t _updates;          // updateScreen calls, all of them
+	uint32_t _playUpdates;      // ... as they stood after the last gameplay frame
+	bool _restoreAll;           // a full refresh since: the whole layer comes back
+	void restoreFront();
+#endif
 	uint8_t _unkPalSlot1, _unkPalSlot2;
 	uint8_t _mapPalSlot1, _mapPalSlot2, _mapPalSlot3, _mapPalSlot4;
 	uint8_t _charFrontColor;
@@ -137,7 +146,7 @@ struct Video {
 	void AMIGA_decodeSpm(const uint8_t *src, uint8_t *dst);
 	void AMIGA_decodeIcn(const uint8_t *src, int num, uint8_t *dst);
 	void AMIGA_decodeSpc(const uint8_t *src, int w, int h, uint8_t *dst);
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	// a sprite's Amiga bitplanes as four planes one after another,
 	// (w / 8) * h bytes each: what the planar bakes read (ST_sprDraw)
 	bool ST_amigaPlanes(int kind, const uint8_t *src, int w, int h, uint8_t *dst);

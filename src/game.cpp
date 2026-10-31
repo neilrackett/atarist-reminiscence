@@ -31,13 +31,13 @@ static void setKeymask(PlayerInput &pi, int keymask) {
 	pi.backspace = (keymask & 0x80) != 0;
 }
 
-#ifdef ATARIST
+#ifdef ST_PLANAR
 #define GAME_COPYRECT_FRONT() _stub->copyRectPlanar(0, 0, _vid._w, _vid._h, _vid._frontLayer)
 #else
 #define GAME_COPYRECT_FRONT() _stub->copyRect(0, 0, _vid._w, _vid._h, _vid._frontLayer, _vid._w)
 #endif
 
-#ifdef ATARIST
+#ifdef ST_PLANAR
 // The sprite decoder the planar bakes call on a miss (ST_sprDraw): a
 // frame is only decoded when it has to be baked, into the bakes'
 // scratch buffer, never per draw.
@@ -82,7 +82,9 @@ static inline void stMarkClipped(Video &vid, int x, int y, int w, int h) {
 		vid.markBlockAsDirty(x, y, x1 - x, y1 - y, vid._layerScale);
 	}
 }
+#endif
 
+#ifdef ATARIST
 // --- record and replay (record=N, replay=N) ------------------------
 //
 // A benchmark that plays. bench=true times an idle Conrad in a warm
@@ -127,11 +129,17 @@ static uint32_t *g_repFrameHash;
 static uint32_t g_repFrameHashCap;
 
 static void ST_replayHashFrame(const uint8_t *layer) {
+#ifdef ST_PLANAR
 	// the four planes, what is seen: the priority plane after them only
 	// steers drawing, and two exact ways of drawing may leave it apart
+	enum { kSeen = kSTPlaneBytes, kDump = kSTLayerSize };
+#else
+	// the chunky layer, whose 0x80 bit is the priority mark
+	enum { kSeen = Video::GAMESCREEN_W * Video::GAMESCREEN_H, kDump = kSeen };
+#endif
 	const uint32_t *p = (const uint32_t *)layer;
 	uint32_t h = 0;
-	for (int n = kSTPlaneBytes / 4; --n >= 0; ) {
+	for (int n = kSeen / 4; --n >= 0; ) {
 		h = ST_rol5(h) + *p++;
 	}
 	g_repCur.hash = ST_rol5(g_repCur.hash) + h;
@@ -141,8 +149,10 @@ static void ST_replayHashFrame(const uint8_t *layer) {
 	if (g_options.replay_dump != 0 && g_repFrames == (uint32_t)g_options.replay_dump) {
 		FILE *fp = fopen("DMP.BIN", "wb");
 		if (fp) {
+#ifdef ST_PLANAR
 			fwrite((const void *)0xFFFF8240UL, 2, 16, fp);   // the colours on screen
-			fwrite(layer, 1, kSTLayerSize, fp);
+#endif
+			fwrite(layer, 1, kDump, fp);
 			fclose(fp);
 		}
 	}
@@ -231,6 +241,7 @@ static int ST_scanSaves(STSave *out, int max, int *newest) {
 	return n;
 }
 
+#ifdef ST_PLANAR
 // On the Amiga data a monster has no palette of its own: its slot is
 // loaded with half of the object palette, entries (monster & 1) * 8
 // on (loadMonsterSprites).
@@ -241,6 +252,7 @@ uint8_t ST_enemyHalves(int level) {
 	}
 	return halves;
 }
+#endif
 
 // Presentation splash: black screen, credit lines centred, shown as
 // soon as the game font is loaded and held while the rest of the
@@ -256,7 +268,9 @@ uint8_t ST_enemyHalves(int level) {
 // layer: the layer is 256 pixels wide and carries the engine's
 // colour remap, while this is full width and wants its own three
 // hardware colours. Anything the game draws afterwards goes through
-// a full refresh, which puts the screen back.
+// a full refresh, which puts the screen back. The 030 build has no
+// planar screen to write: it decodes the same stream to chunky pixels
+// and shows them through the stub, full width.
 extern const uint16_t g_splash_w;
 extern const uint16_t g_splash_h;
 extern const uint8_t g_splash_pal[][3];
@@ -265,6 +279,7 @@ extern const uint8_t g_splash_rle[];
 extern const uint32_t g_splash_rle_len;
 
 static void ST_splash(Game *g) {
+#ifdef ST_PLANAR
 	STDL_Surface *screen = STDL_GetVideoSurface();
 	if (screen == 0) {
 		return;
@@ -314,6 +329,53 @@ static void ST_splash(Game *g) {
 		cols[i].b = (uint8_t)(g_splash_pal[i][2] * 255 / 7);
 	}
 	STDL_SetColours(screen, cols, 0, 16);
+#else
+	enum { kW = 320, kH = 224 };
+	uint8_t *buf = (uint8_t *)calloc(1, kW * kH);
+	if (!buf) {
+		return;
+	}
+	// The ST's stream: per 16-pixel group a byte of plane 0's word, the
+	// next, then plane 1's two, so a byte is eight pixels of one plane,
+	// the first half of the group or the second.
+	const uint8_t *p = g_splash_rle;
+	const uint8_t *end = g_splash_rle + g_splash_rle_len;
+	const int rowBytes = (int)g_splash_w / 4;
+	int outRow = 0, outCol = 0;
+	uint8_t *row = buf + (kH - (int)g_splash_h) / 2 * kW;
+	while (p + 1 < end && outRow < (int)g_splash_h) {
+		int n = *p++;
+		const uint8_t v = *p++;
+		while (n-- > 0) {
+			uint8_t *px = row + (outCol >> 2) * 16 + (outCol & 1) * 8;
+			const uint8_t plane = (uint8_t)(1 << ((outCol >> 1) & 1));
+			for (int b = 0; b < 8; ++b) {
+				if (v & (0x80 >> b)) {
+					px[b] |= plane;
+				}
+			}
+			if (++outCol == rowBytes) {
+				outCol = 0;
+				row += kW;
+				if (++outRow >= (int)g_splash_h) {
+					break;
+				}
+			}
+		}
+	}
+	for (int i = 0; i < (int)g_splash_pal_count; ++i) {
+		// the generator stores 3-bit channels, as the ST shows them
+		Color c;
+		c.r = (uint8_t)(g_splash_pal[i][0] * 255 / 7);
+		c.g = (uint8_t)(g_splash_pal[i][1] * 255 / 7);
+		c.b = (uint8_t)(g_splash_pal[i][2] * 255 / 7);
+		g->_stub->setPaletteEntry(i, &c);
+	}
+	g->_stub->setScreenSize(kW, kH);
+	g->_stub->copyRect(0, 0, kW, kH, buf, kW);
+	g->_stub->updateScreen(0);
+	free(buf);
+#endif
 
 	// The global sprites load behind the splash rather than after the
 	// intro, where they were a black screen before the title: Conrad's
@@ -325,6 +387,9 @@ static void ST_splash(Game *g) {
 	if (left > 0) {
 		g->_stub->sleep(left);
 	}
+#ifndef ST_PLANAR
+	g->_stub->setScreenSize(g->_vid._w, g->_vid._h);
+#endif
 	memset(g->_vid._frontLayer, 0, g->_vid._layerSize);
 	g->_vid.fullRefresh();
 	g->_vid.updateScreen();
@@ -373,7 +438,7 @@ void Game::run() {
 
 	_res.init();
 	_res.load_TEXT();
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	ST_sprSetDecoder(stDecode, this, _res._scratchBuffer, Resource::kScratchBufferSize);
 #endif
 
@@ -656,6 +721,8 @@ void Game::displayTitleScreenAmiga() {
 	info("Title screen");
 #ifdef ATARIST
 	ST_logFreeMemory("title");
+#endif
+#ifdef ST_PLANAR
 	ST_paletteForRoom(0, 0, -1);        // the title chooses its own colours
 	ST_setColourWeights(0);
 #endif
@@ -674,7 +741,7 @@ void Game::displayTitleScreenAmiga() {
 		0x17B, 0x788, 0xB84, 0xC92, 0x49C, 0xF00, 0x9A8, 0x9AA,
 		0xCA7, 0xEA3, 0x8BD, 0xBBB, 0xEC7, 0xBCD, 0xDDB, 0xEED
 	};
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	// The title only ever sets its own 32 entries. On the first visit
 	// the rest of the logical palette is black and the 16 hardware
 	// colours are all its own; after a level they hold that level's
@@ -737,16 +804,26 @@ void Game::displayTitleScreenAmiga() {
 	int optItems[7];
 	int optCount = 0;
 	optItems[optCount++] = kSkillOpt;
+#ifndef ATARIST_030
+	// the 030 build has one way to show the picture
 	optItems[optCount++] = kScreenOpt;
+#endif
 #ifdef ATARIST
 	optItems[optCount++] = kMusicOpt;
 	optItems[optCount++] = kVolumeOpt;
+#ifndef ATARIST_030
+	// the 030 build always mixes at the higher rate
 	if (STDL_VoicesOpen()) {
 		// the rate of the STE's sampled sound; nothing to choose on a
 		// plain ST, or with ste_sound=false
 		optItems[optCount++] = kQualityOpt;
 	}
+#endif
+#ifdef ST_PLANAR
+	// the ST's own screen register: a TT's and a Falcon's modes keep
+	// their rate
 	optItems[optCount++] = kHzOpt;
+#endif
 #endif
 	optItems[optCount++] = kBackOpt;
 	static const int kTextY = 21;
@@ -958,7 +1035,7 @@ void Game::displayTitleScreenAmiga() {
 						// Each border transition reshapes the surface, so the
 						// whole picture goes back up, not just the line.
 						int want = (g_options.screen + kScreenModes + step) % kScreenModes;
-#ifdef ATARIST
+#ifdef ST_PLANAR
 						// skipping modes this machine lacks the RAM for
 						// (kOverscanMinK)
 						while (!ST_screenModeAvailable(want)) {
@@ -1194,12 +1271,16 @@ void Game::mainLoop() {
 			--_blinkingConradCounter;
 		}
 	}
+#endif
+#ifdef ST_PLANAR
 	_vid.ST_frameBegin();
+#elif defined(ATARIST_030)
+	_vid.restoreFront();
 #else
 	memcpy(_vid._frontLayer, _vid._backLayer, _vid._layerSize);
 #endif
 	if (!stepLogic()) {
-#ifdef ATARIST
+#ifdef ST_PLANAR
 		_vid.ST_frameAbort();
 #endif
 		return;
@@ -1208,7 +1289,7 @@ void Game::mainLoop() {
 		pge_updateZoom();
 	}
 	prepareAnims();
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	ST_placeIcon();
 #endif
 	drawAnims();
@@ -1217,7 +1298,7 @@ void Game::mainLoop() {
 	if (g_options.enable_password_menu) {
 		printLevelCode();
 	}
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	if (_stPaletteMsgCounter != 0) {
 		// Ctrl+P's confirmation, drawn a frame at a time for a
 		// couple of seconds like the level code
@@ -1228,13 +1309,18 @@ void Game::mainLoop() {
 	if (_blinkingConradCounter != 0) {
 		--_blinkingConradCounter;
 	}
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	_vid.ST_frameEnd();
+#endif
+#ifdef ATARIST
 	if (_stReplaying && g_options.replay_hash) {
 		ST_replayHashFrame(_vid._frontLayer);
 	}
 #endif
 	_vid.updateScreen();
+#ifdef ATARIST_030
+	_vid._playUpdates = _vid._updates;
+#endif
 	updateTiming();
 	drawStoryTexts();
 	if (_stub->_pi.backspace) {
@@ -1338,7 +1424,7 @@ bool Game::stepLogic() {
 			info("Room %d", _currentRoom);
 			loadLevelRoom();
 #endif
-#ifdef ATARIST
+#ifdef ST_PLANAR
 			if (_stPaletteReloaded) {
 				// Ctrl+Shift+P's confirmation, once the room is back
 				_stPaletteReloaded = false;
@@ -1346,6 +1432,8 @@ bool Game::stepLogic() {
 				snprintf(_stPaletteMsg, sizeof(_stPaletteMsg), "PALETTE %s", name[0] ? name : "AUTOMATIC");
 				_stPaletteMsgCounter = 50;
 			}
+#endif
+#ifdef ATARIST
 			if (_stLogMemRoom) {
 				// after the level's first room: decoding it is what
 				// allocates the tile pool, so this is the level at
@@ -1399,7 +1487,9 @@ void Game::updateTiming() {
 		// the longest frame of the window, from the end of the last
 		// one's wait to here: an average hides the frame that hitched
 		static uint32_t worst;
+#ifdef ST_PLANAR
 		static uint16_t gen0;
+#endif
 		const uint32_t now = _stub->getTimeStamp();
 		if (now - _frameTimestamp > worst) {
 			worst = now - _frameTimestamp;
@@ -1413,16 +1503,24 @@ void Game::updateTiming() {
 				// steps = frames + catch-ups: the game's own pace
 				char perf[160];
 				ST_perfFormat(g_stPerf, perf, sizeof(perf));
+#ifdef ST_PLANAR
 				info("fps %d.%d (%d ms/frame) catch-ups %u misses %u worst %dms remap %u pge %d | %s",
 					(int)(64000 / d), (int)((640000 / d) % 10), (int)(d / 64),
 					(unsigned)_logicCatchUps, (unsigned)ST_overscanMisses(),
 					(int)worst, (unsigned)(uint16_t)(ST_remapGen() - gen0), ST_livePges(), perf);
+#else
+				info("fps %d.%d (%d ms/frame) catch-ups %u worst %dms pge %d | %s",
+					(int)(64000 / d), (int)((640000 / d) % 10), (int)(d / 64),
+					(unsigned)_logicCatchUps, (int)worst, ST_livePges(), perf);
+#endif
 			}
 			memset(&g_stPerf, 0, sizeof(g_stPerf));
 			t0 = now;
 			frames = 0;
 			worst = 0;
+#ifdef ST_PLANAR
 			gen0 = ST_remapGen();
+#endif
 			_logicCatchUps = 0;
 		}
 	}
@@ -1697,7 +1795,7 @@ void Game::playCutscene(int id) {
 	}
 	if (_cut._id != 0xFFFF) {
 		info("Cutscene %02X start", _cut._id);
-#ifdef ATARIST
+#ifdef ST_PLANAR
 		// A cutscene takes about 140K for its caches and pages (a 4MB
 		// machine's four-times arenas only where 400K is left over
 		// beside them, segArenaSize). On a 2.5MB machine the sprite
@@ -1794,7 +1892,7 @@ void Game::playCutscene(int id) {
 			_cut.playCredits();
 		}
 		_mix.stopMusic();
-#ifdef ATARIST
+#ifdef ST_PLANAR
 		uint32_t segHits, segMisses, shpDrawn, shpBaked;
 		ST_segCacheStats(&segHits, &segMisses);
 		ST_shpStats(&shpDrawn, &shpBaked);
@@ -1805,6 +1903,11 @@ void Game::playCutscene(int id) {
 			(unsigned)ST_overscanMisses(), (unsigned)_cut._statLoad,
 			(unsigned)segHits, (unsigned)(segHits + segMisses),
 			(unsigned)shpDrawn, (unsigned)shpBaked);
+#elif defined(ATARIST)
+		info("Cutscene done: %u frames, %u late, %u skipped, %u unshown, work %ums (copy %ums) of %ums budget, ready after %ums",
+			_cut._statFrames, _cut._statLate, _cut._statSkipped, _cut._statNoShow,
+			(unsigned)_cut._statWork, (unsigned)_cut._statCopy,
+			(unsigned)_cut._statBudget, (unsigned)_cut._statLoad);
 #else
 		info("Cutscene done");
 #endif
@@ -1830,7 +1933,7 @@ void Game::inp_handleSpecialKeys() {
 		loadGameState(_stateSlot);
 		_stub->_pi.load = false;
 	}
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	// Ctrl+P (palette_custom): the room's colours out to a .hex
 	if (_stub->_pi.dumpPalette) {
 		_stub->_pi.dumpPalette = false;
@@ -1883,7 +1986,7 @@ void Game::inp_handleSpecialKeys() {
 	}
 }
 
-#ifdef ATARIST
+#ifdef ST_PLANAR
 // The inventory icon lives in the room's background layer, put there
 // only when it changes: from there every restore puts it back, and a
 // frame where nothing changed costs nothing. Drawn afresh every frame
@@ -1931,7 +2034,7 @@ void Game::ST_placeIcon() {
 #endif
 
 void Game::drawCurrentInventoryItem() {
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	// The icon is already in place (ST_placeIcon). The engine draws it
 	// over everything, so it goes back on top only where a sprite was
 	// drawn across it this frame.
@@ -2055,7 +2158,7 @@ bool Game::handleConfigPanel() {
 	uint8_t colors[] = { 2, 3, 3, 3 };
 	int current = 0;
 	MenuConfirm confirm;
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	// Rows in pixels rather than cells, placed for Fit: it keeps rows
 	// in runs of ten from row 10 and drops every eleventh, so an
 	// 11-pixel pitch from 100 puts each 8-pixel line inside one run,
@@ -2543,7 +2646,7 @@ void Game::drawAnimBuffer(uint8_t stateNum, AnimBufferState *state) {
 				switch (_res._type) {
 				case kResourceTypeAmiga:
 					{
-#ifdef ATARIST
+#ifdef ST_PLANAR
 						ST_drawCharacterBaked(state->dataPtr, state->x, state->y, state->h, state->w, pge->flags);
 #else
 						_vid.AMIGA_decodeSpm(state->dataPtr, _res._scratchBuffer);
@@ -2662,7 +2765,7 @@ void Game::drawObjectFrame(const uint8_t *bankDataPtr, const uint8_t *dataPtr, i
 	const uint8_t sprite_h = (((sprite_flags >> 0) & 3) + 1) * 8;
 	const uint8_t sprite_w = (((sprite_flags >> 2) & 3) + 1) * 8;
 
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	if (_res._type == kResourceTypeAmiga) {
 		// the piece whole, at its unclipped place: the bake keys on the
 		// bank bytes, and the layer clips it
@@ -2745,7 +2848,7 @@ void Game::drawObjectFrame(const uint8_t *bankDataPtr, const uint8_t *dataPtr, i
 	const uint32_t dst_offset = Video::GAMESCREEN_W * sprite_y + sprite_x;
 	const uint8_t sprite_col_mask = (flags & 0x60) >> 1;
 
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	(void)dst_offset;
 	(void)sprite_col_mask;
 #else
@@ -2854,7 +2957,7 @@ void Game::drawCharacter(const uint8_t *dataPtr, int16_t pos_x, int16_t pos_y, u
 
 	debug(DBG_GAME, "dst_offset=0x%X src_offset=%ld", dst_offset, src - dataPtr);
 
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	(void)dst_offset;
 	unsigned stFlags = kSTSpriteRespectPrio;
 	if (flags & 2) {
@@ -2888,7 +2991,7 @@ void Game::drawCharacter(const uint8_t *dataPtr, int16_t pos_x, int16_t pos_y, u
 	_vid.markBlockAsDirty(pos_x, pos_y, sprite_clipped_w, sprite_clipped_h, _vid._layerScale);
 }
 
-#ifdef ATARIST
+#ifdef ST_PLANAR
 // drawCharacter for Amiga frames, through the planar bakes: the frame is
 // named by its bytes in the sprite data, drawn whole at its unclipped
 // place, and only decoded on the bake's miss.
@@ -3111,13 +3214,15 @@ void Game::ST_unloadLevel() {
 	_mix.stopAll();
 	clearStateRewind();
 	_res.freeLevelData();
+#ifdef ST_PLANAR
 	_vid.ST_releaseLevelCaches();
+#endif
 	ST_logFreeMemory("level unloaded");
 }
 #endif
 
 void Game::loadLevelData() {
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	// the bakes' memory back while the level loads; the first sprite
 	// drawn in it sizes the ring to what is left. The rooms kept for
 	// going back belong to the level that is going.
@@ -3319,7 +3424,7 @@ void Game::loadLevelData() {
 }
 
 void Game::drawIcon(uint8_t iconNum, int16_t x, int16_t y, uint8_t colMask, uint8_t *layer) {
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	if (_res._type == kResourceTypeAmiga) {
 		// Into another layer - the icon's place in the background - it
 		// leaves the priority plane alone, so sprites crossing it keep
@@ -3388,7 +3493,7 @@ void Game::drawIcon(uint8_t iconNum, int16_t x, int16_t y, uint8_t colMask, uint
 		_vid.SEGA_decodeIcn(_res._icn, iconNum, buf);
 		break;
 	}
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	{
 		uint8_t map16[16];
 		ST_buildMap16(colMask << 4, map16);
@@ -3400,7 +3505,7 @@ void Game::drawIcon(uint8_t iconNum, int16_t x, int16_t y, uint8_t colMask, uint
 	_vid.markBlockAsDirty(x, y, 16, 16, _vid._layerScale);
 }
 
-#ifdef ATARIST
+#ifdef ST_PLANAR
 // An Amiga icon as chunky 16x16, for its bake (drawIcon)
 void Game::ST_decodeIcon(uint8_t iconNum, uint8_t *buf) {
 	if (iconNum > 30) {
@@ -3520,7 +3625,7 @@ void Game::handleInventory() {
 				if (_res._type == kResourceTypeAmiga) {
 					// draw outline rectangle
 					static const uint8_t outline_color = 0xE7;
-#ifdef ATARIST
+#ifdef ST_PLANAR
 					ST_hspan(_vid._frontLayer, 57, 56 + 9 * icon_spr_w - 2, 140, outline_color);
 					for (int y = 1; y < 5 * icon_spr_h - 1; ++y) {
 						ST_drawPoint(_vid._frontLayer, 56, 140 + y, outline_color);

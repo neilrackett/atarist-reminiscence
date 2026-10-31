@@ -41,7 +41,7 @@ SRCS = collision.cpp cutscene.cpp file.cpp \
 	piege.cpp \
 	protection.cpp resource.cpp sfx_player.cpp \
 	staticres.cpp splash_data.cpp unpack.cpp util.cpp video.cpp \
-	main_atari.cpp systemstub_stdl.cpp video_st.cpp st_stubs.cpp \
+	main_atari.cpp systemstub_atari.cpp systemstub_stdl.cpp video_st.cpp st_stubs.cpp \
 	palette_st.cpp mod_player.cpp ym_sfx_st.cpp spritecache_st.cpp displaylist_st.cpp
 
 OBJS = $(SRCS:%.cpp=build/%.o)
@@ -95,6 +95,39 @@ $(TARGET): $(OBJS) $(STDL_LIB) | dist
 	@# the documented template, but never over a config in use
 	@test -f dist/RS.CFG || cp RS.CFG.template dist/RS.CFG
 
+# The 030 build, FBACK030.TOS: the same game for a TT or a Falcon in
+# 256 colours (make 030). Upstream's chunky layers stand in for the
+# ST's planar ones, so the planar files and the ST stub stay out, and
+# the 030 stub shows them (systemstub_030.cpp); STDL's keyboard,
+# joystick, sound and clock (systemstub_atari.cpp), RS.CFG and the
+# menus are the ST build's. Its objects build apart, for the 68020 and
+# up with no FPU instructions, and link against the 68000 libraries:
+# the toolchain's 68020-60 ones assume an FPU, which a stock Falcon and
+# some TTs lack, and their mintlib will not start without one.
+SRCS_030 = $(filter-out systemstub_stdl.cpp video_st.cpp spritecache_st.cpp displaylist_st.cpp palette_st.cpp,$(SRCS)) \
+	systemstub_030.cpp
+OBJS_030 = $(SRCS_030:%.cpp=build030/%.o)
+TARGET_030 = dist/FBACK030.TOS
+CXXFLAGS_030 = $(CXXFLAGS) -DATARIST_030 -m68020-60 -msoft-float
+
+030: $(TARGET_030)
+
+$(TARGET_030): $(OBJS_030) $(STDL_LIB) | dist
+	$(CXX) $(CXXFLAGS) -m68000 -Wl,-e,__st_entry -o build030/fback030.elf $(OBJS_030) $(LIBS)
+	cp build030/fback030.elf $@
+	$(STRIP) $@
+	@test -f dist/RS.CFG || cp RS.CFG.template dist/RS.CFG
+
+build030/main_atari.o: build/version.h
+
+build030/%.o: src/%.cpp | build030 build
+	$(CXX) $(CXXFLAGS_030) -c -o $@ $<
+
+build030:
+	mkdir -p $@
+
+-include $(OBJS_030:.o=.d)
+
 build/version.h: FORCE | build
 	@printf '#define PORT_VERSION "%s"\n#define PORT_RELEASE "%s"\n' '$(PORT_VERSION)' '$(PORT_RELEASE)' > $@.tmp; \
 	cmp -s $@.tmp $@ || mv $@.tmp $@; rm -f $@.tmp
@@ -109,8 +142,8 @@ build dist:
 	mkdir -p $@
 
 clean:
-	rm -rf build $(TARGET)
+	rm -rf build build030 $(TARGET) $(TARGET_030)
 
 -include $(DEPS)
 
-.PHONY: all clean
+.PHONY: all clean 030

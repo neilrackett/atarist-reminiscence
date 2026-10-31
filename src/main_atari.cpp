@@ -370,9 +370,31 @@ static void initOptions() {
 			g_options.screen = kScreenFit;
 		}
 	}
+#ifdef ATARIST_030
+	// Always High, whatever RS.CFG says: a TT has time to spare for
+	// twice the mixing, and a Falcon is said to have no 6258Hz at all
+	// (there that rate is the DMA's pause)
+	g_options.sound_quality = kSoundHigh;
+#endif
 }
 
+#ifdef ST_PLANAR
 extern SystemStub *SystemStub_STDL_create();
+#define STUB_CREATE SystemStub_STDL_create
+#define PROGRAM_NAME "FLASHBAK.TOS"
+#else
+extern SystemStub *SystemStub_030_create();
+#define STUB_CREATE SystemStub_030_create
+#define PROGRAM_NAME "FBACK030.TOS"
+
+// What __st_entry shows on any machine but a TT or a Falcon, in the
+// 40 columns of an ST's console
+extern "C" const char st_need030[];
+const char st_need030[] =
+	"This is Flashback for TT & Falcon,\r\n"
+	"download the ST version from\r\n"
+	"neilrackett.com/atarist\r\n";
+#endif
 
 // The program's entry point (the Makefile links with -e __st_entry),
 // ahead of mintlib's start-up: it clears the BSS before anything reads
@@ -383,10 +405,36 @@ extern SystemStub *SystemStub_STDL_create();
 // and a second run of the game from a GemDrive drive bombed in mintlib's
 // mktime on a stale pointer, or in STDL_Init on a stale "initialised"
 // (October 2026). 32 bytes a movem: about 60ms at 8MHz.
+//
+// The 030 build checks the machine first, in instructions a 68000 has:
+// the rest of it is 68020 code, which on an ST bombed before main. It
+// asks _MCH rather than _CPU because an ST with a 68030 card would run
+// the code but has neither machine's video modes.
 __asm__(
 "	.text\n"
 "	.globl	__st_entry\n"
 "__st_entry:\n"
+#ifdef ATARIST_030
+"	move.l	%a0,-(%sp)\n"
+"	pea	9f\n"
+"	move.w	#38,-(%sp)\n"             // Supexec, as $5a0 is supervisor-only
+"	trap	#14\n"
+"	addq.l	#6,%sp\n"
+"	move.l	(%sp)+,%a0\n"
+"	swap	%d0\n"
+"	subq.w	#2,%d0\n"                 // _MCH's high word: 2 a TT, 3 a Falcon
+"	cmp.w	#1,%d0\n"
+"	bls.s	5f\n"
+"	pea	_st_need030\n"
+"	move.w	#9,-(%sp)\n"              // Cconws
+"	trap	#1\n"
+"	move.w	#7,-(%sp)\n"              // Crawcin
+"	trap	#1\n"
+"	move.w	#-1,-(%sp)\n"
+"	move.w	#76,-(%sp)\n"             // Pterm
+"	trap	#1\n"
+"5:\n"
+#endif
 "	move.l	4(%sp),%a1\n"
 "	move.l	28(%a1),%d0\n"            // p_blen
 "	move.l	24(%a1),%a1\n"            // p_bbase
@@ -409,7 +457,21 @@ __asm__(
 "3:	movem.l	%d1-%d7/%a2,-(%a1)\n"
 "	subq.l	#1,%d0\n"
 "	bne.s	3b\n"
-"4:	jmp	__start\n");
+"4:	jmp	__start\n"
+#ifdef ATARIST_030
+"9:	moveq	#0,%d0\n"                 // _MCH, or 0 with no cookie jar (TOS 1.0x)
+"	move.l	0x5a0,%d1\n"              // _p_cookies
+"	beq.s	7f\n"
+"	move.l	%d1,%a0\n"
+"6:	move.l	(%a0)+,%d1\n"             // a cookie's name, 0 after the last
+"	beq.s	7f\n"
+"	move.l	(%a0)+,%d2\n"
+"	cmp.l	#0x5f4d4348,%d1\n"        // "_MCH"
+"	bne.s	6b\n"
+"	move.l	%d2,%d0\n"
+"7:	rts\n"
+#endif
+);
 
 #undef main
 int main(int argc, char *argv[]) {
@@ -430,7 +492,7 @@ int main(int argc, char *argv[]) {
 		// the machine it is meant to help.
 		printf("Game data not found!\n\n");
 		printf("Please add the Amiga data files to a\n");
-		printf("DATA folder beside FLASHBAK.TOS\n\n");
+		printf("DATA folder beside " PROGRAM_NAME "\n\n");
 		printf("Visit neilrackett.com/atarist\n");
 		printf("for more information.\n\n");
 		printf("Press a key\n");
@@ -439,7 +501,7 @@ int main(int argc, char *argv[]) {
 	}
 	const Language language = detectLanguage(&fs);
 	ScalerParameters scalerParameters = ScalerParameters::defaults();
-	SystemStub *stub = SystemStub_STDL_create();
+	SystemStub *stub = STUB_CREATE();
 	Game *g = new Game(stub, &fs, ".", 0, (ResourceType)version, language, kWidescreenNone, false, 0, 0,
 	                   (uint32_t)g_options.cheats);
 	stub->init(g_caption, g->_vid._w, g->_vid._h, true, kWidescreenNone, false, &scalerParameters, 0);

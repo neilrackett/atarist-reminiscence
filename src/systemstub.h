@@ -129,7 +129,7 @@ struct SystemStub {
 	virtual void getPaletteEntry(int i, Color *c) = 0;
 	virtual void setOverscanColor(int i) = 0;
 	virtual void copyRect(int x, int y, int w, int h, const uint8_t *buf, int pitch) = 0;
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	// planar layer blit (see video_st.h for the layer format)
 	virtual void copyRectPlanar(int x, int y, int w, int h, const uint8_t *layer) {}
 #endif

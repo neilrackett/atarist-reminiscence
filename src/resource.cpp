@@ -1787,10 +1787,12 @@ bool Resource::ST_loadUnpacked(int objType) {
 #endif
 
 void Resource::clearBankData() {
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	// a frame's display list names pieces in the arena by address: what
 	// it has written down is drawn now, while those bytes are still theirs
 	ST_dlFlushNow();
+#endif
+#ifdef ATARIST
 	// every pointer into the arena is about to mean something else, and
 	// the sprite bakes key on such pointers (spritecache_st.cpp)
 	++_stBankEpoch;

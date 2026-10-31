@@ -30,7 +30,7 @@ extern "C" {
 }
 #include <osbind.h>
 
-#include "systemstub.h"
+#include "systemstub_atari.h"
 #include "util.h"
 #include "video_st.h"
 #include "palette_tables.h"
@@ -58,7 +58,7 @@ static inline int fitPhase(int y) {
 // in cutscenes, and where they start in play (see buildFillTable).
 enum { kFillScreensTop = 12, kFillGameTop = 18 };
 
-struct SystemStub_STDL : SystemStub {
+struct SystemStub_STDL : SystemStub_Atari {
 	STDL_Surface *_screen;
 	Color _pal[256];        // logical palette (engine side)
 	Color _basePal[256];    // palette when the remap was last built
@@ -100,20 +100,14 @@ struct SystemStub_STDL : SystemStub {
 	void damageSource(int y, int h, int g0, int g1);
 	void clearScreen();
 	void syncPages(const uint8_t *shown);
-	// key releases are applied at the start of the *next* poll so a
-	// press+release inside one slow frame is still seen by the game
-	uint8_t _upDirMask;
-	bool _upEnter, _upSpace, _upShift;
 
 	virtual ~SystemStub_STDL() {}
 	virtual void init(const char *title, int w, int h, bool fullscreen, int widescreenMode, bool maximized, const ScalerParameters *scalerParameters, int outputRate);
 	virtual void destroy();
-	virtual bool hasWidescreen() const { return false; }
 	virtual void setScreenSize(int w, int h);
 	virtual int setScreenMode(int mode);
 	virtual int panScreen(int delta);
 	virtual void useFillWindow(bool game);
-	virtual void rumble(int low, int high, int ms) { STDL_PadRumble(low, high, ms); }
 	void buildFillTable();
 	void applyFillTop(int top);
 	int _mode;                 // the ScreenMode in effect
@@ -123,28 +117,10 @@ struct SystemStub_STDL : SystemStub {
 	virtual void getPalette(uint8_t *pal, int n);
 	virtual void setPaletteEntry(int i, const Color *c);
 	virtual void getPaletteEntry(int i, Color *c);
-	virtual void setOverscanColor(int i) {}
 	virtual void copyRect(int x, int y, int w, int h, const uint8_t *buf, int pitch);
 	virtual void copyRectPlanar(int x, int y, int w, int h, const uint8_t *layer);
-	virtual void copyRectRgb24(int x, int y, int w, int h, const uint8_t *rgb) {}
-	virtual void zoomRect(int x, int y, int w, int h) {}
-	virtual void copyWidescreenLeft(int w, int h, const uint8_t *buf) {}
-	virtual void copyWidescreenRight(int w, int h, const uint8_t *buf) {}
-	virtual void copyWidescreenMirror(int w, int h, const uint8_t *buf) {}
-	virtual void copyWidescreenBlur(int w, int h, const uint8_t *buf) {}
-	virtual void copyWidescreenCDi(int w, int h, const uint8_t *buf, const uint8_t *pal) {}
-	virtual void clearWidescreen() {}
-	virtual void enableWidescreen(bool enable) {}
 	virtual void fadeScreen();
 	virtual void updateScreen(int shakeOffset);
-	virtual void processEvents();
-	virtual void sleep(int duration);
-	virtual uint32_t getTimeStamp();
-	virtual void startAudio(AudioCallback callback, void *param) {}
-	virtual void stopAudio() {}
-	virtual uint32_t getOutputSampleRate() { return 12517; }
-	virtual void lockAudio() {}
-	virtual void unlockAudio() {}
 
 	void buildRemap();
 	void applyRemap(const uint8_t *newRemap);
@@ -362,11 +338,7 @@ void SystemStub_STDL::copyRectPlanar(int x, int y, int w, int h, const uint8_t *
 	}
 }
 
-static int ST_ramK();
-static void ST_logMachine();
-
 void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int widescreenMode, bool maximized, const ScalerParameters *scalerParameters, int outputRate) {
-	memset(&_pi, 0, sizeof(_pi));
 	_palLocked = false;
 	_cutPending = false;
 	_remapStale = true;
@@ -374,41 +346,7 @@ void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int
 	memset(_customMap, 0xFF, sizeof(_customMap));
 	memset(_amigaIdx, 0xFF, sizeof(_amigaIdx));
 	_haveColW = false;
-	_upDirMask = 0;
-	_upEnter = _upSpace = _upShift = false;
-	if (STDL_Init(0x20 | 0x200) != 0) { // VIDEO | JOYSTICK
-		error("STDL_Init failed");
-	}
-	// The game never reads the mouse, and leaving it reporting costs
-	// three IKBD interrupts per movement. With a border open those
-	// delay the timer interrupt that reopens it, so moving the mouse
-	// flickered the screen - measured on hardware, where turning
-	// reporting off stopped both the flicker and the growth of the
-	// missed-border count.
-	//
-	// It also retires a workaround: while the mouse reports, the
-	// IKBD takes joystick 1's fire button and delivers it as the
-	// right mouse button instead, which STDL has to fold back.
-	// Silenced, the button arrives in the joystick's own packet.
-	// STDL puts reporting back when it releases the keyboard,
-	// including down the terminate path, so the desktop still gets
-	// a working pointer if we crash.
-	STDL_EnableMouse(0);
-	if (!g_options.megaste_speedup) {
-		// megaste_speedup=false: leave a Mega STE at whatever speed
-		// it was set to before the game ran, rather than switching
-		// it to 16MHz with the cache. Through the library only: it
-		// keeps the border timing calibrated to the clock in use.
-		STDL_UseMegaSteSpeedup(0);
-	}
-	if (!g_options.blitter) {
-		// diagnostic: a BLiTTER operation runs in hog mode while a
-		// border is open and cannot be interrupted once started, so
-		// turning it off says whether it is what makes a border
-		// interrupt miss its window on a busy frame
-		STDL_UseBlitter(0);
-		info("BLiTTER disabled (blitter=false)");
-	}
+	initMachine();
 	_dblBuf = g_options.double_buffer;
 	_dmgLo = kMaxScreenRows;
 	_dmgHi = -1;
@@ -440,40 +378,13 @@ void SystemStub_STDL::init(const char *title, int w, int h, bool fullscreen, int
 	// what the screen IS, which is what Options shows: overscan can be
 	// out of reach (kOverscanMinK, a 60Hz display) whatever RS.CFG
 	// asked for. The RAM goes in the log either way, for bug reports.
-	ST_ramK();
-	if (g_options.logging) {
-		ST_logMachine();
-	}
+	logMachine();
 	g_options.screen = setScreenMode(g_options.screen);
 	setScreenSize(w, h);
 	// black screen until the first frame arrives
 	clearScreen();
 	writeHwPalette();
-	// Joystick and pad both drive the game as synthesised keypresses,
-	// so the input code below needs to know nothing about either.
-	//
-	// Arrows and fire are all an ST joystick has, and fire is Shift,
-	// Flashback's main verb. The rest exist only when a controller is
-	// present; binding them on a machine without one is harmless, as
-	// unbound inputs stay silent.
-	//
-	// Save, load, quit and the state-slot keys are deliberately absent:
-	// they are Ctrl combinations, and emulation synthesises one key per
-	// input, so they stay on the keyboard where they belong.
-	STDL_JoyKeyMapping(STDLK_UP, STDLK_DOWN, STDLK_LEFT, STDLK_RIGHT, STDLK_RSHIFT);
-
-	STDL_JoyKeyBind(STDL_JOYKEY_EAST,   STDLK_RETURN);     // use item
-	STDL_JoyKeyBind(STDL_JOYKEY_NORTH,  STDLK_BACKSPACE);  // inventory
-	STDL_JoyKeyBind(STDL_JOYKEY_WEST,   STDLK_SPACE);
-	STDL_JoyKeyBind(STDL_JOYKEY_START,  STDLK_ESCAPE);     // options
-	STDL_JoyKeyBind(STDL_JOYKEY_SELECT, STDLK_BACKSPACE);  // inventory
-
-	// The two you reach for constantly, put where a thumb is not
-	// needed: inventory and use, on the shoulders.
-	STDL_JoyKeyBind(STDL_JOYKEY_TL, STDLK_BACKSPACE);
-	STDL_JoyKeyBind(STDL_JOYKEY_TR, STDLK_RETURN);
-
-	STDL_JoyKeyEmulation(1);
+	initJoystick();
 }
 
 void SystemStub_STDL::destroy() {
@@ -559,76 +470,6 @@ int ST_textRow(int y) {
 // counts: the game's own allocations go there when a machine has some.
 // Deliberately not in the docs or RS.CFG.template.
 static const int kOverscanMinK = 2560;
-
-static int g_ramK = -1;           // ST RAM and alt-RAM, in K, once looked at
-
-static int ST_ramK() {
-	if (g_ramK < 0) {
-		const uint32_t st = *(volatile uint32_t *)0x42EUL;             // phystop
-		uint32_t alt = 0;
-		if (*(volatile uint32_t *)0x5A8UL == 0x1357BD13UL              // ramvalid
-		    && *(volatile uint32_t *)0x5A4UL > 0x01000000UL) {         // ramtop
-			alt = *(volatile uint32_t *)0x5A4UL - 0x01000000UL;
-		} else {
-			// the largest free block, where TOS keeps no record; -32
-			// from a GEMDOS without Mxalloc, which has none to give
-			const long free = Mxalloc(-1L, 1);
-			if (free > 0) {
-				alt = (uint32_t)free;
-			}
-		}
-		g_ramK = (int)((st + alt) >> 10);
-		info("Memory: %dK ST RAM, %dK alt-RAM", (int)(st >> 10), (int)(alt >> 10));
-	}
-	return g_ramK;
-}
-
-// The RAM the machine has, as found at start-up (0 before then): for
-// code that runs in user mode, where low memory is out of reach
-int ATARIST_ramK() {
-	return g_ramK < 0 ? 0 : g_ramK;
-}
-
-// The CPU clock, measured: a fixed loop run for four ticks of the 200Hz
-// counter. 32 cycles an iteration on a 68000 with no wait states, so
-// 5000 iterations in 20ms is 8MHz; interrupts take a few percent of
-// that, which the reading carries. It is there for an accelerator,
-// which no cookie names - a "Mega ST at 16MHz" can be an accelerated
-// Mega ST or a Mega STE, and only the clock tells them apart.
-static int ST_cpuMHz10() {
-	volatile uint32_t *hz200 = (volatile uint32_t *)0x4BAUL;
-	uint32_t t = *hz200;
-	while (*hz200 == t) {
-	}
-	const uint32_t end = *hz200 + 4;
-	uint32_t n = 0;
-	__asm__ volatile(
-		"1:\taddq.l #1,%0\n\t"
-		"cmp.l (%1),%2\n\t"
-		"bhi.s 1b"
-		: "+d"(n) : "a"(hz200), "d"(end) : "cc");
-	return (int)(n * 16 / 1000);
-}
-
-// One line for bug reports: the machine, as the library and the clock
-// see it. Nothing said before which of several very different machines
-// a report came from.
-static void ST_logMachine() {
-	const STDL_MachineInfo *mi = STDL_GetMachineInfo();
-	const uint32_t sysbase = *(volatile uint32_t *)0x4F2UL;
-	const unsigned tos = *(volatile uint16_t *)(sysbase + 2);
-	char speed[32] = "";
-	if (mi->is_megaste) {
-		// bit 1 the 16MHz clock, bit 0 the cache (see STDL_UseMegaSteSpeedup)
-		const unsigned r = *(volatile uint8_t *)0xFFFF8E21UL;
-		snprintf(speed, sizeof(speed), ", %dMHz cache %s", (r & 2) ? 16 : 8, (r & 1) ? "on" : "off");
-	}
-	const int mhz10 = ST_cpuMHz10();
-	info("Machine: %s, _MCH %08lx, TOS %x.%02x, BLiTTER %s%s, CPU about %d.%dMHz",
-		mi->is_megaste ? "Mega STE" : (mi->is_ste ? "STE" : "ST"),
-		(unsigned long)mi->mch_cookie, tos >> 8, tos & 0xFF,
-		mi->has_blitter ? "yes" : "no", speed, mhz10 / 10, mhz10 % 10);
-}
 
 bool ST_screenModeAvailable(int mode) {
 	return (mode != kScreenTop && mode != kScreenFull) || ST_ramK() >= kOverscanMinK;
@@ -2203,22 +2044,6 @@ void ST_beamSync() {
 	}
 }
 
-// What TOS could still hand the C library in one piece. A probe with
-// malloc would count the library's own free list as well, but it is
-// not free of side effects: the library keeps the big blocks it takes
-// from TOS, splits them later, and the probe alone was enough to stop
-// level 1 finding room for its tile pool on a 2MB machine.
-void ST_logFreeMemory(const char *where) {
-	if (!g_options.logging) {
-		return;
-	}
-	info("Memory at %s: largest free block %ldK", where, ST_freeK());
-}
-
-long ST_freeK() {
-	return (long)Malloc(-1) >> 10;
-}
-
 uint32_t ST_overscanMisses() {
 	return STDL_OverscanMisses();
 }
@@ -2355,123 +2180,4 @@ void SystemStub_STDL::fadeScreen() {
 	clearScreen();
 	_shadowValid = false;
 	_hwDirty = true;
-}
-
-void SystemStub_STDL::processEvents() {
-	// The sound DMA is stopped while nothing plays (see mixer.cpp).
-	// Driven from here because it is the one per-frame call the game
-	// loop and the cutscene player both make - and cutscenes, where
-	// nothing plays for a minute at a time, are most of the win.
-	{ extern void ATARIST_mixerTick(); ATARIST_mixerTick(); }
-	_pi.dirMask &= ~_upDirMask;
-	_upDirMask = 0;
-	if (_upEnter) { _pi.enter = false; _upEnter = false; }
-	if (_upSpace) { _pi.space = false; _upSpace = false; }
-	if (_upShift) { _pi.shift = false; _upShift = false; }
-	STDL_Event ev;
-	while (STDL_PollEvent(&ev)) {
-		switch (ev.type) {
-		case STDL_QUIT:
-			_pi.quit = true;
-			break;
-		case STDL_KEYDOWN:
-		case STDL_KEYUP: {
-			const bool down = (ev.type == STDL_KEYDOWN);
-			const uint16_t sym = ev.key.keysym.sym;
-			const uint16_t mod = ev.key.keysym.mod;
-			if (down) {
-				_pi.anyKey = true;
-			}
-			switch (sym) {
-			case STDLK_UP:
-				if (down && (mod & (STDL_KMOD_LCTRL | STDL_KMOD_RCTRL))) { _pi.panUp = true; break; }
-				if (down) { _pi.dirMask |= PlayerInput::DIR_UP; _upDirMask &= ~PlayerInput::DIR_UP; } else _upDirMask |= PlayerInput::DIR_UP;
-				break;
-			case STDLK_DOWN:
-				if (down && (mod & (STDL_KMOD_LCTRL | STDL_KMOD_RCTRL))) { _pi.panDown = true; break; }
-				if (down) { _pi.dirMask |= PlayerInput::DIR_DOWN; _upDirMask &= ~PlayerInput::DIR_DOWN; } else _upDirMask |= PlayerInput::DIR_DOWN;
-				break;
-			case STDLK_LEFT:
-				if (down) { _pi.dirMask |= PlayerInput::DIR_LEFT; _upDirMask &= ~PlayerInput::DIR_LEFT; } else _upDirMask |= PlayerInput::DIR_LEFT;
-				break;
-			case STDLK_RIGHT:
-				if (down) { _pi.dirMask |= PlayerInput::DIR_RIGHT; _upDirMask &= ~PlayerInput::DIR_RIGHT; } else _upDirMask |= PlayerInput::DIR_RIGHT;
-				break;
-			case STDLK_RETURN:
-			case STDLK_KP_ENTER:
-				if (down) { _pi.enter = true; _upEnter = false; } else _upEnter = true;
-				break;
-			case STDLK_SPACE:
-				if (down) { _pi.space = true; _upSpace = false; } else _upSpace = true;
-				break;
-			case STDLK_LSHIFT:
-			case STDLK_RSHIFT:
-				if (down) { _pi.shift = true; _upShift = false; } else _upShift = true;
-				break;
-			// backspace and escape are edge-consumed by the game
-			// (it writes false back). Frames can be slow enough
-			// that press and release arrive in the same poll, so
-			// never clear them here or the game misses the press.
-			case STDLK_BACKSPACE:
-			case STDLK_TAB:
-				if (down) {
-					_pi.backspace = true;
-				}
-				break;
-			case STDLK_ESCAPE:
-				if (down) {
-					_pi.escape = true;
-				}
-				break;
-			default:
-				if (down) {
-					if (mod & (STDL_KMOD_LCTRL | STDL_KMOD_RCTRL)) {
-						switch (sym) {
-						case STDLK_s:
-							_pi.save = true;
-							break;
-						case STDLK_l:
-							_pi.load = true;
-							break;
-						case STDLK_q:
-							_pi.quit = true;
-							break;
-						case STDLK_p:
-							if (mod & STDL_KMOD_SHIFT) {
-								_pi.reloadPalette = true;
-							} else {
-								_pi.dumpPalette = true;
-							}
-							break;
-						case STDLK_KP_PLUS:
-						case STDLK_EQUALS:
-							_pi.stateSlot = 1;
-							break;
-						case STDLK_KP_MINUS:
-						case STDLK_MINUS:
-							_pi.stateSlot = -1;
-							break;
-						}
-					} else if (sym >= STDLK_a && sym <= STDLK_z) {
-						_pi.lastChar = sym - STDLK_a + 'A';
-					} else if (sym >= STDLK_0 && sym <= STDLK_9) {
-						_pi.lastChar = sym - STDLK_0 + '0';
-					}
-				}
-				break;
-			}
-			break;
-		}
-		default:
-			break;
-		}
-	}
-}
-
-void SystemStub_STDL::sleep(int duration) {
-	STDL_Delay(duration);
-}
-
-uint32_t SystemStub_STDL::getTimeStamp() {
-	return STDL_GetTicks();
 }

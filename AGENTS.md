@@ -10,12 +10,16 @@ time goes. For playing it, see `README.md`; for the tools, `tools/README.md`.
 ## Finding your way
 
 Most of `src/` is upstream's engine, changed in place under
-`#ifdef ATARIST` where the ST needs something else. The port's own files:
+`#ifdef ATARIST` where the ST needs something else, and under
+`#ifdef ST_PLANAR` where that something is the ST build's planar picture
+(see "The 030 build" at the end). The port's own files:
 
 | File | What it is |
 |---|---|
 | `main_atari.cpp` | entry point: reads `RS.CFG` into `g_options`, finds the data |
-| `systemstub_stdl.cpp` | the platform layer on STDL: screen modes and borders, the colour remap and its quantiser (256 logical colours to 16), input, the copy of the layer to the screen (`copyRectPlanar`), the start-up log lines |
+| `systemstub_atari.cpp`, `.h` | the platform layer both Atari builds share, on STDL: keys, joystick and pads, the clock, the machine set-up and its log lines |
+| `systemstub_stdl.cpp` | the ST build's screen on top of it: screen modes and borders, the colour remap and its quantiser (256 logical colours to 16), the copy of the layer to the screen (`copyRectPlanar`) |
+| `systemstub_030.cpp` | the 030 build's screen on top of it: sets a TT's or a Falcon's 256-colour mode and its colours through the XBIOS, and converts the chunky frame to the screen |
 | `video_st.cpp`, `video_st.h` | the planar layer the engine draws into (4 planes plus a priority plane, 256x224), its drawing primitives, room tiles and SGD backgrounds, perf counters |
 | `spritecache_st.cpp` | gameplay sprites baked to planar once and kept in a RAM-sized ring |
 | `displaylist_st.cpp`, `.h` | a frame's draws written down, compared with the last frame's, only what changed redrawn |
@@ -58,6 +62,7 @@ are in `src/intern.h`.
 ```
 STCMD_NO_TTY=1 stcmd make        # non-interactive shells (agents, CI)
 stcmd make                        # interactive terminal
+STCMD_NO_TTY=1 stcmd make 030    # the 030 build, dist/FBACK030.TOS
 ```
 
 m68k-atari-mint-gcc 4.6.4 in a container
@@ -91,7 +96,11 @@ so build it by hand after touching shared files: the sources in
 
 - **Atari-only code sits under `#ifdef ATARIST`**, and every other path
   keeps upstream's behaviour exactly; a fix to the shared engine that
-  every build gets goes in `CHANGES.txt`. Options the ST adds default to
+  every build gets goes in `CHANGES.txt`. What only the ST build's planar
+  picture needs sits under `#ifdef ST_PLANAR` instead, which the ST
+  build defines with `ATARIST`, so its objects do not change when a
+  block moves between the two: compare their `objdump -d -r` before and
+  after. Options the ST adds default to
   0 on the desktop, so a check like `replay < 0` needs its own `#ifdef`.
 - **The ST reads the Amiga data only** (`DATA\`, plus the optional
   `MUSIC\`, `UNPACKED\` and `PALETTE\` beside it); `detectVersion` in
@@ -274,8 +283,8 @@ Investigations that ended, so nobody starts them again without a reason:
   second on every machine); locking a Mega STE to 60Hz is deferred.
 - **A mono (SM124) build: parked**; neither prototype made a seamless
   mono picture at colour speed on every machine.
-- **A TT and Falcon build: not started**; the plan, and what was
-  measured on an emulated TT, are in their own section at the end.
+- **A TT and Falcon build: a prototype** on branch `tt`,
+  `FBACK030.TOS`; its own section at the end.
 - **2MB machines: dropped** (2.5MB minimum since September 2026). Real
   hardware has less free than Hatari, by 70K or a lot more depending on
   what is resident (see "RAM" above).
@@ -409,86 +418,232 @@ Measured and rejected, so not worth trying again as they were:
   parse and record in one pass (-0.1%).
 - STDL's mixer: two voices a pass (~1%).
 
-## A possible TT and Falcon build
+## The 030 build: a TT or a Falcon in 256 colours
 
-Not started (October 2026); written down so the weighing is not done
-twice. What it would be for is colour: TT Low (320x480, 256 of 4096)
-and the Falcon's 8-bit modes hold the Amiga's palette exactly, 12 bits
-a colour, so the quantiser and the palette merge have nothing to do.
+A prototype on branch `tt` (October 2026). `make 030` builds
+`dist/FBACK030.TOS` for a 68020 or better, which sits beside
+`FLASHBAK.TOS` and reads the same Amiga data. What it is for is colour:
+TT Low and the Falcon's 8-bit modes hold the Amiga's palette exactly, 12
+bits a colour, so every room and scene shows in its own colours where
+the ST quantises them to 16.
 
-**Today's binary already runs on a TT**, in ST Low with 16 colours. In
-Hatari (`--machine tt`, TOS 3.06, 4MB ST-RAM) replay l1r26 matches the
-reference frame for frame at 5.4ms a frame, against 34.9 on a plain
-ST. The start-up line calls it an STE at "about 506MHz": the 68030's
-cache runs the timing loop in a fraction of a 68000's cycles, and the
-figure is only logged. On testing it:
-- **Run Hatari's TT with `--mmu off`.** With the MMU and the data cache
+**How it is put together:**
+- **Two macros.** `ATARIST` is the platform both Atari builds share:
+  STDL, `RS.CFG`, the title's menus, the sound, record and replay, the
+  pacing, `UNPACKED\`. `ST_PLANAR` (defined in `intern.h` for an
+  `ATARIST` build without `ATARIST_030`) is the ST build's planar picture:
+  `video_st.cpp`, the bakes, the display list, the cutscene caches and
+  frame skipper, the quantiser. The 030 build leaves the planar files out
+  and draws with upstream's chunky code, as the desktop build does.
+- **Two stubs on one base.** `systemstub_atari.cpp` is the shared
+  platform layer. It has no data members, so the ST stub kept its
+  layout when it was split out of it.
+- **No FPU needed.** The toolchain's `m68020-60` libraries assume an
+  FPU, and their mintlib will not start without one ("requires a 68881",
+  on a stock Falcon). So the objects build for the 68020 with
+  `-msoft-float` and link against the 68000 libraries.
+- **Anything but a TT or a Falcon gets a message.** `__st_entry` reads
+  `_MCH` in 68000 instructions before anything else runs, and on any
+  other machine prints where the ST version is, waits for a key and
+  quits. Before that, an ST got as far as `main`'s first `printf` and
+  bombed. `_MCH` rather than `_CPU`, because an ST with a 68030 card
+  would run the code but has neither machine's modes. Checked on an ST
+  (TOS 1.04, with no cookie jar, and 2.06) and a Mega STE.
+- **Sound Quality is always High** (12517Hz, where the ST build mixes
+  at 6258 by default). Options has no line for it, and
+  `sound_quality=` in `RS.CFG` is overridden. With the modules
+  playing, High adds 2.6-3.6% to a TT's cutscene work and 4.8% to a
+  Falcon's. A Falcon is said to have no 6258Hz DMA sound at all (a
+  Falcon FAQ: that rate is its pause), which is not checked.
+- **No SDL.** The stub sets the mode and the colours through the XBIOS,
+  takes the keyboard, joystick and pads with `STDL_OpenInput` (STDL
+  without its video mode), and writes the screen itself. SDL 1.2 set
+  the mode and the colours in the first version, and cost more than
+  that was worth:
+  - 240K of its code in the binary (`FBACK030.TOS` went from 699K to
+    442K without it), and a chunky surface it allocates for its own
+    conversion, unused: 150K on a TT, 75-90K on a Falcon;
+  - start-up traps: its `Super(0)`, a toggle, meant SDL had to start
+    before `STDL_Init`; its input driver had to be turned off; and its
+    clock hung the game once STDL ran;
+  - its update got two machines wrong: on a TT, its line-doubled 320x240
+    mode put an update that does not start at the top on line y instead
+    of 2y; on a Falcon on RGB, it drew 32 pixels left of centre;
+  - on a Falcon with a graphics card (SuperVidel), it would pick a chunky
+    mode, and the planes the stub writes would be garbage there.
+- **The modes are SDL's own choices, set directly.**
+  - TT: TT Low, 320x480. The changed boxes are converted with their
+    lines doubled.
+  - Falcon: 8 bits, with the desktop's PAL and VGA bits. On VGA, 320x240,
+    the VIDEL doubling the lines. On RGB or a TV, 240 lines take
+    overscan, so the line is 384 wide, with the picture centred in it.
+  - A mono monitor gets a message (TT High on a TT).
+- **The desktop comes back at exit** (`atexit`, so an `error()` exit
+  restores it too): screen, mode, and the palette registers copied
+  directly. `VgetRGB` read all black under TOS 4.04's desktop, which sets
+  its colours through the VDI, so restoring through it left the desktop
+  black.
+- **Register 0 is black everywhere.** It is also the colour of the
+  border round the screen memory, which nothing drawn can reach (a
+  Falcon's on RGB), and the game's colour 0 is a room's background, so
+  the jungle had a teal border. Every pixel is XORed with `0x70` as it
+  is converted, and the palette goes to the registers permuted to match:
+  colour 0 lands on register `0x70`, and register 0 gets slot 7, which
+  the Amiga data never uses, held black.
+- **The conversion** (`c2p_030.h`) is ten merges a 16-pixel group, the
+  XOR done as the inversion of planes 4-6 at the end. Wide boxes go
+  through assembler that spreads its writes to ST-RAM among the next
+  group's arithmetic; boxes narrower than 4 groups go through its C
+  twin, where the assembler's set-up costs more than it gains. The C was
+  checked on the host against a pixel-by-pixel reference
+  (`tmp/tt/c2ptest.cpp`, which fails on a one-bit change to a mask); with
+  logging on, the stub compares the assembler with the C on the machine
+  at start-up ("Planes: the assembler matches its C twin"). The loops
+  must fit the 68030's 256-byte instruction cache: a first C version
+  did not, and took twice the time SDL's own conversion took.
+- **Only what was drawn on goes back each frame.** Upstream copies the
+  whole background layer over the front one before every gameplay frame,
+  57K each way; this build puts back only the blocks with a dirty count
+  (`Video::restoreFront`). The whole layer still comes back after a full
+  refresh, or after anything but the game loop has updated the screen (a
+  cutscene, a menu, the inventory). The replays' frame hashes are the
+  front layer's, and all ten matched before and after.
+- **Cutscenes move only the band.** A scripted scene's shapes are
+  clipped to its 240x128 picture (rows 50-178), so the back page's
+  restore, the page copies and the push to the screen take those rows
+  alone (`Cutscene::bandCopy`, `bandShow`). Text, captions and a scene's
+  first frame can write outside them. So what each page holds there has
+  a version, and a copy or a push takes the whole page when the versions
+  differ (`bandTouch`). The width saves nothing: x 8-247 still touches
+  all 16 of the conversion's groups. On a Falcon the band took 29% off
+  the scene set's work (music off, every frame drawn). `ab=0x400000`
+  turns it off.
+- **The frame skipper is the ST build's** (`frame_skip`, on by
+  default). That covers:
+  - the scripted clock;
+  - frames not drawn where a part does not build on the last, and
+    hidden where it does;
+  - the prescan that finds those parts;
+  - the per-frame `CUT` and `CUTSUM` log lines.
+
+  Only the planar parts stayed behind (the palette lock, idle bakes). In
+  the prescan, `op_drawShape` returns at once, as the ST's does. Voyage's
+  text loop no longer sleeps there: it waited 1.1s before the scene
+  began. The ST build's prescan still sleeps, about 1.1s of its 2.4s
+  wait before voyage.
+- **Sines come from the ST's table.** The 030 build's soft-float
+  `sin`/`cos` differed from the table in one frame of 0x2F. The table is
+  the formula in double precision, which the ST and desktop builds use,
+  so that frame is now drawn as they draw it.
+- **`STDL_OpenInput` came with STDL v1.18.0**, for this build: STDL
+  took the keyboard only in `STDL_SetVideoMode`, and the stub had been
+  calling the library's internal `stdl_events_install()`.
+
+**Measured** in Hatari (`--mmu off`, 4MB, no TT-RAM; a TT at 32MHz with
+TOS 3.06, a Falcon at 16MHz with TOS 4.04 and VGA), cutscenes as their
+work against their budget (music off, every frame drawn):
+
+| | TT, this build | Falcon, this build | Falcon, ST build |
+|---|---|---|---|
+| Replay l1r26, ms a frame | 16.1 | 31.5 | 11.7 |
+| Intro | 43% | 85% | 16% |
+| Level 1's opening | 44% | 91% | 24% |
+
+With the player's settings (music on, frame skipping on), the frames
+shown:
+
+| | TT | Falcon |
+|---|---|---|
+| Intro | 98% | 77% |
+| Level 1's opening | 100% | 90% |
+| Voyage (0x34) | 98% | 81% |
+| Level 4, part 2 (0x39) | 97% | 63% |
+
+The longest run of frames not shown was one on a TT and three on a
+Falcon.
+
+- **Correctness:**
+  - Every replay ends where its recording did, its frames hash the same
+    as with SDL, and the pictures are right on a TT and on a Falcon on
+    VGA and RGB. Dropping SDL changed no timing.
+  - The band draws exactly what the whole page drew. That covers every
+    frame of the cutscene bench's nine scenes, the credits to their end,
+    on a TT and on a Falcon on VGA, and three scenes on RGB: 12,362
+    frames, each hashed from the screen.
+- **Where the time went:** in Hatari these machines are bound by
+  memory, not the CPU. A Falcon at 32MHz took exactly as long as at 16
+  (its start-up speed loop did speed up), and everything sits in
+  ST-RAM. So the gains came from moving fewer bytes:
+  - the layer restore: -25% of a gameplay frame on both;
+  - converting straight from the layers: -15% of a cutscene frame;
+  - the band in cutscenes: another -29%.
+- **The TT has room to spare, and the Falcon keeps up.**
+  - In play, 31.5ms a frame is just inside a 30Hz step.
+  - Its cutscenes are within their budget on average, and the frame
+    skipper keeps them at their scripted pace. Before this they ran up
+    to 48% slow (level 1's opening, music on).
+  - Converting the band is still about half a Falcon cutscene frame's
+    work (47% in the intro).
+  - The ST build's planar caches still do far less work than upstream's
+    chunky drawing.
+- **Set aside on the way (TT):** rows written twice into a 480-line
+  surface (27.4ms a frame, 121% in the intro); SDL's doubled mode
+  updated from the top (42.4ms, 84%); SDL's routine fed the layers
+  directly, which cannot do the XOR (16.4ms, 66%).
+
+**Testing it:**
+- Run Hatari's TT with `--mmu off`. With the MMU and the data cache
   both emulated, the emulator falls to half real time once the game
-  runs (52.8s of host time for a stretch that takes 26.5s with either
-  off), which looks like the game in slow motion, picture and sound.
-  Neither TOS nor the game needs the MMU, and its core's timing looks
-  no truer: the speed loop reads 506MHz with it and 102MHz without.
-- `tmp/tos/` has no TOS 3.06 or 4.04 image; EmuTOS 1.4 runs both
-  machines.
-- Hatari's 68030 timing is less exact than its 68000's, so a TT frame
-  time from it is an estimate. Hardware testing would need a TT and a
-  Falcon.
+  runs (52.8s of host time against 26.5s), which looks like the game in
+  slow motion. The MMU core's timing also looks no truer: the start-up
+  speed loop reads 506MHz with it and 102MHz without.
+- `tmp/tos/` has TOS 4.04 for the Falcon but no TOS 3.06 (copy one
+  in), and its EmuTOS image is the ST one, which Hatari will not run
+  as a TT or Falcon. `tools/bench/` boots TOS 2.06 on an ST: a TT or
+  Falcon run needs its TOS, `MACHINE=tt` or `falcon`, and the 030
+  binary.
+- **Cutscene pictures:** with `replay_hash=true` the 030 build hashes
+  the screen memory after each frame into `CUTHASH.BIN`, and the
+  colours into `CUTPAL.BIN`.
+  - The reference for a change is the same binary with the change
+    switched off (`ab=0x400000` for the band), as the stub has no
+    planar page to compare.
+  - The scripts are `tmp/tt/cut030.sh`, and `tmp/tt/skip/cmp030.py`,
+    which compares two runs.
+  - A Falcon's credits with hashing take longer than `run.sh`'s two
+    minutes of `waitfile`: chain several.
+  - Tested by breaking it: one row left out of the push, or the
+    out-of-band versions never moved, and frames in every scene tried
+    differed.
+- Hatari's 68030 timing is approximate: the figures above are
+  estimates until a TT and a Falcon run it. Neil has neither yet, so
+  for now this build is tested in Hatari only.
 
-**The plan, if it is wanted:** one SDL 1.2 binary for both machines
-(Patrice Mandin's Atari port, `libSDL.a` in the toolkit image, linked
-with `-lgem`; it needs no MiNT), on upstream's chunky engine, with
-STDL for what SDL does less well:
-- **The engine builds as the desktop build does** (`ATARIST` off). The
-  planar layer, the bakes, the display list and the span cores are for
-  a 68000: they hard-code 4 planes and the 128-byte stride, and a 68030
-  with TT-RAM and multiply in hardware needs none of them.
-- **SDL owns the screen**: an 8-bit 320x240 mode with a hardware
-  palette (on a TT it doubles the lines itself), `SDL_UpdateRects` with
-  upstream's dirty blocks only, the palette set only when it changes,
-  and no scalers, libmodplug or SDL_mixer. Compile for the 68030, after
-  checking which CPU the toolkit's `libSDL.a` was built for. SDL
-  converts each update to planes in ST-RAM: a full line-doubled frame
-  is about 114K of writes, four times an ST's 28K, into RAM the TT's
-  CPU reaches slowly. Time that first.
-- **STDL owns the keyboard, all of it.** Its `ikbdsys` handler carries
-  the keys, mouse, joysticks, Xpad pads and rumble, and SDL's default
-  Atari input driver takes the keyboard interrupt itself, so the two
-  cannot split the devices: SDL is switched to a driver that only polls
-  TOS (`SDL_ATARI_EVENTSDRIVER`) and never pumped, and the input code in
-  `systemstub_stdl.cpp` carries across. Both points about SDL are from
-  memory, not checked against its source.
-- **The sound is the port's own**, on STDL's voices: MODs on DMA, mixed
-  in the VBL, so a level load does not interrupt it. It needs a define
-  of its own for `mixer.cpp`, `mod_player.cpp` and `sfx_player.cpp`
-  and the two options they read (`music`, `ste_sound`) - a small split,
-  where splitting all of `ATARIST` (nearly 300 lines in the shared
-  engine) is not worth doing. Not `STDL_Audio` with upstream's mixer as
-  its callback: it refills only from the pump, so a load longer than
-  about 150ms repeats its buffer. The TT's DMA sound is the STE's; the
-  Falcon's should play STE-style sound, untested.
-- **Record and replay** are under `ATARIST` too, and the bench needs
-  them to time the build.
-- **The two libraries in one program.** `libstdl.a` defines its own
-  `SDL_*` and `Mix_*` functions (`compat.c`, `mixer.c`), so the port's
-  Makefile builds STDL's objects for this target without them, STDL
-  itself unchanged. STDL runs the program in supervisor mode and
-  `Super()` is a toggle, so check SDL never calls it. Tear down in the
-  reverse order of start-up.
-- **To check on the way:** STDL's voices are paced by the VBL and it
-  assumes 50Hz on a TT, so measure the rate TT Low really runs at. The
-  TT has no STE enhanced joystick ports; the Falcon's use the STE's
-  registers.
-
-**The first step** is upstream's engine on a minimal SDL 1.2 stub,
-timed in Hatari as a TT. If it holds 30Hz, STDL's input and sound go
-on top; if it does not, the plane conversion is the first place to
-look.
+**Not done, or not known yet:**
+- The Falcon's cutscenes still drop frames: converting the band is
+  about half their work. Converting only the rows a frame changed, as
+  the ST build's push does, is the next step.
+- TT-RAM: under `run.sh`'s Hatari command line, TOS 3.06 with
+  `--ttram 16` never started a program, with the MMU on or off; Neil's
+  own Hatari TT ran the game with TT-RAM, so this is the emulator's
+  settings. The binary loads into alt-RAM and allocates from it (header
+  flags 7).
+- STDL's voices assume 50Hz on a TT and a Falcon. The VBL rate in
+  their modes, and the music's pace there, are not measured.
+- Left out with the planar picture: `palette_custom`, and the screen
+  modes and refresh rate (Options offers neither). The splash is the same picture,
+  decoded to chunky pixels and shown through the stub. The `log_fps` and
+  replay lines carry only the room and bank counters.
 
 **Considered and set aside:**
 - A TT Low driver in STDL, a chunky surface it converts to 8 planes:
-  one library owning the machine, and cleaner on a TT alone, but it
-  covers only the TT (the Falcon's VIDEL needs a mode set for each
-  monitor type, which SDL already has), and it widens STDL beyond its
-  stated target of the ST, STE and Mega STE.
-- Widening the port's planar path to 8 planes: see the engine point
-  above.
+  one library owning the machine, but it widens STDL beyond its stated
+  target of the ST, STE and Mega STE. The port's stub sets the two
+  machines' modes in a few XBIOS calls, and STDL gives it the input
+  alone (`STDL_OpenInput`).
+- Widening the port's planar path to 8 planes: every kernel hard-codes
+  4 planes and the 128-byte stride, and a 68030 needs none of what that
+  path was built for.
+- The engine built with `ATARIST` off, with STDL only for input and
+  sound: it would have lost the menus, the port's sound, record and
+  replay, and the pacing.

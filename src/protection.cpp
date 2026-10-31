@@ -77,7 +77,7 @@ bool Game::handleProtectionScreenShape() {
 	const int codeNum = getRandomNumber() % 5;
 	for (int16_t zoom = 2000; zoom >= 0; zoom -= 100) {
 		_cut.drawProtectionShape(shapeNum, zoom);
-		#ifdef ATARIST
+		#ifdef ST_PLANAR
 		_stub->copyRectPlanar(0, 0, _vid._w, _vid._h, _vid._tempLayer);
 #else
 		_stub->copyRect(0, 0, _vid._w, _vid._h, _vid._tempLayer, _vid._w);

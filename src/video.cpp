@@ -22,7 +22,7 @@ Video::Video(Resource *res, SystemStub *stub, WidescreenMode widescreenMode)
 	_layerScale = g_features->resolution_scale;
 	_w = GAMESCREEN_W * _layerScale;
 	_h = GAMESCREEN_H * _layerScale;
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	_layerSize = kSTLayerSize;
 #else
 	_layerSize = _w * _h;
@@ -31,24 +31,29 @@ Video::Video(Resource *res, SystemStub *stub, WidescreenMode widescreenMode)
 	_backLayer = (uint8_t *)calloc(1,_layerSize);
 	_tempLayer = (uint8_t *)calloc(1, _layerSize);
 	_tempLayer2 = (uint8_t *)calloc(1, _layerSize);
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	_stBackGen = 0;
 	memset(_blkForce, 0, sizeof(_blkForce));
 	_dlOn = false;
 	_dlBackGen = 0;
 	memset(_prioDirty, 0xFF, sizeof(_prioDirty));
 #endif
-#ifndef ATARIST
+#ifndef ST_PLANAR
 	// the ST tracks block state in _blkDirty/_blkShown/_blkOwed instead
 	_screenBlocks = (uint8_t *)calloc(1, (_w / SCREENBLOCK_W) * (_h / SCREENBLOCK_H));
 #endif
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	memset(_blkDirty, 0, sizeof(_blkDirty));
 	memset(_blkShown, 0, sizeof(_blkShown));
 	memset(_blkOwed, 0, sizeof(_blkOwed));
 #endif
 	_fullRefresh = true;
 	_shakeOffset = 0;
+#ifdef ATARIST_030
+	_updates = 0;
+	_playUpdates = 0;
+	_restoreAll = true;
+#endif
 	_charFrontColor = 0;
 	_charTransparentColor = 0;
 	_charShadowColor = 0;
@@ -73,12 +78,12 @@ Video::~Video() {
 	free(_backLayer);
 	free(_tempLayer);
 	free(_tempLayer2);
-#ifndef ATARIST
+#ifndef ST_PLANAR
 	free(_screenBlocks);
 #endif
 }
 
-#ifdef ATARIST
+#ifdef ST_PLANAR
 // The cutscene player used the front layer as a page; the back
 // layer is the room as decoded, with the game's colour mapping,
 // which ST_setCutscenePalMode(false) has just put back.
@@ -366,7 +371,7 @@ bool Video::ST_blocksDirty(int x, int y, int w, int h) const {
 
 void Video::markBlockAsDirty(int16_t x, int16_t y, uint16_t w, uint16_t h, int scale) {
 	debug(DBG_VIDEO, "Video::markBlockAsDirty(%d, %d, %d, %d)", x, y, w, h);
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	if (_dlOn && ST_dlRecording(_frontLayer)) {
 		return;                      // the display list knows what it drew
 	}
@@ -393,7 +398,7 @@ void Video::markBlockAsDirty(int16_t x, int16_t y, uint16_t w, uint16_t h, int s
 	if (bx2 < bx1) {
 		return;
 	}
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	// one OR a row: the marks are what the two frame walks used to go
 	// looking for, and this is where they were already known
 	const uint16_t m = (uint16_t)(kSTColsFrom[bx1] & kSTColsTo[bx2]);
@@ -422,8 +427,11 @@ void Video::markBlockAsDirty(int16_t x, int16_t y, uint16_t w, uint16_t h, int s
 
 void Video::updateScreen() {
 	debug(DBG_VIDEO, "Video::updateScreen()");
+#ifdef ATARIST_030
+	++_updates;
+#endif
 //	_fullRefresh = true;
-#ifdef ATARIST
+#ifdef ST_PLANAR
 #define VIDEO_BLIT(x, y, w, h) _stub->copyRectPlanar((x), (y), (w), (h), _frontLayer)
 #else
 #define VIDEO_BLIT(x, y, w, h) _stub->copyRect((x), (y), (w), (h), _frontLayer, _w)
@@ -432,7 +440,7 @@ void Video::updateScreen() {
 		VIDEO_BLIT(0, 0, _w, _h);
 		_stub->updateScreen(_shakeOffset);
 		_fullRefresh = false;
-#ifdef ATARIST
+#ifdef ST_PLANAR
 		// The sprites this frame drew went up with the page and owe
 		// a restore like any other: zeroing the marks here left them
 		// in the front layer for good - a Conrad ghost at the room
@@ -443,7 +451,7 @@ void Video::updateScreen() {
 			_blkOwed[j] = 0;
 		}
 #endif
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	// A fresh mark blits and then awaits its restore; a restored
 	// block blits once more and is done. Rows needing the same
 	// blocks go up in one call: a sprite spans several eight-pixel
@@ -523,7 +531,7 @@ void Video::updateScreen() {
 #undef VIDEO_BLIT
 	if (_shakeOffset != 0) {
 		_shakeOffset = 0;
-#ifndef ATARIST
+#ifndef ST_PLANAR
 		// the page was drawn offset; put it back
 		_fullRefresh = true;
 #endif
@@ -550,16 +558,56 @@ void Video::updateWidescreen() {
 void Video::fullRefresh() {
 	debug(DBG_VIDEO, "Video::fullRefresh()");
 	_fullRefresh = true;
-#ifndef ATARIST
+#ifdef ATARIST_030
+	_restoreAll = true;
+#endif
+#ifndef ST_PLANAR
 	memset(_screenBlocks, 0, (_w / SCREENBLOCK_W) * (_h / SCREENBLOCK_H));
 #endif
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	memset(_blkDirty, 0, sizeof(_blkDirty));
 	memset(_blkShown, 0, sizeof(_blkShown));
 	memset(_blkOwed, 0, sizeof(_blkOwed));
 	ST_dlInvalidate();
 #endif
 }
+
+#ifdef ATARIST_030
+// Upstream copies the whole background layer over the front one before
+// every gameplay frame: 57K read and 57K written, on machines whose
+// frame time goes on memory (a Falcon at 32MHz took exactly as long as
+// at 16). The blocks with a count are the ones drawn on since they were
+// last put back, so only those are. Anything that drew on the front
+// layer otherwise - a cutscene, a menu, the inventory, a story text -
+// put up screens of its own or asked for a full refresh, and then the
+// whole layer comes back as before.
+void Video::restoreFront() {
+	if (_restoreAll || _updates != _playUpdates) {
+		memcpy(_frontLayer, _backLayer, _layerSize);
+		_restoreAll = false;
+		return;
+	}
+	const int cols = _w / SCREENBLOCK_W;
+	const uint8_t *p = _screenBlocks;
+	for (int j = 0; j < _h / SCREENBLOCK_H; ++j, p += cols) {
+		for (int i = 0; i < cols; ) {
+			if (p[i] == 0) {
+				++i;
+				continue;
+			}
+			int n = 1;
+			while (i + n < cols && p[i + n] != 0) {
+				++n;
+			}
+			const int offset = j * SCREENBLOCK_H * _w + i * SCREENBLOCK_W;
+			for (int y = 0; y < SCREENBLOCK_H; ++y) {
+				memcpy(_frontLayer + offset + y * _w, _backLayer + offset + y * _w, n * SCREENBLOCK_W);
+			}
+			i += n;
+		}
+	}
+}
+#endif
 
 void Video::fadeOut() {
 	debug(DBG_VIDEO, "Video::fadeOut()");
@@ -783,7 +831,7 @@ void Video::DOS_decodeSpm(const uint8_t *dataPtr, uint8_t *dst) {
 	} while (src < end);
 }
 
-#ifdef ATARIST
+#ifdef ST_PLANAR
 // Planes to chunky four pixels at a time: g_spread[p][n] puts the four
 // bits of nibble n at bit p of four bytes, leftmost pixel in the
 // first, so a plane's share of four pixels is one lookup. Testing a
@@ -870,7 +918,7 @@ static void AMIGA_planar16(uint8_t *dst, int w, int h, int depth, const uint8_t 
 }
 #endif
 
-#ifdef ATARIST
+#ifdef ST_PLANAR
 // Eight pixels from four interleaved plane bytes, by the same table as
 // AMIGA_planar16: two lookups a plane where the bit loop below tested
 // every bit, ~320 cycles a pixel. Object pieces 8 and 24 pixels wide
@@ -913,7 +961,7 @@ static void AMIGA_planar8(uint8_t *dst, int w, int h, const uint8_t *src) {
 }
 #endif
 
-#ifndef ATARIST
+#ifndef ST_PLANAR
 // bit i of a plane byte (i = 0 leftmost) -> bit 0 of nibble i, so
 // ORing the four planes shifted 0..3 builds eight 4-bit pixels in
 // one 32-bit word instead of 32 bit tests.
@@ -977,7 +1025,7 @@ static void AMIGA_planar_mask(uint8_t *dst, int x0, int y0, int w, int h, uint8_
 }
 #endif
 
-#if defined(ATARIST) && defined(__m68k__)
+#if defined(ST_PLANAR) && defined(__m68k__)
 // The RLE runs are short (a few bytes each), so the memcpy/memset
 // calls of the C version cost more than the bytes they moved: a
 // room's tiles decoded at over a hundred cycles a byte. Straight
@@ -1049,7 +1097,7 @@ static void AMIGA_decodeRle(uint8_t *dst, const uint8_t *src) {
 }
 #endif
 
-#ifndef ATARIST
+#ifndef ST_PLANAR
 static void DOS_drawTileMask(uint8_t *dst, int x0, int y0, int w, int h, uint8_t *m, uint8_t *p, int size) {
 	assert(size == (w * 2 * h));
 	for (int y = 0; y < h; ++y) {
@@ -1075,7 +1123,7 @@ static void DOS_drawTileMask(uint8_t *dst, int x0, int y0, int w, int h, uint8_t
 
 #endif
 
-#ifdef ATARIST
+#ifdef ST_PLANAR
 // SGD scenery for the planar layer. A room's placement list names
 // the same tile again and again, out of order, and the original
 // decoder (below) re-unpacks the tile every time the index changes:
@@ -1319,7 +1367,7 @@ static void decodeSgd(uint8_t *dst, const uint8_t *src, const uint8_t *data, Dra
 }
 #endif
 
-#ifndef ATARIST
+#ifndef ST_PLANAR
 static const uint8_t *AMIGA_mirrorTileY(const uint8_t *a2) {
 	static uint8_t buf[32];
 
@@ -1405,7 +1453,7 @@ static void DOS_drawTile(uint8_t *dst, int x, int y, const uint8_t *src, int mas
 }
 #endif
 
-#ifdef ATARIST
+#ifdef ST_PLANAR
 // Room tiles straight into the planar layer (see video_st.cpp):
 // prepared once per tile, palette and flip through the colour remap,
 // placed by byte stores. A room draws about a thousand tiles, three
@@ -1623,7 +1671,7 @@ static void ST_decodeLevTiles(uint8_t *dst, const uint8_t *src, int offset10, in
 
 typedef void (*DrawTileProc)(uint8_t *dst, int x, int y, const uint8_t *src, int pal, const bool xflip, const bool yflip, int colorKey);
 
-#ifndef ATARIST
+#ifndef ST_PLANAR
 static void decodeLevHelper(uint8_t *dst, const uint8_t *src, int offset10, int offset12, const uint8_t *a5, bool sgdBuf, DrawTileProc drawTile, uint16_t (*read16)(const void *)) {
 	if (offset10 != 0) {
 		const uint8_t *a0 = src + offset10;
@@ -1698,7 +1746,7 @@ void Video::PC98_decodeMap(int level, int room) {
 	DOS_setLevelPalettes();
 }
 
-#ifdef ATARIST
+#ifdef ST_PLANAR
 // Decoded rooms, kept for going back. Entering a room unpacks its data,
 // unpacks the banks its tiles come from and prepares and places about a
 // thousand tiles: a second or more on an 8MHz ST, half that on a Mega
@@ -1825,7 +1873,7 @@ void Video::ST_roomToCache(int level, int room, const uint8_t *hdr) {
 #endif
 
 void Video::AMIGA_decodeLev(int level, int room) {
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	if (ST_roomFromCache(level, room)) {
 		return;
 	}
@@ -1846,7 +1894,7 @@ void Video::AMIGA_decodeLev(int level, int room) {
 	const uint16_t offset12 = READ_BE_UINT16(tmp + 12);
 	const uint16_t offset14 = READ_BE_UINT16(tmp + 14);
 	static const int kTempMbkSize = 1024;
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	typedef char TileBufCheck[(kTempMbkSize == kTileBufTiles) ? 1 : -1];   // g_stTileOrig's size
 #endif
 	uint8_t *buf = (uint8_t *)malloc(kTempMbkSize * 32);
@@ -1856,7 +1904,7 @@ void Video::AMIGA_decodeLev(int level, int room) {
 	int sz = 0;
 	memset(buf, 0, 32);
 	sz += 32;
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	const uint32_t tileEpoch = _res->_stBankEpoch;
 	g_stTileOrig[0] = buf;
 #endif
@@ -1874,7 +1922,7 @@ void Video::AMIGA_decodeLev(int level, int room) {
 			const int d1 = _res->getBankDataSize(num);
 			assert(sz + d1 <= kTempMbkSize * 32);
 			memcpy(buf + sz, a6, d1);
-#ifdef ATARIST
+#ifdef ST_PLANAR
 			for (int k = 0; k < d1; k += 32) {
 				g_stTileOrig[(sz + k) >> 5] = a6 + k;
 			}
@@ -1885,14 +1933,14 @@ void Video::AMIGA_decodeLev(int level, int room) {
 				const int d4 = *a1++;
 				assert(sz + 32 <= kTempMbkSize * 32);
 				memcpy(buf + sz, a6 + d4 * 32, 32);
-#ifdef ATARIST
+#ifdef ST_PLANAR
 				g_stTileOrig[sz >> 5] = a6 + d4 * 32;
 #endif
 				sz += 32;
 			}
 		}
 	} while((d0 & 0x8000) == 0);
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	// The ST draws the room straight into the planar layer with the
 	// colour remap applied, so the palettes (and therefore the
 	// remap) have to be known before the first tile is drawn.
@@ -1905,7 +1953,7 @@ void Video::AMIGA_decodeLev(int level, int room) {
 		ST_sgdRelease();
 	}
 #endif
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	// the chunky room started as colour 0, a colour like any other
 	// once remapped; the SGD decoder fills the layer itself
 	if (tmp[1] != 0) {
@@ -1918,7 +1966,7 @@ void Video::AMIGA_decodeLev(int level, int room) {
 #endif
 	if (tmp[1] != 0) {
 		assert(_res->_sgd);
-#ifdef ATARIST
+#ifdef ST_PLANAR
 		ST_decodeSgd(_frontLayer, tmp + offset10, _res->_sgd, level, room);
 #else
 		DrawTileMaskProc drawTileMask = _res->isAmiga() ? AMIGA_planar_mask : DOS_drawTileMask;
@@ -1926,14 +1974,14 @@ void Video::AMIGA_decodeLev(int level, int room) {
 #endif
 		offset10 = 0;
 	}
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	ST_decodeLevTiles(_frontLayer, tmp, offset10, offset12, tmp[1] != 0);
 #else
 	DrawTileProc drawTile = _res->isAmiga() ? AMIGA_drawTile : DOS_drawTile;
 	decodeLevHelper(_frontLayer, tmp, offset10, offset12, buf, tmp[1] != 0, drawTile, _res->_readUint16);
 #endif
 	free(buf);
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	ST_roomToCache(level, room, tmp);
 	ST_copyLayer(_backLayer, _frontLayer);
 	++_stBackGen;
@@ -1968,7 +2016,7 @@ void Video::AMIGA_setLevelPalettes(int level, const uint8_t *tmp) {
 	setPaletteSlotBE(0x9, (level == 0) ? _mapPalSlot1 : _mapPalSlot3);
 	// inventory
 	setPaletteSlotBE(0xA, _mapPalSlot3);
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	// Which logical entries are the Amiga's 32 colours: the background
 	// palette is colours 0-15 wherever it is loaded, the object palette
 	// (Conrad, items, the inventory) 16-31. Level 2's extra object
@@ -2043,7 +2091,7 @@ void Video::AMIGA_decodeSpm(const uint8_t *src, uint8_t *dst) {
 	AMIGA_planar16(dst, w, h, 3, buf);
 }
 
-#ifdef ATARIST
+#ifdef ST_PLANAR
 // The planes of a character frame or an object piece, unconverted: a
 // frame's three RLE-packed planes with a fourth of zeros, a piece's
 // four as they are - plane after plane for 16 and 32 pixels wide, a
@@ -2298,7 +2346,7 @@ void Video::DOS_drawChar(uint8_t c, int16_t y, int16_t x, bool forceDefaultFont)
 
 void Video::AMIGA_drawStringChar(uint8_t *dst, int pitch, int x, int y, const uint8_t *src, uint8_t color, uint8_t chr) {
 	assert(chr >= 32);
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	// AMIGA_decodeIcn walks the icon list from the start and then
 	// unpacks a whole 16x16 cell one bit at a time, which costs 5ms
 	// a character on a Mega STE: drawing a screenful of text took
@@ -2340,7 +2388,7 @@ void Video::AMIGA_drawStringChar(uint8_t *dst, int pitch, int x, int y, const ui
 	AMIGA_decodeIcn(src, chr - 32, _res->_scratchBuffer);
 	src = _res->_scratchBuffer;
 #endif
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	// pitch 256 = a planar layer / cutscene page; anything else is a
 	// plain chunky buffer (the 320-wide Amiga title screen)
 	if (pitch == GAMESCREEN_W) {
@@ -2474,7 +2522,7 @@ void Video::MAC_decodeMap(int level, int room) {
 }
 
 void Video::fillRect(int x, int y, int w, int h, uint8_t color) {
-#ifdef ATARIST
+#ifdef ST_PLANAR
 	ST_fillRect(_frontLayer, x, y, w, h, color);
 #else
 	uint8_t *p = _frontLayer + y * _layerScale * _w + x * _layerScale;
