@@ -2032,7 +2032,13 @@ void Cutscene::op_drawTextAtPos() {
 				drawText(x, y, str, color, _backPage, kTextJustifyCenter);
 			}
 			// 'voyage' - cutscene script redraws the string to refresh the screen
-			if (_id == kCineVoyage && (strId & 0xFFF) == 0x45) {
+			// (the prescan, which only reads the script, waited out its
+			// sleeps too: 1.1s of the wait before the scene began)
+			if (_id == kCineVoyage && (strId & 0xFFF) == 0x45
+#ifdef ATARIST
+			    && !_stPrescan
+#endif
+			    ) {
 				if ((_cmdPtr - _cmdStartPtr) == 0xA) {
 					#ifdef ATARIST
 		stShow(_backPage);
