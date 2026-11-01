@@ -158,6 +158,22 @@ static void ST_replayHashFrame(const uint8_t *layer) {
 	}
 }
 
+#ifdef ST_PLANAR
+// ...and once the frame has gone up the screen must show that layer:
+// its hash cannot see a box the push left out. The first frame and
+// row the screen disagreed at, and how many frames did.
+static uint32_t g_repScrBad, g_repScrBadFrame;
+static int g_repScrBadRow;
+
+static void ST_replayCheckScreen(const uint8_t *layer) {
+	const int row = ST_screenDiffRow(layer, 0);
+	if (row >= 0 && g_repScrBad++ == 0) {
+		g_repScrBadFrame = g_repFrames;
+		g_repScrBadRow = row;
+	}
+}
+#endif
+
 static void ST_replayCloseWindow(uint8_t room) {
 	g_repCur.perf = g_stPerf;
 	g_repCur.room = room;
@@ -183,6 +199,9 @@ static void ST_replayReset(uint32_t now, uint32_t steps) {
 	memset(&g_stPerf, 0, sizeof(g_stPerf));
 	g_repLast = now;
 	g_repFrames = g_repMs = g_repWorst = 0;
+#ifdef ST_PLANAR
+	g_repScrBad = 0;
+#endif
 }
 
 // The saved games on disk for the title's Load line: RS<level>_<slot>.SAV
@@ -1329,6 +1348,13 @@ void Game::mainLoop() {
 #ifdef ATARIST_030
 	_vid._playUpdates = _vid._updates;
 #endif
+#ifdef ST_PLANAR
+	// the 030 build's replay hash is the layer's alone: its screen is
+	// the stub's conversion, checked against the C at start-up
+	if (_stReplaying && g_options.replay_hash) {
+		ST_replayCheckScreen(_vid._frontLayer);
+	}
+#endif
 	updateTiming();
 	drawStoryTexts();
 	if (_stub->_pi.backspace) {
@@ -1769,6 +1795,16 @@ void Game::ST_replayDone() {
 	}
 	hist[len] = 0;
 	info("REPLAY frame times, 5ms buckets from:%s", hist);
+#ifdef ST_PLANAR
+	if (g_options.replay_hash) {
+		if (g_repScrBad == 0) {
+			info("REPLAY screen: every frame went up as its layer");
+		} else {
+			info("REPLAY screen: %u frames left the screen unlike their layer, the first frame %u at row %d",
+				(unsigned)g_repScrBad, (unsigned)g_repScrBadFrame, g_repScrBadRow);
+		}
+	}
+#endif
 	if (g_repFrameHash) {
 		FILE *fp = fopen("FHASH.BIN", "wb");
 		if (fp) {

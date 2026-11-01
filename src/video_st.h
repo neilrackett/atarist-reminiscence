@@ -176,6 +176,10 @@ uint32_t ST_hwPaletteHash();
 #ifdef ATARIST_030
 // the 030 build's screen memory, hashed (cutscene replay_hash)
 uint32_t ST_screenHash();
+#else
+// the first of layer rows y0-223 the screen does not show as in
+// layer, or -1 (replay_hash: did the pushes leave the screen right?)
+int ST_screenDiffRow(const uint8_t *layer, int y0);
 #endif
 
 // What the gameplay sprite path did since the last log_fps line, so a

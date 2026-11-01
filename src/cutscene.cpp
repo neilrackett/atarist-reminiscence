@@ -65,6 +65,9 @@ Cutscene::Cutscene(Resource *res, SystemStub *stub, Video *vid)
 	_stBakePage = 0;
 	_stBakeHead = _stBakeTail = 0;
 	_stBakeMs = 20;
+#ifdef ATARIST
+	_stHash = _stPalHash = 0;   // stShow reads it, before any scene's stats
+#endif
 }
 
 const uint8_t *Cutscene::getCommandData() const {
@@ -337,6 +340,19 @@ void Cutscene::stShow(const uint8_t *page) {
 #endif
 	}
 	_stShowFull = false;
+#ifdef ST_PLANAR
+	// replay_hash: the screen must now show the page, every row of it,
+	// which a page's hash cannot tell (the 030 build's frame hashes are
+	// of the screen itself)
+	if (_stHash) {
+		const int row = ST_screenDiffRow(page, 0);
+		++_stScrPushes;
+		if (row >= 0 && _stScrBad++ == 0) {
+			_stScrBadFrame = (int16_t)(_stHashN - 1);
+			_stScrBadRow = (int16_t)row;
+		}
+	}
+#endif
 }
 #endif
 
@@ -413,6 +429,7 @@ void Cutscene::stStatsBegin() {
 		_stHash = (uint32_t *)malloc(kStHashMax * sizeof(uint32_t));
 		_stPalHash = (uint32_t *)malloc(kStHashMax * sizeof(uint32_t));
 		_stHashN = _stPalHashN = 0;
+		_stScrPushes = _stScrBad = 0;
 		_stKeys = (uint32_t *)malloc(3 * kStKeys * sizeof(uint32_t));
 		_stKeyN[0] = _stKeyN[1] = _stKeyN[2] = 0;
 		_stKeyCur = 0;
@@ -578,6 +595,16 @@ void Cutscene::stStatsEnd() {
 		g_stCutStats = false;
 #endif
 	}
+#ifdef ST_PLANAR
+	if (_stHash) {
+		if (_stScrBad == 0) {
+			info("CUTSCREEN %02X: the screen showed its page after all %u pushes", _stSceneId, (unsigned)_stScrPushes);
+		} else {
+			info("CUTSCREEN %02X: %u of %u pushes left the screen unlike its page, the first at frame %d, row %d",
+				_stSceneId, (unsigned)_stScrBad, (unsigned)_stScrPushes, _stScrBadFrame, _stScrBadRow);
+		}
+	}
+#endif
 	// appended scene by scene: "CUTH", the scene id, the count, then
 	// a big-endian word per drawn frame - the pixels in CUTHASH.BIN,
 	// the colours they were shown in in CUTPAL.BIN
@@ -2118,10 +2145,10 @@ void Cutscene::op_drawTextAtPos() {
 				drawText(x, y, str, color, _backPage, kTextJustifyCenter);
 			}
 			// 'voyage' - cutscene script redraws the string to refresh the screen
-			// (the 030 build's prescan, which only reads the script,
-			// waited 1.1s here before the scene could begin)
+			// (the prescan, which only reads the script, waited out its
+			// sleeps too: 1.1s of the wait before the scene began)
 			if (_id == kCineVoyage && (strId & 0xFFF) == 0x45
-#ifdef ATARIST_030
+#ifdef ATARIST
 			    && !_stPrescan
 #endif
 			    ) {

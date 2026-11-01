@@ -8,7 +8,9 @@
 # with run REF's (default cref), and the colours each was shown in
 # (CUTPAL.BIN) where both runs have them. The frame count and every hash must
 # match; the first frame that differs is printed. A run with no REF yet
-# becomes one.
+# becomes one. The page hashes cannot see what a push left off the
+# screen, so after every push the run compares the screen with its page
+# as well, and its CUTSCREEN lines must say they agreed.
 #
 #   PROG    the binary (default dist/FLASHBAK.TOS)
 #   CFG     extra RS.CFG lines, ;-separated, e.g. "ab=0x200"
@@ -37,14 +39,25 @@ def load(t, s, name='CUTHASH.BIN'):
         parts.append((sid, list(struct.unpack('>%dI' % n, d[i+8:i+8+4*n]))))
         i += 8 + 4 * n
     return parts
+def screen(t, s):
+    p = os.path.join(runs, '%s_st_%s' % (t, s), 'RS.LOG')
+    if not os.path.exists(p):
+        return ['no RS.LOG']
+    lines = [l.split('CUTSCREEN ', 1)[1].strip() for l in open(p, errors='replace') if 'CUTSCREEN ' in l]
+    return ['screen ' + l for l in lines if 'unlike' in l] if lines else ['no CUTSCREEN line']
 bad = 0
 for s in scenes:
     a, b = load(tag, s), load(ref, s)
     if a is None:
         print('%-5s no CUTHASH.BIN from %s' % (s, tag)); bad += 1; continue
+    msg = screen(tag, s)
     if b is None:
-        print('%-5s %d parts, %d frames: no reference yet' % (s, len(a), sum(len(h) for _, h in a))); continue
-    msg = []
+        if msg:
+            bad += 1
+            print('%-5s DIFFERS: %s' % (s, '; '.join(msg)))
+        else:
+            print('%-5s %d parts, %d frames: no reference yet' % (s, len(a), sum(len(h) for _, h in a)))
+        continue
     for (sa, ha), (sb, hb) in zip(a, b):
         if sa != sb or len(ha) != len(hb):
             msg.append('%02X: %d frames vs %d' % (sa, len(ha), len(hb)))
