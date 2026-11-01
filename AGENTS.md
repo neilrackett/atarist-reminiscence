@@ -190,7 +190,13 @@ The tools:
   compares them with run `REF`, by default `cref`, whose pixels are
   r30's own: a cutscene change must match frame for frame. After every
   push the run also compares the screen with the page it came from, and
-  its `CUTSCREEN` lines must say they agreed.
+  its `CUTSCREEN` lines must say they agreed. The `cutscene=` option
+  sets the text's colours as the game has them, before every scene but
+  the logos and the intro (November 2026): until then the credits and
+  captions were black, and the ST locked each scene's colours without
+  the text's, so the seven others' references were made again then,
+  from a build that matched r30 on the old start frame for frame (the
+  old ones are `cref30`).
 - `tools/cutbench/prof.sh OUT MACHINE SCENE` profiles one scene, and
   `prof.py` reads the profile.
 

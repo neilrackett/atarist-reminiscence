@@ -444,7 +444,15 @@ void Game::run() {
 	if (g_options.cutscene >= 0) {
 		// cutscene=N (hidden): the cutscene benchmark - that one scene,
 		// from where the intro would play, then quit; the log has its
-		// per-frame lines and summary (Cutscene::stStatsEnd)
+		// per-frame lines and summary (Cutscene::stStatsEnd). The text's
+		// colours first, as the game has them: set by the title screen or
+		// a level's start before every scene but the logos and the intro,
+		// which play before either. Without them the credits and the
+		// captions (0xEF) were drawn in black, and the ST locked a scene's
+		// colours without the text's.
+		if (g_options.cutscene != 0x40 && g_options.cutscene != 0x0D) {
+			_vid.setTextPalette();
+		}
 		playCutscene(g_options.cutscene);
 		info("Cutscene bench done");
 		_res.free_TEXT();
