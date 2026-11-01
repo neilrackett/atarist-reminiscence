@@ -31,6 +31,10 @@ So, just three decades after the original was released...
 3. Copy the `DATA`, `MUSIC` and `UNPACKED` folders into the same folder as `FLASHBAK.TOS`.
 4. Run `FLASHBAK.TOS`.
 
+On a TT or a Falcon, copy `FBACK030.TOS` into the same folder as well:
+`FLASHBAK.TOS` starts it for you, and it shows the game in the Amiga's
+own colours.
+
 If you would prefer to extract the data manually, see
 [Extracting the files manually](docs/extracting-files.md).
 

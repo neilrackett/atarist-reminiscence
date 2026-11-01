@@ -36,7 +36,7 @@ LIBS = $(STDL_LIB) -lm
 # still names, and the upstream sources stay untouched. The .mod player
 # is built: on an STE it drives the STDL_Voice mixer (mod_player.cpp).
 # Nor are the SDL stub, scalers and MIDI drivers built.
-SRCS = collision.cpp cutscene.cpp file.cpp \
+SRCS = entry_atari.cpp collision.cpp cutscene.cpp file.cpp \
 	fs.cpp game.cpp graphics.cpp menu.cpp mixer.cpp \
 	piege.cpp \
 	protection.cpp resource.cpp sfx_player.cpp \
@@ -86,8 +86,10 @@ STDL_SRCS = $(wildcard $(STDL)/src/*.c) $(wildcard $(STDL)/include/stdl/*.h) \
 $(STDL_LIB): $(STDL_SRCS)
 	$(MAKE) -C $(STDL) libstdl.a
 
-# -e __st_entry: the program starts in main_atari.cpp's stub, which
-# clears the BSS whatever loaded it, and then runs mintlib's crt0.
+# -e __st_entry: the program starts in entry_atari.cpp, which clears the
+# BSS whatever loaded it, and then runs mintlib's crt0. It is first in
+# SRCS so it sits at the start of the program: on a TT or a Falcon the
+# ST build hands over to FBACK030.TOS keeping only that much of itself.
 $(TARGET): $(OBJS) $(STDL_LIB) | dist
 	$(CXX) $(CXXFLAGS) -Wl,-e,__st_entry -o build/flashbak.elf $(OBJS) $(LIBS)
 	cp build/flashbak.elf $@

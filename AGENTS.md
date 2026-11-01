@@ -16,7 +16,8 @@ Most of `src/` is upstream's engine, changed in place under
 
 | File | What it is |
 |---|---|
-| `main_atari.cpp` | entry point: reads `RS.CFG` into `g_options`, finds the data |
+| `entry_atari.cpp` | where the program starts, ahead of mintlib: clears the BSS, and on a TT or a Falcon the ST build hands over to `FBACK030.TOS` |
+| `main_atari.cpp` | `main`: reads `RS.CFG` into `g_options`, finds the data |
 | `systemstub_atari.cpp`, `.h` | the platform layer both Atari builds share, on STDL: keys, joystick and pads, the clock, the machine set-up and its log lines |
 | `systemstub_stdl.cpp` | the ST build's screen on top of it: screen modes and borders, the colour remap and its quantiser (256 logical colours to 16), the copy of the layer to the screen (`copyRectPlanar`) |
 | `systemstub_030.cpp` | the 030 build's screen on top of it: sets a TT's or a Falcon's 256-colour mode and its colours through the XBIOS, and converts the chunky frame to the screen |
@@ -126,7 +127,7 @@ so build it by hand after touching shared files: the sources in
   (a macro, a reordering) is checked by comparing the object's
   disassembly before and after.
 - **The game clears its own BSS.** It starts in `__st_entry`
-  (`main_atari.cpp`, named by `-Wl,-e` in the Makefile), which zeroes
+  (`entry_atari.cpp`, named by `-Wl,-e` in the Makefile), which zeroes
   the BSS and then runs mintlib's crt0. ACSI2STM's GemDrive loader stops
   clearing after 130,560 bytes (one 255-sector DMA run) of the 158K, so
   a second run from a GemDrive drive started on the first run's
@@ -463,6 +464,22 @@ the ST quantises them to 16.
   bombed. `_MCH` rather than `_CPU`, because an ST with a 68030 card
   would run the code but has neither machine's modes. Checked on an ST
   (TOS 1.04, with no cookie jar, and 2.06) and a Mega STE.
+- **The ST build hands a TT or a Falcon to this one**, so a player
+  launches `FLASHBAK.TOS` on any machine. On a TT or a Falcon with
+  `FBACK030.TOS` beside it, `__st_entry` gives back all of the program
+  but its basepage and its own code, starts `FBACK030.TOS` and ends
+  with its exit code; without the file it goes on as the ST build, as
+  an STE. TOS cannot replace a running program, so what it keeps stays
+  under the 030 build: 1,090 bytes, as `entry_atari.cpp` is first in
+  the Makefile's list and sits straight after crt0, and Mshrink keeps
+  the start of a program's memory. From `main` it would have kept
+  about 800K of a 4MB Falcon (its code, BSS and 64K stack). Nothing is
+  copied, so no cache can hold a stale copy. In Hatari the 030 build
+  had 2,748K free started so on a Falcon against 2,750K started itself
+  (2,657K against 2,658K on a TT), and a replay ran frame for frame
+  the same either way. A broken `FBACK030.TOS` gets "would not start"
+  and a key, as the ST build is gone by then; a player who wants the ST
+  build on a Falcon removes the file.
 - **Sound Quality is always High** (12517Hz, where the ST build mixes
   at 6258 by default). Options has no line for it, and
   `sound_quality=` in `RS.CFG` is overridden. With the modules
