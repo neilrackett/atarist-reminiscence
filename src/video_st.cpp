@@ -14,119 +14,7 @@ extern "C" {
 }
 
 #include "video_st.h"
-
-// group-rows the drawing on a tracked page touched, box by box (the
-// per-frame stats: what one box per page costs against these)
-uint32_t g_stCutTouchGR;
-bool g_stCutStats;
-
-// see ST_pageBandStart; the whole page when no band is in force
-static int16_t g_bandY0 = 0, g_bandY1 = kSTLayerH;
-static int16_t g_bandFill = -1;   // hardware value outside the band
-
-static inline void bandTouch(int y0, int y1) {
-	if (y0 < g_bandY0) {
-		g_bandY0 = (int16_t)(y0 < 0 ? 0 : y0);
-	}
-	if (y1 > g_bandY1) {
-		g_bandY1 = (int16_t)(y1 > kSTLayerH ? kSTLayerH : y1);
-	}
-}
-
-// Cutscene page tracking (see ST_pageBandStart): for the two pages
-// that take turns on screen, and for the screen itself, a box around
-// everything that differs from the aux page - the background every
-// frame is restored from. A restore then copies only what the last
-// frame on that page drew over, and a push only what changed since
-// the last one, instead of the whole band every time. One box, not
-// a mask of blocks: marking every block of every shape, and copying
-// a region in pieces, cost more on a 68000 than the few clean blocks
-// a box takes along. Groups [g0, g1) of 16 pixels, rows [y0, y1).
-struct TrkBox {
-	int16_t g0, g1, y0, y1;
-};
-static bool g_trk;
-static uint8_t *g_trkPage[2];
-static uint8_t *g_trkAux;
-static TrkBox g_trkBox[2];
-static TrkBox g_scrBox;
-
-static inline void boxClear(TrkBox *b) {
-	b->g0 = 16;
-	b->g1 = 0;
-	b->y0 = kSTLayerH;
-	b->y1 = 0;
-}
-
-static inline bool boxEmpty(const TrkBox *b) {
-	return b->y0 >= b->y1;
-}
-
-static inline void boxAdd(TrkBox *b, int g0, int g1, int y0, int y1) {
-	if (g0 < b->g0) b->g0 = (int16_t)g0;
-	if (g1 > b->g1) b->g1 = (int16_t)g1;
-	if (y0 < b->y0) b->y0 = (int16_t)y0;
-	if (y1 > b->y1) b->y1 = (int16_t)y1;
-}
-
-static inline void boxUnion(TrkBox *b, const TrkBox *o) {
-	if (!boxEmpty(o)) {
-		boxAdd(b, o->g0, o->g1, o->y0, o->y1);
-	}
-}
-
-static inline TrkBox *trkBoxOf(const uint8_t *layer) {
-	if (layer == g_trkPage[0]) {
-		return &g_trkBox[0];
-	}
-	if (layer == g_trkPage[1]) {
-		return &g_trkBox[1];
-	}
-	return 0;
-}
-
-// pixels [x0, x1) of rows [y0, y1) of layer are about to change;
-// inlined, as it runs once per shape and the call cost more than
-// the work
-static inline __attribute__((always_inline)) void pageTouch(const uint8_t *layer, int x0, int x1, int y0, int y1) {
-	// no scene in progress: the band is the whole page, nothing to do
-	if (!g_trk) {
-		return;
-	}
-	if (y0 < 0) {
-		y0 = 0;
-	}
-	if (y1 > kSTLayerH) {
-		y1 = kSTLayerH;
-	}
-	if (y0 >= y1) {
-		return;
-	}
-	bandTouch(y0, y1);
-	if (x0 < 0) {
-		x0 = 0;
-	}
-	if (x1 > kSTLayerW) {
-		x1 = kSTLayerW;
-	}
-	if (x0 >= x1) {
-		return;
-	}
-	const int g0 = x0 >> 4, g1 = ((x1 - 1) >> 4) + 1;
-	if (layer == g_trkAux) {
-		// the background itself: everything else now differs there
-		boxAdd(&g_trkBox[0], g0, g1, y0, y1);
-		boxAdd(&g_trkBox[1], g0, g1, y0, y1);
-		boxAdd(&g_scrBox, g0, g1, y0, y1);
-		return;
-	}
-	if (TrkBox *b = trkBoxOf(layer)) {
-		boxAdd(b, g0, g1, y0, y1);
-		if (g_stCutStats) {
-			g_stCutTouchGR += STDL_MulU16((uint16_t)(g1 - g0), (uint16_t)(y1 - y0));
-		}
-	}
-}
+#include "pagetrack.h"
 
 /*
  * The engine's layers are raw caller-owned blocks (pointer-swapped
@@ -3899,14 +3787,13 @@ void ST_copyGroupRows(uint8_t *d, int dStride, const uint8_t *s, int sStride, in
 
 uint32_t g_stCutCopyGR;
 
-// Copy a box, clipped to the band: the whole width as one run of
-// rows, anything narrower its exact width a row at a time through
-// copyRowN's movem bursts. Boxes of 10 groups or more used to be
-// copied as whole rows (the narrower ones a long at a time in C),
-// paying for up to 6 groups of clean pixels a row.
+// Copy a box (clipped to the band, ST_pageCopyBox): the whole width
+// as one run of rows, anything narrower its exact width a row at a
+// time through copyRowN's movem bursts. Boxes of 10 groups or more
+// used to be copied as whole rows (the narrower ones a long at a time
+// in C), paying for up to 6 groups of clean pixels a row.
 static void copyBox(uint8_t *dst, const uint8_t *src, const TrkBox *b) {
-	int y0 = b->y0 < g_bandY0 ? g_bandY0 : b->y0;
-	int y1 = b->y1 > g_bandY1 ? g_bandY1 : b->y1;
+	const int y0 = b->y0, y1 = b->y1;
 	if (y0 >= y1 || b->g0 >= b->g1) {
 		return;
 	}
@@ -3923,93 +3810,17 @@ static void copyBox(uint8_t *dst, const uint8_t *src, const TrkBox *b) {
 	ST_copyGroupRows(dst + off, kSTRowBytes, src + off, kSTRowBytes, n, y1 - y0);
 }
 
-static void markBand(TrkBox *b) {
-	boxAdd(b, 0, 16, g_bandY0, g_bandY1);
-}
-
 // Cutscene page copy: the planes only. The scene's pages carry no
 // live priority plane (see prioMode) and the copy is a fifth shorter
 // without it. Inside a scene's band every copy is between tracked
 // pages and moves only a box (see ST_pageBandStart); outside one the
 // band is the whole page.
 void ST_copyPage(uint8_t *dst, const uint8_t *src) {
-	if (g_trk) {
-		TrkBox *bd = trkBoxOf(dst);
-		TrkBox *bs = trkBoxOf(src);
-		if (src == g_trkAux && bd) {
-			// the restore: put back what this page drew over
-			copyBox(dst, src, bd);
-			boxClear(bd);
-			return;
-		}
-		if (dst == g_trkAux && bs) {
-			// a new background: it moves only where src differed,
-			// and everything else now differs from it there too
-			copyBox(dst, src, bs);
-			boxUnion(&g_trkBox[bs == &g_trkBox[0] ? 1 : 0], bs);
-			boxUnion(&g_scrBox, bs);
-			boxClear(bs);
-			return;
-		}
-		if (bd && bs) {
-			// page to page: they differ only where either differs
-			// from the background
-			TrkBox both = *bd;
-			boxUnion(&both, bs);
-			copyBox(dst, src, &both);
-			*bd = *bs;
-			return;
-		}
+	if (const TrkBox *b = ST_pageCopyBox(dst, src)) {
+		copyBox(dst, src, b);
+		return;
 	}
 	copyBlock<kSTPlaneBytes>(dst, src);
-}
-
-void ST_pageBandStart(int y0, int y1, uint8_t colour8, uint8_t *front, uint8_t *back, uint8_t *aux) {
-	g_bandY0 = (int16_t)(y0 < 0 ? 0 : y0);
-	g_bandY1 = (int16_t)(y1 > kSTLayerH ? kSTLayerH : y1);
-	g_bandFill = ST_getRemap()[colour8];
-	g_trk = true;
-	g_trkPage[0] = front;
-	g_trkPage[1] = back;
-	g_trkAux = aux;
-	boxClear(&g_trkBox[0]);
-	boxClear(&g_trkBox[1]);
-	boxClear(&g_scrBox);
-}
-
-void ST_pageBandEnd() {
-	g_bandY0 = 0;
-	g_bandY1 = kSTLayerH;
-	g_bandFill = -1;
-	g_trk = false;
-	g_trkPage[0] = g_trkPage[1] = g_trkAux = 0;
-}
-
-bool ST_pageShowRect(const uint8_t *page, bool full, int *x, int *y, int *w, int *h) {
-	// untracked (no band in force): the whole page, as a band would be
-	const TrkBox *bp = g_trk ? trkBoxOf(page) : 0;
-	TrkBox r;
-	if (full || !bp) {
-		r.g0 = 0; r.g1 = 16; r.y0 = 0; r.y1 = kSTLayerH;
-	} else {
-		r = *bp;
-		boxUnion(&r, &g_scrBox);
-		if (r.y0 < g_bandY0) r.y0 = g_bandY0;
-		if (r.y1 > g_bandY1) r.y1 = g_bandY1;
-	}
-	if (bp) {
-		g_scrBox = *bp;
-	}
-	if (r.y0 >= r.y1 || r.g0 >= r.g1) {
-		return false;
-	}
-	// the exact width: every width has a movem path now (copyRowN),
-	// so widening a wide box to whole rows only copies clean groups
-	*x = r.g0 * 16;
-	*w = (r.g1 - r.g0) * 16;
-	*y = r.y0;
-	*h = r.y1 - r.y0;
-	return true;
 }
 
 void ST_clearLayer(uint8_t *layer, uint8_t colour8) {
@@ -4022,25 +3833,8 @@ void ST_clearLayer(uint8_t *layer, uint8_t colour8) {
 	row[3] = (v & 8) ? 0xFFFF : 0;
 	const uint32_t a = ((uint32_t)row[0] << 16) | row[1];
 	const uint32_t b = ((uint32_t)row[2] << 16) | row[3];
-	if (g_bandFill >= 0 && v != g_bandFill) {
-		// the rows outside the band are in the old colour on every
-		// page: from here on the band is the whole page
-		g_bandY0 = 0;
-		g_bandY1 = kSTLayerH;
-	}
-	const int off = g_bandY0 * kSTRowBytes;
-	fillBytes(layer + off, (g_bandY1 - g_bandY0) * kSTRowBytes, a, b);
-	if (g_trk) {
-		// nothing is known about how a cleared page compares with
-		// the background; a cleared background, likewise the others
-		if (layer == g_trkAux) {
-			markBand(&g_trkBox[0]);
-			markBand(&g_trkBox[1]);
-			markBand(&g_scrBox);
-		} else if (TrkBox *b = trkBoxOf(layer)) {
-			markBand(b);
-		}
-	}
+	ST_pageClear(layer, v);
+	fillBytes(layer + g_bandY0 * kSTRowBytes, (g_bandY1 - g_bandY0) * kSTRowBytes, a, b);
 	if (!ST_cutscenePalMode()) {         // cutscene pages: no live plane
 		memset(layer + kSTPlaneBytes, (colour8 & 0x80) ? 0xFF : 0, kSTPrioRowBytes * kSTLayerH);
 	}

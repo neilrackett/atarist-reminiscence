@@ -19,6 +19,11 @@ struct Graphics {
 	void setLayer(uint8_t *layer, int pitch);
 	void setClippingRect(int16_t vx, int16_t vy, int16_t vw, int16_t vh);
 	void drawPoint(uint8_t color, const Point *pt);
+#ifdef ATARIST_030
+	void plotPoint(uint8_t color, const Point *pt);
+#else
+	void plotPoint(uint8_t color, const Point *pt) { drawPoint(color, pt); }
+#endif
 	void drawLine(uint8_t color, const Point *pt1, const Point *pt2);
 	void addEllipseRadius(int16_t y, int16_t x1, int16_t x2);
 	void drawEllipse(uint8_t color, bool hasAlpha, const Point *pt, int16_t rx, int16_t ry);

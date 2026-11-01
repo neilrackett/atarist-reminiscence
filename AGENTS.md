@@ -21,6 +21,7 @@ Most of `src/` is upstream's engine, changed in place under
 | `systemstub_stdl.cpp` | the ST build's screen on top of it: screen modes and borders, the colour remap and its quantiser (256 logical colours to 16), the copy of the layer to the screen (`copyRectPlanar`) |
 | `systemstub_030.cpp` | the 030 build's screen on top of it: sets a TT's or a Falcon's 256-colour mode and its colours through the XBIOS, and converts the chunky frame to the screen |
 | `video_st.cpp`, `video_st.h` | the planar layer the engine draws into (4 planes plus a priority plane, 256x224), its drawing primitives, room tiles and SGD backgrounds, perf counters |
+| `pagetrack.cpp`, `.h` | cutscene page tracking for both builds: the band of rows a scene draws in, and a box per page around what differs from the background, so copies and pushes move only that; the 030 build's page copies |
 | `spritecache_st.cpp` | gameplay sprites baked to planar once and kept in a RAM-sized ring |
 | `displaylist_st.cpp`, `.h` | a frame's draws written down, compared with the last frame's, only what changed redrawn |
 | `palette_st.cpp` | custom palettes (`PALETTE\`, `palette_custom=true`) |
@@ -508,16 +509,27 @@ the ST quantises them to 16.
   refresh, or after anything but the game loop has updated the screen (a
   cutscene, a menu, the inventory). The replays' frame hashes are the
   front layer's, and all ten matched before and after.
-- **Cutscenes move only the band.** A scripted scene's shapes are
-  clipped to its 240x128 picture (rows 50-178), so the back page's
-  restore, the page copies and the push to the screen take those rows
-  alone (`Cutscene::bandCopy`, `bandShow`). Text, captions and a scene's
-  first frame can write outside them. So what each page holds there has
-  a version, and a copy or a push takes the whole page when the versions
-  differ (`bandTouch`). The width saves nothing: x 8-247 still touches
-  all 16 of the conversion's groups. On a Falcon the band took 29% off
-  the scene set's work (music off, every frame drawn). `ab=0x400000`
-  turns it off.
+- **Cutscenes move only what changed, tracked by the ST's code.** A
+  scripted scene runs in the ST build's banded loop (`stBandedLoop`) on
+  its page tracking, which both builds compile (`pagetrack.cpp`): the
+  band of rows the scene draws in, and for each page a box around where
+  it differs from the background. A restore, a page copy and the push to
+  the screen take that box, not the band. The 030 build's pages, a byte
+  a pixel, have their own `ST_copyPage`, `ST_clearLayer` and
+  `ST_fillRect` there, and its chunky drawing touches the pages as the
+  ST's planar drawing does: a polygon and an ellipse their box, a line
+  its box once, a point and a glyph their own.
+  - The drawing's touches are gathered on the side (`pageTouchLater`, a
+    few compares a primitive) and handed over when something reads the
+    tracking. A Falcon runs its code from ST-RAM: `pageTouch` inlined at
+    every polygon cost its level 1 opening (0x00) 7-8ms a frame, more
+    than the smaller restore saved, and a touch a point, through
+    `drawPoint`, put a TT's at 85ms a frame against 60.
+  - Against the band it replaced (rows 50-178 of every page, every
+    frame), the cutscene bench's work fell 21.1% on a Falcon and 21.8% on
+    a TT (music off, every frame drawn). The band itself had taken 29%
+    off a Falcon's. `ab=0x400000` turns the tracking off: every copy and
+    push then takes the whole page, in both builds.
 - **The frame skipper is the ST build's** (`frame_skip`, on by
   default). That covers:
   - the scripted clock;
@@ -546,18 +558,18 @@ work against their budget (music off, every frame drawn):
 | | TT, this build | Falcon, this build | Falcon, ST build |
 |---|---|---|---|
 | Replay l1r26, ms a frame | 16.1 | 31.5 | 11.7 |
-| Intro | 43% | 85% | 16% |
-| Level 1's opening | 44% | 91% | 24% |
+| Intro | 26% | 54% | 16% |
+| Level 1's opening | 44% | 87% | 24% |
 
 With the player's settings (music on, frame skipping on), the frames
 shown:
 
 | | TT | Falcon |
 |---|---|---|
-| Intro | 98% | 77% |
-| Level 1's opening | 100% | 90% |
-| Voyage (0x34) | 98% | 81% |
-| Level 4, part 2 (0x39) | 97% | 63% |
+| Intro | 98% | 93% |
+| Level 1's opening | 100% | 92% |
+| Voyage (0x34) | 98% | 86% |
+| Level 4, part 2 (0x39) | 97% | 66% |
 
 The longest run of frames not shown was one on a TT and three on a
 Falcon.
@@ -566,24 +578,29 @@ Falcon.
   - Every replay ends where its recording did, its frames hash the same
     as with SDL, and the pictures are right on a TT and on a Falcon on
     VGA and RGB. Dropping SDL changed no timing.
-  - The band draws exactly what the whole page drew. That covers every
-    frame of the cutscene bench's nine scenes, the credits to their end,
-    on a TT and on a Falcon on VGA, and three scenes on RGB: 12,362
-    frames, each hashed from the screen.
+  - The band drew exactly what the whole page drew: every frame of the
+    cutscene bench's nine scenes, the credits to their end, on a TT and
+    on a Falcon on VGA, and three scenes on RGB, 12,362 frames, each
+    hashed from the screen. The tracking draws exactly what the band
+    drew, on a TT and on a Falcon on VGA (5,825 frames each; RGB was not
+    run again).
 - **Where the time went:** in Hatari these machines are bound by
   memory, not the CPU. A Falcon at 32MHz took exactly as long as at 16
   (its start-up speed loop did speed up), and everything sits in
   ST-RAM. So the gains came from moving fewer bytes:
   - the layer restore: -25% of a gameplay frame on both;
   - converting straight from the layers: -15% of a cutscene frame;
-  - the band in cutscenes: another -29%.
+  - the band in cutscenes: another -29%;
+  - only what changed, inside the band: another -21%.
 - **The TT has room to spare, and the Falcon keeps up.**
   - In play, 31.5ms a frame is just inside a 30Hz step.
   - Its cutscenes are within their budget on average, and the frame
     skipper keeps them at their scripted pace. Before this they ran up
     to 48% slow (level 1's opening, music on).
-  - Converting the band is still about half a Falcon cutscene frame's
-    work (47% in the intro).
+  - The push is a quarter of a Falcon's intro frame now (26%; 46% with
+    the band). Where everything moves, the box is the band: level 4's
+    second part (0x39) spends 28ms of a frame on the push and 8 on the
+    restore, and 54 drawing, against a budget of 64.
   - The ST build's planar caches still do far less work than upstream's
     chunky drawing.
 - **Set aside on the way (TT):** rows written twice into a 480-line
@@ -606,23 +623,25 @@ Falcon.
   the screen memory after each frame into `CUTHASH.BIN`, and the
   colours into `CUTPAL.BIN`.
   - The reference for a change is the same binary with the change
-    switched off (`ab=0x400000` for the band), as the stub has no
-    planar page to compare.
+    switched off (`ab=0x400000` for the tracking), or the binary before
+    it, as the stub has no planar page to compare.
   - The scripts are `tmp/tt/cut030.sh`, and `tmp/tt/skip/cmp030.py`,
     which compares two runs.
   - A Falcon's credits with hashing take longer than `run.sh`'s two
     minutes of `waitfile`: chain several.
   - Tested by breaking it: one row left out of the push, or the
-    out-of-band versions never moved, and frames in every scene tried
-    differed.
+    band's out-of-band versions never moved, and frames in every scene tried
+    differed; a glyph that did not touch its page, and voyage's text
+    frame differed.
 - Hatari's 68030 timing is approximate: the figures above are
   estimates until a TT and a Falcon run it. Neil has neither yet, so
   for now this build is tested in Hatari only.
 
 **Not done, or not known yet:**
-- The Falcon's cutscenes still drop frames: converting the band is
-  about half their work. Converting only the rows a frame changed, as
-  the ST build's push does, is the next step.
+- The Falcon's heaviest cutscenes still drop frames: level 4's second
+  part (0x39) shows 66% of them, voyage 86%. There everything moves,
+  so the box is the band, and upstream's chunky polygons are the rest
+  of the frame.
 - TT-RAM: under `run.sh`'s Hatari command line, TOS 3.06 with
   `--ttram 16` never started a program, with the MMU on or off; Neil's
   own Hatari TT ran the game with TT-RAM, so this is the emulator's

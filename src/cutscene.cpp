@@ -65,12 +65,6 @@ Cutscene::Cutscene(Resource *res, SystemStub *stub, Video *vid)
 	_stBakePage = 0;
 	_stBakeHead = _stBakeTail = 0;
 	_stBakeMs = 20;
-#ifdef ATARIST_030
-	_bandY0 = 0;
-	_bandY1 = Video::GAMESCREEN_H;
-	_bandVer[0] = _bandVer[1] = _bandVer[2] = 0;
-	_bandScreenVer = _bandNextVer = 0;
-#endif
 }
 
 const uint8_t *Cutscene::getCommandData() const {
@@ -267,7 +261,7 @@ void Cutscene::updateScreen() {
 		} else {
 			const uint32_t t0 = _stub->getTimeStamp();
 			if (!(g_options.ab & kAbCutNoPush)) {
-				bandShow(_frontPage);
+				stShow(_frontPage);
 			}
 			_stub->updateScreen(0);
 			const uint32_t dt = _stub->getTimeStamp() - t0;
@@ -292,28 +286,35 @@ void Cutscene::updateScreen() {
 #endif
 }
 
-#ifdef ST_PLANAR
+#ifdef ATARIST
 // A scripted scene on banded pages: all three pages and the screen
 // start cleared, so the band's outside is the same everywhere, and
 // from then on only what changed inside it moves (see
-// ST_pageBandStart). The shapes
-// are clipped to the Graphics rect; the ellipse filler can reach one
-// row past it.
+// ST_pageBandStart; the 030 build's pages, a byte a pixel, are
+// tracked as the ST's are). The shapes are clipped to the Graphics
+// rect; the ellipse filler can reach one row past it. kAbCutNoBand
+// leaves the tracking off: every copy and push takes the whole page.
 void Cutscene::stBandedLoop(uint16_t num) {
 	ST_clearLayer(_frontPage, 0xC0);
 	ST_clearLayer(_backPage, 0xC0);
 	ST_clearLayer(_auxPage, 0xC0);
 	_stShowFull = true;
-	ST_pageBandStart(_gfx._cry, _gfx._cry + _gfx._crh + 1, 0xC0, _frontPage, _backPage, _auxPage);
+	if (!(g_options.ab & kAbCutNoBand)) {
+		ST_pageBandStart(_gfx._cry, _gfx._cry + _gfx._crh + 1, 0xC0, _frontPage, _backPage, _auxPage);
+	}
+#ifdef ST_PLANAR
 	if (!ST_segCacheBegin()) {
 		warning("Cutscene polygon cache: no memory");
 	}
 	_stBakeHead = _stBakeTail = 0;
 	_stBakeMs = 20;
+#endif
 	stStatsBegin();
 	mainLoop(num);
 	stStatsEnd();
+#ifdef ST_PLANAR
 	ST_segCacheEnd();
+#endif
 	ST_pageBandEnd();
 }
 
@@ -323,94 +324,19 @@ void Cutscene::stBandedLoop(uint16_t num) {
 void Cutscene::stShow(const uint8_t *page) {
 	int x, y, w, h;
 	if (ST_pageShowRect(page, _stShowFull, &x, &y, &w, &h)) {
+#ifdef ST_PLANAR
 		// one sync per push: copyRectPlanar makes its own for a
 		// whole page
 		if (h >= 96 && h < Video::GAMESCREEN_H - 8) {
 			ST_beamSync();
 		}
 		_stub->copyRectPlanar(x, y, w, h, page);
+#else
+		// converted at the next updateScreen
+		_stub->copyRect(x, y, w, h, page, _vid->_w);
+#endif
 	}
 	_stShowFull = false;
-}
-#endif
-
-#ifdef ATARIST_030
-// The 030 build's pages are a byte a pixel, and a Falcon's cutscene
-// frame went mostly on moving them through ST-RAM: the back page
-// restored and the front converted to the screen, whole, every frame.
-// A scripted scene's shapes are clipped to the band (the Graphics
-// rect, and the row past it the ellipse filler can reach), so those
-// rows are all that change unless text, a caption or a scene's first
-// frame goes outside them. What a page holds outside the band has a
-// version: two pages with the same one agree there byte for byte, and
-// the screen's is the version it was last converted from whole. A copy
-// or a push takes the band alone when the versions say the rest is
-// right already, and the whole page otherwise. It took 29% off the
-// cutscene bench's work on a Falcon (Hatari, music off), the intro from
-// 124% of its budget to 85%.
-enum { kBandVerClear = 1 };  // 0xC0 everywhere outside the band
-
-int Cutscene::bandIndex(const uint8_t *page) const {
-	return (page == _vid->_frontLayer) ? 0 : (page == _vid->_tempLayer) ? 1 : 2;
-}
-
-// a new scene: nothing is known to agree outside the band, the screen
-// included
-void Cutscene::bandBegin() {
-	_bandY0 = _gfx._cry;
-	_bandY1 = _gfx._cry + _gfx._crh + 1;
-	if (_bandY1 > _vid->_h || (g_options.ab & kAbCutNoBand)) {
-		_bandY0 = 0;
-		_bandY1 = _vid->_h;
-	}
-	for (int i = 0; i < 3; ++i) {
-		_bandVer[i] = kBandVerClear + 1 + i;
-	}
-	_bandScreenVer = kBandVerClear + 4;
-	_bandNextVer = kBandVerClear + 5;
-}
-
-// the whole page from here on, as for anything not a scripted scene
-void Cutscene::bandEnd() {
-	_bandY0 = 0;
-	_bandY1 = _vid->_h;
-}
-
-// rows y0 to y1 of a page were drawn on
-void Cutscene::bandTouch(const uint8_t *page, int y0, int y1) {
-	if (y0 < _bandY0 || y1 > _bandY1) {
-		_bandVer[bandIndex(page)] = _bandNextVer++;
-	}
-}
-
-void Cutscene::bandCopy(uint8_t *dst, const uint8_t *src) {
-	const int d = bandIndex(dst);
-	const int s = bandIndex(src);
-	if (_bandVer[d] == _bandVer[s]) {
-		const int o = _bandY0 * _vid->_w;
-		memcpy(dst + o, src + o, (_bandY1 - _bandY0) * _vid->_w);
-	} else {
-		memcpy(dst, src, _vid->_layerSize);
-		_bandVer[d] = _bandVer[s];
-	}
-}
-
-void Cutscene::bandShow(const uint8_t *page) {
-	const int i = bandIndex(page);
-	if (_bandVer[i] == _bandScreenVer) {
-		_stub->copyRect(0, _bandY0, _vid->_w, _bandY1 - _bandY0, page, _vid->_w);
-	} else {
-		_stub->copyRect(0, 0, _vid->_w, _vid->_h, page, _vid->_w);
-		_bandScreenVer = _bandVer[i];
-	}
-}
-
-void Cutscene::bandLoop(uint16_t num) {
-	bandBegin();
-	stStatsBegin();
-	mainLoop(num);
-	stStatsEnd();
-	bandEnd();
 }
 #endif
 
@@ -862,9 +788,6 @@ void Cutscene::drawText(int16_t x, int16_t y, const uint8_t *p, uint16_t color, 
 			xPos += Video::CHAR_W;
 		}
 	}
-#ifdef ATARIST_030
-	bandTouch(page, y, yPos + Video::CHAR_H);
-#endif
 }
 
 void Cutscene::clearBackPage() {
@@ -881,25 +804,18 @@ void Cutscene::clearBackPage() {
 	const uint32_t c0 = g_stCutCopyGR;
 #endif
 	if (_clearScreen == 0) {
-#ifdef ST_PLANAR
+#ifdef ATARIST
 		if (!(g_options.ab & kAbCutNoRestore)) {
 			ST_copyPage(_backPage, _auxPage);
-		}
-#elif defined(ATARIST_030)
-		if (!(g_options.ab & kAbCutNoRestore)) {
-			bandCopy(_backPage, _auxPage);
 		}
 #else
 		memcpy(_backPage, _auxPage, _vid->_layerSize);
 #endif
 	} else {
-#ifdef ST_PLANAR
+#ifdef ATARIST
 		ST_clearLayer(_backPage, 0xC0);
 #else
 		memset(_backPage, 0xC0, _vid->_layerSize);
-#endif
-#ifdef ATARIST_030
-		_bandVer[bandIndex(_backPage)] = kBandVerClear;
 #endif
 	}
 #ifdef ATARIST
@@ -1079,10 +995,8 @@ void Cutscene::op_waitForSync() {
 				_creditsTextCounter = _res->isDOS() ? 20 : 60;
 			}
 			if (!_stPrescan) {
-#ifdef ST_PLANAR
+#ifdef ATARIST
 				ST_copyPage(_backPage, _frontPage);
-#elif defined(ATARIST_030)
-				bandCopy(_backPage, _frontPage);
 #else
 				memcpy(_backPage, _frontPage, _vid->_layerSize);
 #endif
@@ -1514,10 +1428,8 @@ void Cutscene::op_drawShape() {
 	}
 #endif
 	if (_clearScreen != 0 && !_stPrescan) {
-#ifdef ST_PLANAR
+#ifdef ATARIST
 		ST_copyPage(_auxPage, _backPage);
-#elif defined(ATARIST_030)
-		bandCopy(_auxPage, _backPage);
 #else
 		memcpy(_auxPage, _backPage, _vid->_layerSize);
 #endif
@@ -1569,7 +1481,7 @@ void Cutscene::op_drawCaptionText() {
 		const int y = Video::GAMESCREEN_H * _vid->_layerScale - h;
 
 		if (!_stPrescan) {
-#ifdef ST_PLANAR
+#ifdef ATARIST
 			ST_fillRect(_auxPage, 0, y, Video::GAMESCREEN_W, h, 0xC0);
 			ST_fillRect(_backPage, 0, y, Video::GAMESCREEN_W, h, 0xC0);
 			ST_fillRect(_frontPage, 0, y, Video::GAMESCREEN_W, h, 0xC0);
@@ -1577,11 +1489,6 @@ void Cutscene::op_drawCaptionText() {
 			memset(_auxPage + y * _vid->_w, 0xC0, h * _vid->_w);
 			memset(_backPage + y * _vid->_w, 0xC0, h * _vid->_w);
 			memset(_frontPage + y * _vid->_w, 0xC0, h * _vid->_w);
-#endif
-#ifdef ATARIST_030
-			bandTouch(_auxPage, y, y + h);
-			bandTouch(_backPage, y, y + h);
-			bandTouch(_frontPage, y, y + h);
 #endif
 		}
 #ifdef ST_PLANAR
@@ -2136,10 +2043,8 @@ void Cutscene::op_copyScreen() {
 		++_creditsTextCounter;
 	}
 	if (!_stPrescan) {
-#ifdef ST_PLANAR
+#ifdef ATARIST
 		ST_copyPage(_backPage, _frontPage);
-#elif defined(ATARIST_030)
-		bandCopy(_backPage, _frontPage);
 #else
 		memcpy(_backPage, _frontPage, _vid->_layerSize);
 #endif
@@ -2221,10 +2126,8 @@ void Cutscene::op_drawTextAtPos() {
 #endif
 			    ) {
 				if ((_cmdPtr - _cmdStartPtr) == 0xA) {
-					#ifdef ST_PLANAR
+					#ifdef ATARIST
 		stShow(_backPage);
-#elif defined(ATARIST_030)
-		bandShow(_backPage);
 #else
 		_stub->copyRect(0, 0, _vid->_w, _vid->_h, _backPage, _vid->_w);
 #endif
@@ -2610,14 +2513,10 @@ void Cutscene::playCredits() {
 		uint8_t cutName = offsets[cut_id * 2];
 		uint16_t cutOff = (int8_t)offsets[cut_id * 2 + 1];
 		if (load(cutName)) {
-#ifdef ST_PLANAR
+#ifdef ATARIST
 			_stSceneId = cut_id;
 			stPrescanPalette(cutOff);
 			stBandedLoop(cutOff);
-#elif defined(ATARIST_030)
-			_stSceneId = cut_id;
-			stPrescanPalette(cutOff);
-			bandLoop(cutOff);
 #else
 			mainLoop(cutOff);
 #endif
@@ -2751,14 +2650,10 @@ void Cutscene::play() {
 			}
 		} else if (cutName != 0xFF) {
 			if (load(cutName)) {
-#ifdef ST_PLANAR
+#ifdef ATARIST
 				_stSceneId = _id;
 				stPrescanPalette(cutOff);
 				stBandedLoop(cutOff);
-#elif defined(ATARIST_030)
-				_stSceneId = _id;
-				stPrescanPalette(cutOff);
-				bandLoop(cutOff);
 #else
 				mainLoop(cutOff);
 #endif

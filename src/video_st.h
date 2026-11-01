@@ -329,6 +329,11 @@ void ST_copyPage(uint8_t *dst, const uint8_t *src);
 // the rectangle a push to the screen has to copy (full = the whole
 // page, for the first push; false = nothing changed) and records the
 // page as what the screen now shows.
+//
+// The tracking is pagetrack.cpp's, and both Atari builds have it: the
+// 030 build's byte-a-pixel pages have their own ST_copyPage,
+// ST_clearLayer and ST_fillRect there, and its chunky drawing touches
+// the pages as the ST's planar drawing does (pagetrack.h).
 void ST_pageBandStart(int y0, int y1, uint8_t colour8, uint8_t *front, uint8_t *back, uint8_t *aux);
 void ST_pageBandEnd();
 bool ST_pageShowRect(const uint8_t *page, bool full, int *x, int *y, int *w, int *h);

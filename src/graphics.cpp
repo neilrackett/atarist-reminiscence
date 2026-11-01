@@ -8,6 +8,9 @@
 #include "graphics.h"
 #include "util.h"
 #include "video_st.h"
+#ifdef ATARIST_030
+#include "pagetrack.h"
+#endif
 
 void Graphics::setLayer(uint8_t *layer, int pitch) {
 	_layer = layer;
@@ -28,13 +31,31 @@ void Graphics::drawPoint(uint8_t color, const Point *pt) {
 #ifdef ST_PLANAR
 		ST_drawPoint(_layer, pt->x + _crx, pt->y + _cry, color);
 #else
+#ifdef ATARIST_030
+		pageTouchLater(_layer, pt->x + _crx, pt->x + _crx + 1, pt->y + _cry, pt->y + _cry + 1);
+#endif
 		*(_layer + (pt->y + _cry) * _layerPitch + pt->x + _crx) = color;
 #endif
 	}
 }
 
+#ifdef ATARIST_030
+// drawLine's points: the line touches its box once (pagetrack.h). A
+// touch a point, as drawPoint makes, put a TT's level 1 opening (0x00)
+// at 85ms a frame against 60 before the tracking, and 55 without it.
+void Graphics::plotPoint(uint8_t color, const Point *pt) {
+	if (pt->x >= 0 && pt->x < _crw && pt->y >= 0 && pt->y < _crh) {
+		*(_layer + (pt->y + _cry) * _layerPitch + pt->x + _crx) = color;
+	}
+}
+#endif
+
 void Graphics::drawLine(uint8_t color, const Point *pt1, const Point *pt2) {
 	debug(DBG_VIDEO, "Graphics::drawLine()");
+#ifdef ATARIST_030
+	pageTouchLater(_layer, _crx + MIN(pt1->x, pt2->x), _crx + MAX(pt1->x, pt2->x) + 1,
+		_cry + MIN(pt1->y, pt2->y), _cry + MAX(pt1->y, pt2->y) + 1);
+#endif
 	int16_t dxincr1 = 1;
 	int16_t dyincr1 = 1;
 	int16_t dx = pt2->x - pt1->x;
@@ -72,7 +93,7 @@ void Graphics::drawLine(uint8_t color, const Point *pt1, const Point *pt2) {
 	int16_t octincr2 = delta1 * 2;
 	int16_t oct = delta1 * 2 - delta2;
 	if (delta2 >= 0) {
-		drawPoint(color, &pt);
+		plotPoint(color, &pt);
 		while (--delta2 >= 0) {
 			if (oct >= 0) {
 				pt.x += dxincr1;
@@ -83,7 +104,7 @@ void Graphics::drawLine(uint8_t color, const Point *pt1, const Point *pt2) {
 				pt.y += dyincr2;
 				oct += octincr2;
 			}
-			drawPoint(color, &pt);
+			plotPoint(color, &pt);
 		}
 	}
 }
@@ -227,6 +248,12 @@ void Graphics::drawEllipse(uint8_t color, bool hasAlpha, const Point *pt, int16_
 	}
 	if (y < _crh) {
 		if (pt->y + ry >= 0) {
+#ifdef ATARIST_030
+			// its box, clipped as its rows are: one past the clip rect
+			// (addEllipseRadius), with a pixel's margin (pagetrack.h)
+			pageTouchLater(_layer, _crx + MAX(pt->x - rx - 1, 0), _crx + MIN(pt->x + rx + 1, _crw - 1) + 1,
+				_cry + y, _cry + MIN(pt->y + ry, (int)_crh) + 1);
+#endif
 			_areaPoints[0] = y;
 			int32_t dy = 0;
 			int32_t rxsq  = rx * rx;
@@ -526,6 +553,12 @@ void Graphics::drawPolygonRef(uint8_t color, bool hasAlpha, const Point *pts, ui
 	if (xmax < 0 || xmin >= _crw || ymax < 0 || ymin >= _crh) {
 		return;
 	}
+#ifdef ATARIST_030
+	// what it fills, from the bounds it has found, clipped as its spans
+	// are and with a pixel's margin for their rounding (pagetrack.h)
+	pageTouchLater(_layer, _crx + MAX<int16_t>(xmin - 1, 0), _crx + MIN<int16_t>(xmax + 1, _crw - 1) + 1,
+		_cry + MAX<int16_t>(ymin, 0), _cry + MIN<int16_t>(ymax, _crh - 1) + 1);
+#endif
 	if (numPts == 2) {
 		drawLine(color, &pts[0], &pts[1]);
 		return;

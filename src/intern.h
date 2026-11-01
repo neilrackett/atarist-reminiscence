@@ -226,7 +226,7 @@ enum {
 	kAbRingFirst = 1 << 19,        // the sprite ring sized first, leaving the room cache what is over
 	kAbCutSkipBursts = 1 << 20,    // late cutscene frames skipped up to three in a row, not spread out
 	kAbCutSmallArenas = 1 << 21,   // a 4MB machine's cutscene caches at the 2.5MB sizes
-	kAbCutNoBand = 1 << 22         // the 030 build: cutscene pages restored and pushed whole
+	kAbCutNoBand = 1 << 22         // cutscene pages untracked: every copy, clear and push the whole page
 };
 
 // ST port: the four screen modes, in the order the menu cycles them

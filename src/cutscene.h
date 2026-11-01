@@ -104,22 +104,6 @@ struct Cutscene {
 	bool _stShowFull;
 	void stBandedLoop(uint16_t num);
 	void stShow(const uint8_t *page);
-#ifdef ATARIST_030
-	// the 030 build's band: the rows a scripted scene's shapes draw
-	// in, and a version per layer for what it holds outside them (see
-	// bandBegin)
-	int16_t _bandY0, _bandY1;
-	uint32_t _bandVer[3];
-	uint32_t _bandScreenVer;
-	uint32_t _bandNextVer;
-	int bandIndex(const uint8_t *page) const;
-	void bandBegin();
-	void bandEnd();
-	void bandTouch(const uint8_t *page, int y0, int y1);
-	void bandCopy(uint8_t *dst, const uint8_t *src);
-	void bandShow(const uint8_t *page);
-	void bandLoop(uint16_t num);
-#endif
 	bool stSegCacheable() const;
 	uint8_t *_stBakePage;     // a shape sprite's bake draws here
 	uint16_t _stBakeQueue[16];  // shapes seen once, baked while waiting

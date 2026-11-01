@@ -16,6 +16,9 @@
 #include <mint/osbind.h>
 #endif
 #include "video_st.h"
+#ifdef ATARIST_030
+#include "pagetrack.h"
+#endif
 
 Video::Video(Resource *res, SystemStub *stub, WidescreenMode widescreenMode)
 	: _res(res), _stub(stub), _widescreenMode(widescreenMode) {
@@ -2397,6 +2400,13 @@ void Video::AMIGA_drawStringChar(uint8_t *dst, int pitch, int x, int y, const ui
 	}
 #else
 	const int stride = 16;
+#endif
+#ifdef ATARIST_030
+	// a cutscene page: the glyph's cell, as the ST's ST_drawGlyph
+	// touches it (pagetrack.h)
+	if (pitch == GAMESCREEN_W) {
+		pageTouch(dst, x, x + 8, y, y + 8);
+	}
 #endif
 	dst += y * pitch + x;
 	for (int y = 0; y < 8; ++y) {
