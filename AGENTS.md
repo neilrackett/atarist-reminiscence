@@ -669,6 +669,16 @@ Falcon.
 - Widening the port's planar path to 8 planes: every kernel hard-codes
   4 planes and the 128-byte stride, and a 68030 needs none of what that
   path was built for.
+- Writing fewer of the screen's planes in cutscene pushes (November
+  2026). A scene's colours, 0xC0-0xDF with text in 0xEF, leave planes 6
+  and 7 the same on every pixel after the XOR, and plane 5 too where
+  there is no text, so a push could write six planes or five of the
+  eight, with a guard at every primitive, glyph and fill falling back to
+  more when a colour broke that. The pictures matched frame for frame,
+  but in one binary it took only 0.9% off a Falcon's cutscene work and
+  1.8% off a TT's (the intro's push 3% and 13%): the push is not bound
+  by its writes to ST-RAM. The guards and the layout cost more than
+  that, and the binary came out 2% slower than without it.
 - The engine built with `ATARIST` off, with STDL only for input and
   sound: it would have lost the menus, the port's sound, record and
   replay, and the pacing.
