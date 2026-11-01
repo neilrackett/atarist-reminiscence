@@ -4,7 +4,9 @@
 # Plays every scenario (or those in SCENS) twice with dist/FLASHBAK.TOS:
 #  - hashing every frame (replay_hash=true), compared window by window
 #    with the reference run REF: the change must draw exactly what the
-#    reference does, and end each replay where its recording did;
+#    reference does, and end each replay where its recording did; and
+#    the screen, compared with the layer after each frame went up, must
+#    have shown it ("REPLAY screen" in RS.LOG), which no hash can see;
 #  - untimed, for its frame times, compared with run PREV if given, then
 #    the time each room took to enter ("Room 45 (2055ms)" in RS.LOG).
 # A copy of the binary is kept as tmp/bench/bin/TAG.TOS for later runs.
@@ -39,6 +41,10 @@ bad=$?
 for S in $SCENS; do
 	if ! grep -q "REPLAY done.* match" "tmp/bench/runs/h${TAG}_${M}_$S/RS.LOG" 2>/dev/null; then
 		echo "$S: did not end where its recording did"
+		bad=1
+	fi
+	if ! grep -q "REPLAY screen: every frame" "tmp/bench/runs/h${TAG}_${M}_$S/RS.LOG" 2>/dev/null; then
+		echo "$S: $(grep -h 'REPLAY screen' "tmp/bench/runs/h${TAG}_${M}_$S/RS.LOG" 2>/dev/null || echo 'no REPLAY screen line')"
 		bad=1
 	fi
 done

@@ -155,7 +155,9 @@ tools/bench/verify.sh TAG [PREV]
 ```
 
 It hashes every frame against the reference run `ref` (no bakes and no
-display list, `ab=24`), checks each replay's ending, times the build
+display list, `ab=24`), checks each replay's ending, checks after every
+frame that the screen shows the layer ("REPLAY screen" in the log: a
+hash of the layer cannot see a box the push left out), times the build
 against run `PREV`, and lists the time each room took to enter. Quote the
 total over all scenarios: code layout alone moves one scenario 1-3%. A
 Mega STE's times move with layout through its cache, so compare features
@@ -186,7 +188,9 @@ The tools:
   (`CUTHASH.BIN`), and the colours it was shown in (`CUTPAL.BIN`), over
   the intro, every level opening, a mid-level scene and the credits. It
   compares them with run `REF`, by default `cref`, whose pixels are
-  r30's own: a cutscene change must match frame for frame.
+  r30's own: a cutscene change must match frame for frame. After every
+  push the run also compares the screen with the page it came from, and
+  its `CUTSCREEN` lines must say they agreed.
 - `tools/cutbench/prof.sh OUT MACHINE SCENE` profiles one scene, and
   `prof.py` reads the profile.
 
@@ -200,7 +204,10 @@ rotate five bits a long and XOR: a row is 32 longs, so every row folded
 in alike, and a shape drawn a row too high over a plain background hashed
 the same. It is h * 33 + each long now, and `cref` was made again from
 r30 itself. Break the code on purpose (draw a row low, flip a bit of a
-copy) and see the check fail before relying on it.
+copy) and see the check fail before relying on it. The screen checks
+were tried that way: a push one row short, in cutscenes and in play,
+left every frame hash the same and failed both (301 of the intro's 353
+pushes, 600 of l1r26's frames).
 
 **Profiling.** Load symbols made from `build/flashbak.elf`
 (`m68k-atari-mint-nm -n -C`, `::` turned into `__`, only `T`/`t`/`W`

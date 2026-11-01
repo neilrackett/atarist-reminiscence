@@ -65,6 +65,9 @@ Cutscene::Cutscene(Resource *res, SystemStub *stub, Video *vid)
 	_stBakePage = 0;
 	_stBakeHead = _stBakeTail = 0;
 	_stBakeMs = 20;
+#ifdef ATARIST
+	_stHash = _stPalHash = 0;   // stShow reads it, before any scene's stats
+#endif
 }
 
 const uint8_t *Cutscene::getCommandData() const {
@@ -288,6 +291,16 @@ void Cutscene::stShow(const uint8_t *page) {
 		_stub->copyRectPlanar(x, y, w, h, page);
 	}
 	_stShowFull = false;
+	// replay_hash: the screen must now show the page, every row of it,
+	// which a page's hash cannot tell
+	if (_stHash) {
+		const int row = ST_screenDiffRow(page, 0);
+		++_stScrPushes;
+		if (row >= 0 && _stScrBad++ == 0) {
+			_stScrBadFrame = (int16_t)(_stHashN - 1);
+			_stScrBadRow = (int16_t)row;
+		}
+	}
 }
 
 // Called after a frame is shown: does the next one get drawn? Frames
@@ -358,6 +371,7 @@ void Cutscene::stStatsBegin() {
 		_stHash = (uint32_t *)malloc(kStHashMax * sizeof(uint32_t));
 		_stPalHash = (uint32_t *)malloc(kStHashMax * sizeof(uint32_t));
 		_stHashN = _stPalHashN = 0;
+		_stScrPushes = _stScrBad = 0;
 		_stKeys = (uint32_t *)malloc(3 * kStKeys * sizeof(uint32_t));
 		_stKeyN[0] = _stKeyN[1] = _stKeyN[2] = 0;
 		_stKeyCur = 0;
@@ -518,6 +532,14 @@ void Cutscene::stStatsEnd() {
 		free(_stRing);
 		_stRing = 0;
 		g_stCutStats = false;
+	}
+	if (_stHash) {
+		if (_stScrBad == 0) {
+			info("CUTSCREEN %02X: the screen showed its page after all %u pushes", _stSceneId, (unsigned)_stScrPushes);
+		} else {
+			info("CUTSCREEN %02X: %u of %u pushes left the screen unlike its page, the first at frame %d, row %d",
+				_stSceneId, (unsigned)_stScrBad, (unsigned)_stScrPushes, _stScrBadFrame, _stScrBadRow);
+		}
 	}
 	// appended scene by scene: "CUTH", the scene id, the count, then
 	// a big-endian word per drawn frame - the pixels in CUTHASH.BIN,

@@ -179,6 +179,8 @@ struct Cutscene {
 	uint32_t *_stHash;
 	uint32_t *_stPalHash;         // the colours shown, per frame
 	uint16_t _stHashN, _stPalHashN;
+	uint16_t _stScrPushes, _stScrBad;   // replay_hash: pushes, and those the screen disagreed with
+	int16_t _stScrBadFrame, _stScrBadRow;
 	uint32_t *_stKeys;            // shape keys: this frame's and the two before
 	uint8_t _stKeyN[3];
 	uint8_t _stKeyCur;

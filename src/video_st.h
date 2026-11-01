@@ -173,6 +173,9 @@ bool ST_rowVisible(int y);
 uint32_t ST_overscanMisses();
 // the colours the hardware shows, hashed (cutscene replay_hash)
 uint32_t ST_hwPaletteHash();
+// the first of layer rows y0-223 the screen does not show as in
+// layer, or -1 (replay_hash: did the pushes leave the screen right?)
+int ST_screenDiffRow(const uint8_t *layer, int y0);
 
 // What the gameplay sprite path did since the last log_fps line, so a
 // slow frame says which cache gave out instead of only how slow it

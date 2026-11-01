@@ -2073,6 +2073,20 @@ uint32_t ST_hwPaletteHash() {
 	return h;
 }
 
+// The frame hashes are of the layers and pages, so a box a push left
+// out changed none of them: this compares the screen itself with the
+// layer it was last pushed from, over the rows the mode displays.
+int ST_screenDiffRow(const uint8_t *layer, int y0) {
+	const SystemStub_STDL *s = g_stub;
+	const uint8_t *base = s->_screen->pixels + ((s->_xOffset >> 4) << 3);
+	for (int y = y0; y < kSTLayerH; ++y) {
+		if (!s->_yDrop[y] && memcmp(base + s->_yOff[y], layer + y * kSTRowBytes, kSTRowBytes) != 0) {
+			return y;
+		}
+	}
+	return -1;
+}
+
 // Chunky to planar by table: g_c2p[c] holds the four plane bits of
 // the slot colour c maps to, one at the bottom of each byte with
 // plane 0 in the top one, so eight pixels shift into a long whose
