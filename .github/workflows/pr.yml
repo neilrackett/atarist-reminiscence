@@ -48,5 +48,8 @@ jobs:
 
       - name: Build
         # The command the README documents, unchanged: libstdl.a and the
-        # dist/FLASHBAK.TOS that links against it.
-        run: stcmd make
+        # dist/FLASHBAK.TOS that links against it. Then the TT and Falcon
+        # build, dist/FBACK030.TOS, which release.yml publishes beside it.
+        run: |
+          stcmd make
+          stcmd make 030

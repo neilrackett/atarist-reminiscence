@@ -83,8 +83,12 @@ jobs:
 
       - name: Build
         # The Makefile drops RS.CFG.template in beside the binary as
-        # RS.CFG, so both release files come out of this one command.
-        run: stcmd make PORT_VERSION="$VERSION"
+        # RS.CFG. Then the TT and Falcon build, FBACK030.TOS, from the
+        # same sources and the same version: the two binaries read one
+        # RS.CFG and one DATA folder, so they ship side by side.
+        run: |
+          stcmd make PORT_VERSION="$VERSION"
+          stcmd make 030 PORT_VERSION="$VERSION"
 
       - name: Tag it
         # Only once the build has succeeded: a tag that names a binary
@@ -116,7 +120,7 @@ jobs:
                  -f ref=refs/tags/latest -f sha="$GITHUB_SHA" --silent
 
       - name: Replace the files on the latest release
-        # The binary and its documented config, and nothing else. The
+        # The binaries and their documented config, and nothing else. The
         # data tools used to ship here as tools.zip; RExtract does that
         # job in a browser now, so there is no longer a bundle of
         # scripts to keep in step with the binary beside it. DATA/
@@ -127,5 +131,5 @@ jobs:
         run: |
           gh release view latest >/dev/null 2>&1 \
             || gh release create latest --title "Flashback" --notes "Rolling build of the Atari ST port."
-          gh release upload latest dist/FLASHBAK.TOS dist/RS.CFG --clobber
+          gh release upload latest dist/FLASHBAK.TOS dist/FBACK030.TOS dist/RS.CFG --clobber
           echo "Published $VERSION to the latest release."
