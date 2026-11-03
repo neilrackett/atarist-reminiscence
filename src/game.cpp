@@ -174,6 +174,23 @@ static void ST_replayCheckScreen(const uint8_t *layer) {
 }
 #endif
 
+#ifdef ATARIST_030
+// ...and what went up: the screen's memory as converted and the colours
+// as the registers got them, a pair a frame (SHASH.BIN). The layer's
+// hash cannot see a box the push left out, nor a page of the display
+// a frame behind. And the push's own time, the conversion and whatever
+// it waits for, apart from the frame's.
+static uint32_t *g_repScrHash;
+static uint32_t g_repPushMs;
+
+static void ST_replayScreenFrame() {
+	if (g_repScrHash && g_repFrames < g_repFrameHashCap) {
+		g_repScrHash[2 * g_repFrames] = ST_screenHash();
+		g_repScrHash[2 * g_repFrames + 1] = ST_hwPaletteHash();
+	}
+}
+#endif
+
 static void ST_replayCloseWindow(uint8_t room) {
 	g_repCur.perf = g_stPerf;
 	g_repCur.room = room;
@@ -192,7 +209,17 @@ static void ST_replayReset(uint32_t now, uint32_t steps) {
 		free(g_repFrameHash);
 		g_repFrameHash = (uint32_t *)malloc(steps * sizeof(uint32_t) + 4);
 		g_repFrameHashCap = g_repFrameHash ? steps : 0;
+#ifdef ATARIST_030
+		free(g_repScrHash);
+		g_repScrHash = (uint32_t *)malloc(2 * steps * sizeof(uint32_t) + 8);
+		if (!g_repScrHash) {
+			g_repFrameHashCap = 0;
+		}
+#endif
 	}
+#ifdef ATARIST_030
+	g_repPushMs = 0;
+#endif
 	g_repWins = 0;
 	memset(&g_repCur, 0, sizeof(g_repCur));
 	memset(g_repHist, 0, sizeof(g_repHist));
@@ -1344,9 +1371,18 @@ void Game::mainLoop() {
 		ST_replayHashFrame(_vid._frontLayer);
 	}
 #endif
+#ifdef ATARIST_030
+	const uint32_t pushT0 = _stReplaying ? _stub->getTimeStamp() : 0;
+#endif
 	_vid.updateScreen();
 #ifdef ATARIST_030
 	_vid._playUpdates = _vid._updates;
+	if (_stReplaying) {
+		g_repPushMs += _stub->getTimeStamp() - pushT0;
+		if (g_options.replay_hash) {
+			ST_replayScreenFrame();
+		}
+	}
 #endif
 #ifdef ST_PLANAR
 	// the 030 build's replay hash is the layer's alone: its screen is
@@ -1814,6 +1850,17 @@ void Game::ST_replayDone() {
 		}
 	}
 	const uint32_t f = g_repFrames ? g_repFrames : 1;
+#ifdef ATARIST_030
+	if (g_repScrHash) {
+		FILE *fp = fopen("SHASH.BIN", "wb");
+		if (fp) {
+			const uint32_t n = (g_repFrames < g_repFrameHashCap) ? g_repFrames : g_repFrameHashCap;
+			fwrite(g_repScrHash, sizeof(uint32_t), 2 * n, fp);
+			fclose(fp);
+		}
+	}
+	info("REPLAY push: %d.%02d ms/frame", (int)(g_repPushMs / f), (int)((g_repPushMs * 100 / f) % 100));
+#endif
 	const uint32_t sf = steadyFrames ? steadyFrames : 1;
 	info("REPLAY done: %u steps %u frames %u ms, %d.%02d ms/frame, steady %d.%02d, worst %ums, hash %08lx %s",
 		(unsigned)_stRecHdr.steps, (unsigned)g_repFrames, (unsigned)g_repMs,
