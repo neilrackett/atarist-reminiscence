@@ -78,11 +78,15 @@ to read (an ELF from elsewhere) into `tmp/` first.
 **STDL** is the `stdl/` submodule, a library with its own repository,
 releases and `AGENTS.md`; the Makefile builds `stdl/libstdl.a` from it.
 Never change it from here: a library change is made there and released,
-and the port moves to it in a commit of its own ("STDL v1.15.3: ...",
-currently v1.18.1), measured like any other change. A release is an
-annotated `v*` tag on STDL's `main`: its workflow rebuilds the rolling
-`latest` release's files, and the port pins the submodule to the tag
-and builds the library itself. `git -C stdl fetch --tags` exits
+and the port moves to it in a commit of its own ("STDL v1.15.3: ..."),
+measured like any other change. A release is an annotated `v*` tag on
+STDL's `main`: its workflow rebuilds the rolling `latest` release's
+files, and the port pins the submodule to the tag and builds the
+library itself. For now it is pinned to a commit on STDL's `tt-deep`
+branch instead, untagged (Neil, November 2026): v1.20.0's prerelease,
+which the 030 build moved onto first, so that what the move finds can
+still be fixed there before the release. A fix goes onto `tt-deep`, is
+pushed, and the pointer moves to it. `git -C stdl fetch --tags` exits
 non-zero once `latest` has moved ("would clobber"); add `--force`. To
 measure a library change before its release, copy the changed files
 into `stdl/` for one build and put them back with `git -C stdl
