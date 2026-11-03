@@ -519,19 +519,31 @@ the ST quantises them to 16.
   mode on a Falcon with a SuperVidel, where planes would be garbage.
 - **Each page owes what was pushed since it was last drawn on.** The
   engine pushes boxes as if to one screen that keeps them all. The stub
-  keeps a mask of 16-pixel groups a row for each page, ORs every pushed
-  box into all of them, and converts the page drawn on where its mask
-  says, from this frame's picture. As one screen was right for every
-  caller, a frame's picture is the one k frames before outside the
-  boxes pushed since, and so each page is right. A frame that pushes
-  nothing does not flip. `kBlockDirty` = 2 is no help here: it pushes a
-  block on the frame after it was drawn on too, for the erase after a
-  sprite moves, and with two pages a sprite drawn once would come back
-  every other frame (traced, not built). On a TT the conversion writes both of a row's
-  lines itself, half the stride apart, and reports nothing, so Flip
-  has nothing to copy: STDL's present copies one box a page round
-  everything reported, and gameplay's scattered boxes would have made
-  that most of the screen.
+  keeps a mask of 16-pixel groups a row for each page and ORs every
+  pushed box into all of them. Of what the page drawn on owes, this
+  frame's boxes are converted from the engine's picture and the rest is
+  copied from the page last put up, which holds the screen as it stands.
+  So the stub is one screen to the engine whatever the engine does with
+  a picture between pushes, and a frame that pushes from two pictures
+  converts the first's boxes before the second's. A frame that pushes
+  nothing does not flip.
+  - The first version converted everything a page owed from this
+    frame's picture, which is right only if the engine's buffer holds
+    what the screen shows outside this frame's boxes. The title breaks
+    that: it pushes its buffer black, decodes the picture into it and
+    reveals it two rows a step, and the pages that owed the black push
+    showed the whole picture, every other frame of the wipe (Neil, in
+    Hatari). The replays and the cutscene bench never show the title,
+    so `tmp/tt/title030.sh` runs it with the screen check on and quits
+    from the menu: 37 of 65 flips unlike their pushes then, none now.
+  - `kBlockDirty` = 2 is no help here: it pushes a block on the frame
+    after it was drawn on too, for the erase after a sprite moves, and
+    with two pages a sprite drawn once would come back every other
+    frame (traced, not built).
+  - On a TT the conversion writes both of a row's lines itself, half
+    the stride apart, and reports nothing, so Flip has nothing to copy:
+    STDL's present copies one box a page round everything reported, and
+    gameplay's scattered boxes would have made that most of the screen.
 - **The colours are staged** (`STDL_StagePalette`): set just before
   Flip, they are written in the blank that shows that page, so a new
   room's picture never goes up in the old colours or the old in the
@@ -667,20 +679,25 @@ stub on the same STDL, in Hatari as above):
   the credits to their end (`CUTHASH.BIN`, `CUTPAL.BIN`): 5,825 frames
   on each machine, with two pages and with three.
 - **In play** (the ten replays, which are not paced; Flip's wait taken
-  out): a frame's work went from 23.03 to 23.64ms on a TT (+2.6%) and
-  from 44.18 to 45.61 on a Falcon on VGA (+3.2%); l1r26 16.4 to 17.0
-  and 31.7 to 33.2. A page drawn three frames ago must erase what that
-  frame drew too, so each page converts four frames' boxes where the
-  one screen converted two. Flip waited 1.1ms a frame on a TT and 0.2 on
-  a Falcon. With two pages it waits for the VBL that shows its page:
-  31.85 and 53.87ms a frame with the wait, which in play would hold a
-  Falcon's frame to three VBLs at 60Hz, past the 30Hz step.
+  out): a frame's work went from 23.03 to 23.84ms on a TT (+3.5%) and
+  from 44.18 to 46.03 on a Falcon on VGA (+4.2%); l1r26 16.4 to 17.3
+  and 31.7 to 33.6. A page drawn three frames ago must catch up on
+  three frames' boxes besides this one's, where the one screen caught
+  up on two. Flip waited 1.1ms a frame on a TT and 0.2 on a Falcon.
+  With two pages it waits for the VBL that shows its page: 31.85 and
+  53.87ms a frame with the wait, which in play would hold a Falcon's
+  frame to three VBLs at 60Hz, past the 30Hz step.
+  - The first version, which converted every owed box from the
+    engine's picture (the title's flicker), took 23.64 and 45.61. The
+    copy from the page last shown read both of a TT row's lines (24.54)
+    and ORed each box into every page's mask (47.21 on a Falcon) until
+    it read a row's first line once and folded the frame's boxes into
+    the other pages once a frame.
 - **Cutscenes** (eight of the bench's scenes, the credits left out):
-  - work, music off and every frame drawn, up 8.6% on a TT and 7.9% on
+  - work, music off and every frame drawn, up 8.8% on a TT and 7.4% on
     a Falcon on VGA (two pages: 40% and 22%);
   - frames shown with the player's settings, TT 99.1% to 98.9%, Falcon
-    on VGA 90.7% to 88.4% (two pages: 98.2% and 84.8%). Level 1's
-    opening on a Falcon showed 38 of its 50 frames, against 43.
+    on VGA 90.7% to 89.0% (two pages: 98.2% and 84.8%).
 - **Memory:** the largest free block at a level's load went from 1,633K
   to 1,304K on a TT (4MB, no TT-RAM) and from 1,800K to 1,622K on a
   Falcon on VGA, the pages' ST-RAM; the bank arena kept its 384K and no
@@ -713,10 +730,21 @@ stub on the same STDL, in Hatari as above):
   - `tmp/tt/r030.sh TAG tt|fv|fr PROG SCENARIO...` runs the replays (a
     Falcon on VGA or on RGB with a PAL desktop, through its NVRAM in a
     `HOME` of its own), and `tmp/tt/shcmp.py TAG REF MACH SCENARIO...`
-    compares two runs frame by frame.
+    compares two runs frame by frame. They run at most six emulators at
+    once (`MAXH`), every script's counted: dozens side by side made
+    Neil's Mac unusable, and emulated time does not move with the
+    host's load, so queueing costs only the wait.
   - Tested by breaking it: every page's owed boxes dropped after each
     conversion left 560 of l1r26's 638 frames unlike the reference, and
-    the screen check flagged the same 560 flips.
+    the screen check flagged the same 560 flips; the copy from the page
+    last shown left out, 586 of l1r26's frames and 62 of the title's 65
+    flips.
+  - `SDL_VIDEODRIVER=dummy` runs Hatari with no window: replays end and
+    hash as they do with one, and no window can take a key typed on the
+    desktop. One windowed hash run of the credits on a TT ended a third
+    of the way through, normally, its pictures right to there, most
+    likely a key typed on the desktop reaching it; run again, all 4,686
+    frames matched.
 - **Cutscene pictures:** with `replay_hash=true` the 030 build hashes
   the screen memory after each frame into `CUTHASH.BIN`, and the
   colours into `CUTPAL.BIN`. `tmp/tt/c030.sh` runs scenes as `r030.sh`

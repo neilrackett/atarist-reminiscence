@@ -12,14 +12,21 @@
  * (systemstub_atari.h).
  *
  * The screen has three pages, or two (screen_pages=2, or where the
- * third does not fit), and each keeps its own picture. The engine pushes boxes of its picture as if to one
- * screen that keeps them all, so each page owes every box pushed since
- * it was last drawn on: a mask of 16-pixel groups a row, ORed into
- * every page's at each push, the page drawn on converted where its
- * mask says, from the picture of this frame's pushes. As one screen
- * was right, a frame's picture is the one k frames before outside the
- * boxes pushed since, whatever the caller, and so is the page's. A
- * frame that pushes nothing does not flip.
+ * third does not fit), and each keeps its own picture. The engine pushes
+ * boxes of its picture as if to one screen that keeps them all, so each
+ * page owes every box pushed since it was last drawn on: a mask of
+ * 16-pixel groups a row, the frame's boxes ORed into the other pages'
+ * once a frame (into all of them at each push, a Falcon's replays took
+ * 1.2ms a frame more, 47.21 against 46.03: play pushes a box for each
+ * run of blocks of each band). Of what
+ * the page drawn on owes, this frame's boxes are converted from the
+ * engine's picture, and the rest copied from the page last put up,
+ * which holds the screen as it stands. So the stub is one screen to the
+ * engine, whatever the engine does with a picture between its pushes:
+ * the title pushes its buffer black, decodes the picture into it and
+ * reveals that a few rows a step, and converting what the other pages
+ * owed from the buffer put the whole picture on them, every other frame
+ * of the wipe. A frame that pushes nothing does not flip.
  *
  * Each box is converted straight into the page (c2p_030.h): on a TT
  * both of a row's lines, half the stride apart, so Flip has nothing to
@@ -71,6 +78,11 @@ struct SystemStub_030 : SystemStub_Atari {
 	uint8_t *_page[kMaxPages];
 	uint32_t _owed[kMaxPages][kFrameH];
 	bool _clear[kMaxPages];
+	// this frame's boxes: all of them, and those not yet converted (a
+	// push ORs into the second alone; the other pages' masks take them
+	// once a frame)
+	uint32_t _now[kFrameH];
+	uint32_t _conv[kFrameH];
 	const uint8_t *_buf;       // the picture this frame's boxes come from
 	int _pitch;
 	bool _pushed;
@@ -100,7 +112,10 @@ struct SystemStub_030 : SystemStub_Atari {
 
 	void clearScreen();
 	int pageIndex();
-	void convert(int p, uint8_t *pix);
+	uint8_t *drawPage(int *p);
+	void convert(uint32_t *mask, uint8_t *pix);
+	void takeConv();
+	void copyOwed(int p, uint8_t *pix);
 	void setColours(int step);
 	void checkScreen(const uint8_t *pix);
 };
@@ -203,6 +218,8 @@ void SystemStub_030::init(const char *title, int w, int h, bool fullscreen, int 
 	memset(_page, 0, sizeof(_page));
 	memset(_owed, 0, sizeof(_owed));
 	memset(_clear, 0, sizeof(_clear));
+	memset(_now, 0, sizeof(_now));
+	memset(_conv, 0, sizeof(_conv));
 	memset(_cols, 0, sizeof(_cols));
 	_colsDirty = true;
 	_pushed = false;
@@ -256,6 +273,8 @@ void SystemStub_030::clearScreen() {
 		}
 		memset(_owed[p], 0, sizeof(_owed[p]));
 	}
+	memset(_now, 0, sizeof(_now));
+	memset(_conv, 0, sizeof(_conv));
 	_pushed = false;
 	if (g_shadow) {
 		memset(g_shadow, kSwap, kFrameW * kFrameH);
@@ -306,10 +325,12 @@ void SystemStub_030::copyRect(int x, int y, int w, int h, const uint8_t *buf, in
 	if (w <= 0 || h <= 0) {
 		return;
 	}
-	// every box of a frame is from one picture, the one the owed boxes
-	// are converted from (every caller pushes from a whole picture)
-	if (_pushed && (buf != _buf || pitch != _pitch) && g_options.logging) {
-		warning("Screen: one frame pushed from two pictures");
+	// a frame's boxes from a second picture: the first's go into the
+	// page drawn on now, before that picture can change
+	if (_pushed && (buf != _buf || pitch != _pitch)) {
+		int p;
+		takeConv();
+		convert(_conv, drawPage(&p));
 	}
 	_buf = buf;
 	_pitch = pitch;
@@ -319,9 +340,7 @@ void SystemStub_030::copyRect(int x, int y, int w, int h, const uint8_t *buf, in
 	const int g0 = x >> 4, g1 = (x + w + 15) >> 4;
 	const uint32_t m = (g1 >= 32 ? ~0UL : ((1UL << g1) - 1)) & ~((1UL << g0) - 1);
 	for (int r = y; r < y + h; ++r) {
-		_owed[0][r] |= m;
-		_owed[1][r] |= m;
-		_owed[2][r] |= m;
+		_conv[r] |= m;
 	}
 	if (g_shadow) {
 		for (int r = y; r < y + h; ++r) {
@@ -345,20 +364,30 @@ int SystemStub_030::pageIndex() {
 	return 0;
 }
 
-// What page p owes, from this frame's picture: each run of rows with
-// the same groups owed, a run of groups at a time
-void SystemStub_030::convert(int p, uint8_t *pix) {
-	uint32_t *o = _owed[p];
+// The page drawn on, cleared first if it is to be
+uint8_t *SystemStub_030::drawPage(int *p) {
+	*p = pageIndex();
+	uint8_t *pix = (uint8_t *)_screen->pixels;
+	if (_clear[*p]) {
+		memset(pix - _margin, 0, (long)_screen->stride * kFrameH);
+		_clear[*p] = false;
+	}
+	return pix;
+}
+
+// The groups a mask names, from this frame's picture, the mask cleared:
+// each run of rows with the same groups, a run of groups at a time
+void SystemStub_030::convert(uint32_t *mask, uint8_t *pix) {
 	const int stride = _screen->stride, dp = stride >> _dbl;
 	uint8_t *row0 = pix + _yOff * stride + _xOff;
 	for (int y = 0; y < _srcH; ) {
-		const uint32_t m = o[y];
+		const uint32_t m = mask[y];
 		if (m == 0) {
 			++y;
 			continue;
 		}
 		int y1 = y + 1;
-		while (y1 < _srcH && o[y1] == m) {
+		while (y1 < _srcH && mask[y1] == m) {
 			++y1;
 		}
 		for (int g = 0; g < _groups; ) {
@@ -374,9 +403,59 @@ void SystemStub_030::convert(int p, uint8_t *pix) {
 			g = g1;
 		}
 		for (int k = y; k < y1; ++k) {
-			o[k] = 0;
+			mask[k] = 0;
 		}
 		y = y1;
+	}
+}
+
+// the boxes waiting to be converted, among this frame's
+void SystemStub_030::takeConv() {
+	for (int y = 0; y < _srcH; ++y) {
+		_now[y] |= _conv[y];
+	}
+}
+
+// What page p owes from earlier frames, from the page last put up: it
+// holds the screen as it stands there, as nothing pushed it since.
+// Whole groups as longs; on a TT a row's first line, written to both of
+// its lines as the conversion writes them (a TT's replays 24.41ms a
+// frame of work, against 24.54 reading both).
+void SystemStub_030::copyOwed(int p, uint8_t *pix) {
+	const uint8_t *from = _shown;
+	if (!from || from == pix) {
+		return;
+	}
+	const int stride = _screen->stride, odd = (stride >> 1) >> 2;
+	const long off0 = (long)_yOff * stride + _xOff;
+	for (int y = 0; y < _srcH; ++y) {
+		const uint32_t m = _owed[p][y] & ~_now[y];
+		if (m == 0) {
+			continue;
+		}
+		for (int g = 0; g < _groups; ) {
+			if (!(m & (1UL << g))) {
+				++g;
+				continue;
+			}
+			int g1 = g + 1;
+			while (g1 < _groups && (m & (1UL << g1))) {
+				++g1;
+			}
+			const long off = off0 + (long)y * stride + g * 16;
+			uint32_t *d = (uint32_t *)(pix + off);
+			const uint32_t *s = (const uint32_t *)(from + off);
+			if (_dbl) {
+				for (int n = (g1 - g) * 4; --n >= 0; ++d) {
+					d[0] = d[odd] = *s++;
+				}
+			} else {
+				for (int n = (g1 - g) * 4; --n >= 0; ) {
+					*d++ = *s++;
+				}
+			}
+			g = g1;
+		}
 	}
 }
 
@@ -438,13 +517,22 @@ void SystemStub_030::updateScreen(int shakeOffset) {
 		return;
 	}
 	const uint32_t t0 = STDL_GetHz38400();
-	const int p = pageIndex();
-	uint8_t *pix = (uint8_t *)_screen->pixels;
-	if (_clear[p]) {
-		memset(pix - _margin, 0, (long)_screen->stride * kFrameH);
-		_clear[p] = false;
+	int p;
+	uint8_t *pix = drawPage(&p);
+	takeConv();
+	copyOwed(p, pix);
+	convert(_conv, pix);
+	// this frame's boxes owed by the other pages, none by this one
+	for (int q = 0; q < kMaxPages; ++q) {
+		if (q != p) {
+			uint32_t *o = _owed[q];
+			for (int y = 0; y < _srcH; ++y) {
+				o[y] |= _now[y];
+			}
+		}
 	}
-	convert(p, pix);
+	memset(_owed[p], 0, sizeof(_owed[p]));
+	memset(_now, 0, sizeof(_now));
 	if (g_shadow) {
 		checkScreen(pix);
 	}
