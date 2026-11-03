@@ -1859,7 +1859,12 @@ void Game::ST_replayDone() {
 			fclose(fp);
 		}
 	}
-	info("REPLAY push: %d.%02d ms/frame", (int)(g_repPushMs / f), (int)((g_repPushMs * 100 / f) % 100));
+	uint32_t convMs, flipMs;
+	ST_screenTimes(&convMs, &flipMs);
+	info("REPLAY push: %d.%02d ms/frame, the conversion %d.%02d, Flip %d.%02d",
+		(int)(g_repPushMs / f), (int)((g_repPushMs * 100 / f) % 100),
+		(int)(convMs / f), (int)((convMs * 100 / f) % 100),
+		(int)(flipMs / f), (int)((flipMs * 100 / f) % 100));
 #endif
 	const uint32_t sf = steadyFrames ? steadyFrames : 1;
 	info("REPLAY done: %u steps %u frames %u ms, %d.%02d ms/frame, steady %d.%02d, worst %ums, hash %08lx %s",

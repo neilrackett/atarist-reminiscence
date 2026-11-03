@@ -193,6 +193,7 @@ struct Options {
 	int ab;                // ST port, hidden: kAb* bits, each turning one optimisation off
 	int replay_dump;       // ST port, hidden: replayed frame to write out as DMP.BIN, 0 none
 	int cutscene;          // ST port, hidden: play this one cutscene (cutscene=0x34) and quit, -1 none
+	int screen_pages;      // ST port, hidden: the 030 build's display pages, 2 or 3 (0: 3)
 };
 
 // ST port: ab= in RS.CFG, for measuring an optimisation against what it

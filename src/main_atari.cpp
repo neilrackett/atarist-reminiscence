@@ -230,6 +230,9 @@ static void initOptions() {
 		// cutscene=N plays scene N (hex as 0x34) and quits: the
 		// cutscene benchmark
 		{ "cutscene", &g_options.cutscene, -1, 0xFF },
+		// screen_pages=2|3: the 030 build's display pages, to measure
+		// one against the other
+		{ "screen_pages", &g_options.screen_pages, 0, 3 },
 		{ 0, 0, 0, 0 }
 	};
 	bool screenSet = false;

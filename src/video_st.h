@@ -176,6 +176,8 @@ uint32_t ST_hwPaletteHash();
 #ifdef ATARIST_030
 // the 030 build's screen memory, hashed (cutscene replay_hash)
 uint32_t ST_screenHash();
+// the 030 build's conversion and Flip time since the last call, in ms
+void ST_screenTimes(uint32_t *convMs, uint32_t *flipMs);
 #else
 // the first of layer rows y0-223 the screen does not show as in
 // layer, or -1 (replay_hash: did the pushes leave the screen right?)

@@ -20,7 +20,7 @@ Most of `src/` is upstream's engine, changed in place under
 | `main_atari.cpp` | `main`: reads `RS.CFG` into `g_options`, finds the data |
 | `systemstub_atari.cpp`, `.h` | the platform layer both Atari builds share, on STDL: keys, joystick and pads, the clock, the machine set-up and its log lines |
 | `systemstub_stdl.cpp` | the ST build's screen on top of it: screen modes and borders, the colour remap and its quantiser (256 logical colours to 16), the copy of the layer to the screen (`copyRectPlanar`) |
-| `systemstub_030.cpp` | the 030 build's screen on top of it: sets a TT's or a Falcon's 256-colour mode and its colours through the XBIOS, and converts the chunky frame to the screen |
+| `systemstub_030.cpp` | the 030 build's screen on top of it: STDL's 256-colour responsive screen on a TT or a Falcon, the chunky frame converted into its pages, what each page still owes, the colours staged |
 | `video_st.cpp`, `video_st.h` | the planar layer the engine draws into (4 planes plus a priority plane, 256x224), its drawing primitives, room tiles and SGD backgrounds, perf counters |
 | `pagetrack.cpp`, `.h` | cutscene page tracking for both builds: the band of rows a scene draws in, and a box per page around what differs from the background, so copies and pushes move only that; the 030 build's page copies |
 | `spritecache_st.cpp` | gameplay sprites baked to planar once and kept in a RAM-sized ring |
@@ -490,34 +490,54 @@ the ST quantises them to 16.
   playing, High adds 2.6-3.6% to a TT's cutscene work and 4.8% to a
   Falcon's. A Falcon is said to have no 6258Hz DMA sound at all (a
   Falcon FAQ: that rate is its pause), which is not checked.
-- **No SDL.** The stub sets the mode and the colours through the XBIOS,
-  takes the keyboard, joystick and pads with `STDL_OpenInput` (STDL
-  without its video mode), and writes the screen itself. SDL 1.2 set
-  the mode and the colours in the first version, and cost more than
-  that was worth:
-  - 240K of its code in the binary (`FBACK030.TOS` went from 699K to
-    442K without it), and a chunky surface it allocates for its own
-    conversion, unused: 150K on a TT, 75-90K on a Falcon;
-  - start-up traps: its `Super(0)`, a toggle, meant SDL had to start
-    before `STDL_Init`; its input driver had to be turned off; and its
-    clock hung the game once STDL ran;
-  - its update got two machines wrong: on a TT, its line-doubled 320x240
-    mode put an update that does not start at the top on line y instead
-    of 2y; on a Falcon on RGB, it drew 32 pixels left of centre;
-  - on a Falcon with a graphics card (SuperVidel), it would pick a chunky
-    mode, and the planes the stub writes would be garbage there.
-- **The modes are SDL's own choices, set directly.**
-  - TT: TT Low, 320x480. The changed boxes are converted with their
-    lines doubled.
-  - Falcon: 8 bits, with the desktop's PAL and VGA bits. On VGA, 320x240,
-    the VIDEL doubling the lines. On RGB or a TV, 240 lines take
-    overscan, so the line is 384 wide, with the picture centred in it.
-  - A mono monitor gets a message (TT High on a TT).
-- **The desktop comes back at exit** (`atexit`, so an `error()` exit
-  restores it too): screen, mode, and the palette registers copied
-  directly. `VgetRGB` read all black under TOS 4.04's desktop, which sets
-  its colours through the VDI, so restoring through it left the desktop
-  black.
+- **The screen is STDL's** (`STDL_UseResponsive(COLOUR | HEIGHT)`,
+  `stdl_responsive.h`), since November 2026: 320x240 in 8 interleaved
+  planes, the display's own layout. It does what the stub had done
+  itself through the XBIOS, and more:
+  - the mode: TT Low, 480 lines, on a TT; on a Falcon 8 bits on VGA
+    (320x240, the VIDEL doubling the lines) or on RGB and a TV (240
+    lines in overscan, a 384-pixel line with the picture centred, PAL
+    or NTSC as the desktop had it). A mono monitor, TT High on a TT,
+    is refused with a message;
+  - two or three pages in ST-RAM, the 256 colours, the VBL rate
+    measured after the mode set, and the keyboard and pads with the
+    mode (`STDL_OpenInput`, which STDL v1.18.0 added for this build, is
+    no longer called);
+  - the desktop back at every exit: `error()`, `exit()` and a crash,
+    through GEMDOS's terminate vector, where the stub's `atexit` missed
+    the last. Its colours are copied from the registers, as the stub
+    did: `VgetRGB` read all black under TOS 4.04's desktop.
+
+  The stub kept the conversion and the picture's place: the screen's
+  memory is byte for byte what the stub's own screen held. Before
+  that, SDL 1.2 set the mode and the colours in the first version, and
+  cost more than that was worth: 240K of code (699K against 442K), a
+  75-150K chunky surface it never used, start-up traps (its `Super(0)`
+  toggle, its input driver, its clock), updates wrong on two machines
+  (a TT's doubled 320x240 put a box not at the top on line y rather
+  than 2y; a Falcon on RGB drew 32 pixels left of centre), and a chunky
+  mode on a Falcon with a SuperVidel, where planes would be garbage.
+- **Each page owes what was pushed since it was last drawn on.** The
+  engine pushes boxes as if to one screen that keeps them all. The stub
+  keeps a mask of 16-pixel groups a row for each page, ORs every pushed
+  box into all of them, and converts the page drawn on where its mask
+  says, from this frame's picture. As one screen was right for every
+  caller, a frame's picture is the one k frames before outside the
+  boxes pushed since, and so each page is right. A frame that pushes
+  nothing does not flip. `kBlockDirty` = 2 is no help here: it pushes a
+  block on the frame after it was drawn on too, for the erase after a
+  sprite moves, and with two pages a sprite drawn once would come back
+  every other frame (traced, not built). On a TT the conversion writes both of a row's
+  lines itself, half the stride apart, and reports nothing, so Flip
+  has nothing to copy: STDL's present copies one box a page round
+  everything reported, and gameplay's scattered boxes would have made
+  that most of the screen.
+- **The colours are staged** (`STDL_StagePalette`): set just before
+  Flip, they are written in the blank that shows that page, so a new
+  room's picture never goes up in the old colours or the old in the
+  new. STDL's 8-plane screen wrote them at once until this build asked
+  for that (STDL `1fc5843`), and its voices now write them before they
+  mix. A fade is colours alone: each step lands in the next blank.
 - **Register 0 is black everywhere.** It is also the colour of the
   border round the screen memory, which nothing drawn can reach (a
   Falcon's on RGB), and the game's colour 0 is a room's background, so
@@ -580,9 +600,6 @@ the ST quantises them to 16.
   `sin`/`cos` differed from the table in one frame of 0x2F. The table is
   the formula in double precision, which the ST and desktop builds use,
   so that frame is now drawn as they draw it.
-- **`STDL_OpenInput` came with STDL v1.18.0**, for this build: STDL
-  took the keyboard only in `STDL_SetVideoMode`, and the stub had been
-  calling the library's internal `stdl_events_install()`.
 
 **Measured** in Hatari (`--mmu off`, 4MB, no TT-RAM; a TT at 32MHz with
 TOS 3.06, a Falcon at 16MHz with TOS 4.04 and VGA), cutscenes as their
@@ -641,6 +658,39 @@ Falcon.
   updated from the top (42.4ms, 84%); SDL's routine fed the layers
   directly, which cannot do the XOR (16.4ms, 66%).
 
+**On STDL's screen** (November 2026, three pages; against the XBIOS
+stub on the same STDL, in Hatari as above):
+- **Correctness:** every replay put up what the XBIOS stub put up, frame
+  for frame, the page and its colours (`SHASH.BIN`), on a TT and on a
+  Falcon on VGA and RGB, with two pages and with three; the screen
+  check agreed at every flip. So did every scene of the cutscene bench,
+  the credits to their end (`CUTHASH.BIN`, `CUTPAL.BIN`): 5,825 frames
+  on each machine, with two pages and with three.
+- **In play** (the ten replays, which are not paced; Flip's wait taken
+  out): a frame's work went from 23.03 to 23.64ms on a TT (+2.6%) and
+  from 44.18 to 45.61 on a Falcon on VGA (+3.2%); l1r26 16.4 to 17.0
+  and 31.7 to 33.2. A page drawn three frames ago must erase what that
+  frame drew too, so each page converts four frames' boxes where the
+  one screen converted two. Flip waited 1.1ms a frame on a TT and 0.2 on
+  a Falcon. With two pages it waits for the VBL that shows its page:
+  31.85 and 53.87ms a frame with the wait, which in play would hold a
+  Falcon's frame to three VBLs at 60Hz, past the 30Hz step.
+- **Cutscenes** (eight of the bench's scenes, the credits left out):
+  - work, music off and every frame drawn, up 8.6% on a TT and 7.9% on
+    a Falcon on VGA (two pages: 40% and 22%);
+  - frames shown with the player's settings, TT 99.1% to 98.9%, Falcon
+    on VGA 90.7% to 88.4% (two pages: 98.2% and 84.8%). Level 1's
+    opening on a Falcon showed 38 of its 50 frames, against 43.
+- **Memory:** the largest free block at a level's load went from 1,633K
+  to 1,304K on a TT (4MB, no TT-RAM) and from 1,800K to 1,622K on a
+  Falcon on VGA, the pages' ST-RAM; the bank arena kept its 384K and no
+  room took longer to enter. `FBACK030.TOS` went from 452,136 bytes to
+  480,901, STDL's 256-colour code about 25K of it.
+- **What it bought:** no tearing (the stub converted into the screen
+  being shown), colours that change with their picture, the desktop
+  back after a crash, the display's rate measured, and the mode set,
+  desktop and registers no longer the port's code.
+
 **Testing it:**
 - Run Hatari's TT with `--mmu off`. With the MMU and the data cache
   both emulated, the emulator falls to half real time once the game
@@ -652,9 +702,26 @@ Falcon.
   as a TT or Falcon. `tools/bench/` boots TOS 2.06 on an ST: a TT or
   Falcon run needs its TOS, `MACHINE=tt` or `falcon`, and the 030
   binary.
+- **Pictures in play:** with `replay_hash=true` a replay writes the
+  page each frame put up, hashed with the colours as the registers got
+  them, into `SHASH.BIN` (a pair of longs a frame), beside the layer's
+  `FHASH.BIN`. The layer's hash cannot see a box the push left out, nor
+  a page a frame behind. The stub also keeps a chunky model of the one
+  screen the engine pushes to, and compares it, converted, with every
+  page before it goes up: "SCREEN check" in `RS.LOG` at exit, cutscenes
+  and menus included.
+  - `tmp/tt/r030.sh TAG tt|fv|fr PROG SCENARIO...` runs the replays (a
+    Falcon on VGA or on RGB with a PAL desktop, through its NVRAM in a
+    `HOME` of its own), and `tmp/tt/shcmp.py TAG REF MACH SCENARIO...`
+    compares two runs frame by frame.
+  - Tested by breaking it: every page's owed boxes dropped after each
+    conversion left 560 of l1r26's 638 frames unlike the reference, and
+    the screen check flagged the same 560 flips.
 - **Cutscene pictures:** with `replay_hash=true` the 030 build hashes
   the screen memory after each frame into `CUTHASH.BIN`, and the
-  colours into `CUTPAL.BIN`.
+  colours into `CUTPAL.BIN`. `tmp/tt/c030.sh` runs scenes as `r030.sh`
+  runs replays, and `tmp/tt/cutsum.py MACH TAG...` tabulates their work
+  and frames shown.
   - The reference for a change is the same binary with the change
     switched off (`ab=0x400000` for the tracking), or the binary before
     it, as the stub has no planar page to compare.
@@ -667,8 +734,9 @@ Falcon.
     differed; a glyph that did not touch its page, and voyage's text
     frame differed.
 - Hatari's 68030 timing is approximate: the figures above are
-  estimates until a TT and a Falcon run it. Neil has neither yet, so
-  for now this build is tested in Hatari only.
+  estimates until a TT and a Falcon run it. Neil is setting up a TT
+  (November 2026) and has no Falcon, so a Falcon's figures stay
+  Hatari's.
 
 **Not done, or not known yet:**
 - The Falcon's heaviest cutscenes still drop frames: level 4's second
@@ -680,8 +748,11 @@ Falcon.
   own Hatari TT ran the game with TT-RAM, so this is the emulator's
   settings. The binary loads into alt-RAM and allocates from it (header
   flags 7).
-- STDL's voices assume 50Hz on a TT and a Falcon. The VBL rate in
-  their modes, and the music's pace there, are not measured.
+- The music's pace on the machines. STDL measures the VBL rate after
+  the mode set and holds the voices' tick, the music and the effects to
+  50 a second by it (v1.19.0): Hatari gives 60 on a TT and a Falcon on
+  VGA, and RGB at the desktop's PAL or NTSC. A real TT is to say what
+  its TT Low runs at.
 - Left out with the planar picture: `palette_custom`, and the screen
   modes and refresh rate (Options offers neither). The splash is the same picture,
   decoded to chunky pixels and shown through the stub. The `log_fps` and
@@ -689,10 +760,9 @@ Falcon.
 
 **Considered and set aside:**
 - A TT Low driver in STDL, a chunky surface it converts to 8 planes:
-  one library owning the machine, but it widens STDL beyond its stated
-  target of the ST, STE and Mega STE. The port's stub sets the two
-  machines' modes in a few XBIOS calls, and STDL gives it the input
-  alone (`STDL_OpenInput`).
+  STDL stays planar. It got responsive screens instead (v1.20.0), 8
+  interleaved planes on a TT or a Falcon, which this build now draws
+  into with its own conversion.
 - Widening the port's planar path to 8 planes: every kernel hard-codes
   4 planes and the 128-byte stride, and a 68030 needs none of what that
   path was built for.

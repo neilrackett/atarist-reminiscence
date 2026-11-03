@@ -4,27 +4,28 @@
  * Atari ST port Copyright (C) 2026 Neil Rackett
  *
  * The 030 build's platform layer (FBACK030.TOS). A TT or a Falcon shows
- * upstream's 256x224 chunky picture in 256 colours, the mode and the
- * colours set through the XBIOS here. The keyboard, joystick and pads,
- * the clock, the sound and the machine set-up are the ST build's,
- * shared (systemstub_atari.h).
+ * upstream's 256x224 chunky picture in 256 colours on STDL's responsive
+ * screen (stdl_responsive.h): 320x240 in 8 interleaved planes, TT Low on
+ * a TT, a Falcon's 8-bit mode on VGA, RGB or a TV, with its desktop back
+ * at every exit, a crash's included. The keyboard, joystick and pads,
+ * the clock, the sound and the machine set-up are the ST build's, shared
+ * (systemstub_atari.h).
  *
- * The modes are the ones SDL 1.2's XBIOS driver picks for 320x240,
- * which this build used until the stub converted the picture itself
- * and SDL was left setting the mode and the colours. That took 240K of
- * its code into the binary, and a 75-150K chunky surface it allocates
- * for its own conversion, unused, and SDL could choose a mode the
- * conversion does not write (a chunky one on a graphics card):
- *  - A TT's 256-colour mode, TT Low, is 480 lines. Each row of the
- *    picture is converted once and written to two lines. (SDL's 320x240
- *    mode doubles them too, but puts an update that does not start at
- *    the top at line y rather than 2y.)
- *  - A Falcon on VGA has 320x240, its lines doubled by the VIDEL. On an
- *    RGB monitor or a TV, 240 lines take overscan, 384 pixels wide; the
- *    picture is centred in the line. The PAL and VGA bits come from the
- *    desktop's mode.
- * The desktop's mode, screen and colours go back at exit (atexit, so an
- * error's exit puts them back too).
+ * The screen has three pages, or two (screen_pages=2, or where the
+ * third does not fit), and each keeps its own picture. The engine pushes boxes of its picture as if to one
+ * screen that keeps them all, so each page owes every box pushed since
+ * it was last drawn on: a mask of 16-pixel groups a row, ORed into
+ * every page's at each push, the page drawn on converted where its
+ * mask says, from the picture of this frame's pushes. As one screen
+ * was right, a frame's picture is the one k frames before outside the
+ * boxes pushed since, whatever the caller, and so is the page's. A
+ * frame that pushes nothing does not flip.
+ *
+ * Each box is converted straight into the page (c2p_030.h): on a TT
+ * both of a row's lines, half the stride apart, so Flip has nothing to
+ * copy; on a Falcon the page is the display. Rows and placement are as
+ * the 030 build's own screen had them, so the screen's memory is the
+ * same, byte for byte.
  *
  * Register 0 is black, everywhere. It is the colour of the border round
  * the screen memory, which nothing drawn can reach (a Falcon's on an RGB
@@ -34,12 +35,14 @@
  * registers permuted to match, which moves colour 0 to register kSwap
  * and leaves register 0 for slot 7's first entry, which the Amiga data
  * never loads or draws in (Video::AMIGA_setLevelPalettes); it is held
- * black. The frame round the picture is register 0 too.
+ * black. The frame round the picture is register 0 too. The colours are
+ * staged (STDL_StagePalette), set just before Flip, so each set is shown
+ * with the page it came with.
  */
 
-#include <mint/cookie.h>
-#include <mint/falcon.h>
-#include <mint/osbind.h>
+extern "C" {
+#include <stdl/stdl_responsive.h>
+}
 #include "systemstub_atari.h"
 #include "util.h"
 #include "video_st.h"
@@ -48,9 +51,7 @@
 enum {
 	kFrameW = 320,
 	kFrameH = 240,
-	// a frame's dirty runs, one per band of eight rows: more than this
-	// and those so far go up there and then
-	kMaxRects = 64,
+	kMaxPages = 3,
 	// what every pixel is XORed with on its way to the screen (see the
 	// top of the file): colour 0 to register 0x70, slot 7 to 0-15. The
 	// conversion has it built in (c2p_030.h).
@@ -58,31 +59,30 @@ enum {
 };
 
 struct SystemStub_030 : SystemStub_Atari {
-	// A box the engine handed over, waiting for updateScreen: the
-	// engine's own pixels, read when the colours are in. Every caller
-	// updates the screen before it touches that buffer again.
-	struct Pending {
-		const uint8_t *src;
-		uint8_t *dst;
-		int pitch;
-		int groups, h;
-	};
 	int _srcW, _srcH;          // the picture the engine sends
-	bool _tt;                  // a TT, else a Falcon
-	uint8_t *_screen;          // the planar screen, ours
-	int _frameW;               // its width: a line's bytes, 384 on a Falcon's RGB mode
-	int _dbl;                  // 1 when a frame row is two lines (a TT)
+	int _groups;               // its width in 16-pixel groups
+	STDL_Surface *_screen;     // STDL's; its pixels the page drawn on
+	int _dbl;                  // 1 on a TT: the conversion writes both of a row's lines
+	int _margin;               // bytes of a line before the picture (a Falcon's overscan)
 	Color _cols[256];          // what the engine asked for
-	bool _colsDirty;           // not yet in the registers
-	int _xOff, _yOff;          // the picture's place in the frame
-	Pending _pending[kMaxRects];
-	int _numPending;
-	// what goes to the XBIOS: a TT's 12-bit words, a Falcon's 0x00RRGGBB
-	// longs; kept, as either may be read at the next VBL
+	bool _colsDirty;           // not yet staged
+	int _xOff, _yOff;          // the picture's place on the screen
+	// The pages, as each is first drawn on, and what each owes.
+	uint8_t *_page[kMaxPages];
+	uint32_t _owed[kMaxPages][kFrameH];
+	bool _clear[kMaxPages];
+	const uint8_t *_buf;       // the picture this frame's boxes come from
+	int _pitch;
+	bool _pushed;
+	uint8_t *_shown;           // the page Flip was last handed
+	// the colours as the registers get them: a TT's 12-bit words, a
+	// Falcon's 0x00RRGGBB, as this build's own screen wrote them, for
+	// ST_hwPaletteHash
 	union {
 		uint16_t tt[256];
 		uint32_t f30[256];
 	} _hw;
+	bool _tt;
 
 	virtual void init(const char *title, int w, int h, bool fullscreen, int widescreenMode, bool maximized, const ScalerParameters *scalerParameters, int outputRate);
 	virtual void destroy();
@@ -98,10 +98,11 @@ struct SystemStub_030 : SystemStub_Atari {
 	virtual void fadeScreen();
 	virtual void updateScreen(int shakeOffset);
 
-	void setMode();
 	void clearScreen();
-	void show();
+	int pageIndex();
+	void convert(int p, uint8_t *pix);
 	void setColours(int step);
+	void checkScreen(const uint8_t *pix);
 };
 
 static SystemStub_030 *g_stub;
@@ -109,56 +110,6 @@ static SystemStub_030 *g_stub;
 SystemStub *SystemStub_030_create() {
 	g_stub = new SystemStub_030();
 	return g_stub;
-}
-
-// The palette registers: a TT's 256 (its ST modes show a bank of them),
-// a Falcon's 256 and the 16 its ST-compatible modes show
-static volatile uint16_t *const kTTPal = (volatile uint16_t *)0xFF8400L;
-static volatile uint32_t *const kF30Pal = (volatile uint32_t *)0xFF9800L;
-static volatile uint16_t *const kSTPal = (volatile uint16_t *)0xFF8240L;
-
-// The desktop's screen, mode and colours, put back at exit. The colours
-// are copied from the registers, which the program reaches in supervisor
-// mode (STDL's, from initMachine until it quits): on a Falcon with TOS
-// 4.04 VgetRGB read all black under a desktop that had set its colours
-// through the VDI, and putting that back left the desktop black (Hatari).
-static struct {
-	bool saved;
-	bool tt;
-	void *log, *phys;
-	int16_t mode;              // a TT's Getrez, a Falcon's mode word
-	uint16_t st[16];
-	union {
-		uint16_t tt[256];
-		uint32_t f30[256];
-	} pal;
-} g_desk;
-
-static void restoreDesktop() {
-	if (!g_desk.saved) {
-		return;
-	}
-	g_desk.saved = false;
-	if (g_desk.tt) {
-		(void)Setscreen(g_desk.log, g_desk.phys, g_desk.mode);
-	} else {
-		(void)Setscreen(g_desk.log, g_desk.phys, -1);
-		(void)VsetMode(g_desk.mode);
-	}
-	// after the VBL, which lands any colours the XBIOS still holds for it
-	Vsync();
-	for (int i = 0; i < 256; ++i) {
-		if (g_desk.tt) {
-			kTTPal[i] = g_desk.pal.tt[i];
-		} else {
-			kF30Pal[i] = g_desk.pal.f30[i];
-		}
-	}
-	if (!g_desk.tt) {
-		for (int i = 0; i < 16; ++i) {
-			kSTPal[i] = g_desk.st[i];
-		}
-	}
 }
 
 // With logging on: the conversion's assembler against its C twin on
@@ -199,99 +150,84 @@ static void checkPlanes() {
 	}
 }
 
+// replay_hash: every page, before it goes up, against a chunky model of
+// the one screen the engine pushed to, converted (C twin) as a page
+static uint8_t *g_shadow;              // 320x240, a byte a pixel
+static uint8_t *g_shadowPage;          // the model converted
+static uint32_t g_scrFlips, g_scrBad, g_scrBadFlip;
+static int g_scrBadRow;
+
+// Flip's time, the conversion's apart, in 1/38400s (STDL_GetHz38400)
+static uint32_t g_flipTicks, g_convTicks;
+
 void SystemStub_030::init(const char *title, int w, int h, bool fullscreen, int widescreenMode, bool maximized, const ScalerParameters *scalerParameters, int outputRate) {
 	initMachine();
-	// STDL takes the keyboard when it sets a mode, which this build
-	// leaves to setMode; this takes it without one
-	if (STDL_OpenInput() < 0) {
-		error("STDL_OpenInput failed: %s", STDL_GetError());
-	}
 	logMachine();
-	setMode();
+	_tt = STDL_GetMachineInfo()->is_tt;
+	// 320x240 in 256 colours, on a TT or a Falcon; STDL takes the
+	// keyboard with the mode, and puts the desktop back at any exit
+	STDL_UseResponsive(STDL_RESPONSIVE_COLOUR | STDL_RESPONSIVE_HEIGHT);
+	// Three pages unless screen_pages=2: with two, Flip waits for the
+	// VBL that shows its page, and a 60Hz display holds a frame of a
+	// Falcon's 45ms to three VBLs, 50ms, past the 30Hz step's deadline
+	// (a replay ran at 53.9ms a frame against 45.6 with three). STDL
+	// gives two where the third page does not fit.
+	const bool three = g_options.screen_pages != 2;
+	_screen = STDL_SetVideoMode(kFrameW, kFrameH, 8, three ? STDL_TRIPLEBUF : STDL_DOUBLEBUF);
+	if (!_screen || _screen->format->BitsPerPixel != 8 || _screen->h != kFrameH) {
+		error("FBACK030.TOS needs a TT or a Falcon with a colour monitor: %s", STDL_GetError());
+	}
+	if (three && !(_screen->flags & STDL_TRIPLEBUF)) {
+		warning("Screen: two pages, %s", STDL_GetError());
+	}
+	if (STDL_StagePalette(1) != 0) {
+		warning("Screen: colours not staged, %s", STDL_GetError());
+	}
+	// a TT's stride is two display lines; a Falcon's overscan line has
+	// the picture 32 bytes in
+	_dbl = (_screen->stride == 2 * kFrameW) ? 1 : 0;
+	_margin = (_screen->stride == 384) ? 32 : 0;
 	if (g_options.logging) {
-		info("Screen: %s, %d pixels a line, %d lines%s", _tt ? "TT Low" : "Falcon, 8 bits", _frameW,
-			kFrameH << _dbl, _dbl ? ", rows doubled" : "");
+		info("Screen: %s, %d bytes a line, %d pages%s", _tt ? "TT Low" : "Falcon, 8 bits", _screen->stride >> _dbl,
+			(_screen->flags & STDL_TRIPLEBUF) ? 3 : 2, _dbl ? ", rows doubled" : "");
 		checkPlanes();
 	}
+	if (g_options.replay_hash) {
+		g_shadow = (uint8_t *)malloc(kFrameW * kFrameH);
+		g_shadowPage = (uint8_t *)malloc(_screen->stride * kFrameH);
+		if (!g_shadow || !g_shadowPage) {
+			error("No memory for the screen check");
+		}
+		memset(g_shadow, kSwap, kFrameW * kFrameH);
+	}
+	memset(_page, 0, sizeof(_page));
+	memset(_owed, 0, sizeof(_owed));
+	memset(_clear, 0, sizeof(_clear));
 	memset(_cols, 0, sizeof(_cols));
 	_colsDirty = true;
-	_numPending = 0;
+	_pushed = false;
+	_buf = 0;
+	_shown = 0;
 	_srcW = _srcH = 0;
 	setScreenSize(w, h);
 	initJoystick();
 }
 
-void SystemStub_030::setMode() {
-	long mch = 0;
-	if (Getcookie(C__MCH, &mch) != C_FOUND) {
-		mch = 0;
-	}
-	_tt = ((mch >> 16) == 2);
-	g_desk.tt = _tt;
-	g_desk.log = Logbase();
-	g_desk.phys = Physbase();
-	int16_t mode;
-	if (_tt) {
-		// TT High is the only mode a TT's mono monitor shows; its colour
-		// monitor shows every other, ST High included
-		g_desk.mode = Getrez();
-		if (g_desk.mode == (TT_HIGH >> 8)) {
-			error("FBACK030.TOS needs a colour monitor");
-		}
-		for (int i = 0; i < 256; ++i) {
-			g_desk.pal.tt[i] = kTTPal[i];
-		}
-		mode = TT_LOW >> 8;
-		_frameW = kFrameW;
-		_dbl = 1;
-	} else {
-		const int16_t mon = VgetMonitor();
-		if (mon == MON_MONO) {
-			error("FBACK030.TOS needs a colour monitor");
-		}
-		g_desk.mode = VsetMode(-1);
-		for (int i = 0; i < 256; ++i) {
-			g_desk.pal.f30[i] = kF30Pal[i];
-		}
-		for (int i = 0; i < 16; ++i) {
-			g_desk.st[i] = kSTPal[i];
-		}
-		mode = (int16_t)(BPS8 | COL40 | (g_desk.mode & (VGA | PAL)) | (mon == MON_VGA ? VERTFLAG : OVERSCAN));
-		_frameW = (mode & OVERSCAN) ? 384 : kFrameW;
-		_dbl = 0;
-	}
-	// ST-RAM, which the video sees, on a 256-byte boundary
-	const long size = (long)_frameW * (kFrameH << _dbl);
-	const long mem = Mxalloc(size + 255, 0);
-	if (mem <= 0) {
-		error("No room in ST-RAM for the screen (%ldK)", size >> 10);
-	}
-	_screen = (uint8_t *)((mem + 255) & ~255L);
-	memset(_screen, 0, size);
-	g_desk.saved = true;
-	atexit(restoreDesktop);
-	// A TT changes mode with the screen, and the console moves to it; a
-	// Falcon's VsetMode leaves the console on the desktop's screen.
-	// Nothing prints (util.cpp's diagnostics go to RS.LOG), and the
-	// console's cursor goes off.
-	if (_tt) {
-		(void)Setscreen(_screen, _screen, mode);
-	} else {
-		(void)Setscreen(-1L, _screen, -1);
-		(void)VsetMode(mode);
-	}
-	(void)Cconws("\033f");
-	Vsync();
-}
-
 void SystemStub_030::destroy() {
-	restoreDesktop();
+	if (g_options.replay_hash) {
+		if (g_scrBad == 0) {
+			info("SCREEN check: %u flips, every page as its pushes", (unsigned)g_scrFlips);
+		} else {
+			info("SCREEN check: %u of %u flips unlike their pushes, the first %u at row %d",
+				(unsigned)g_scrBad, (unsigned)g_scrFlips, (unsigned)g_scrBadFlip, g_scrBadRow);
+		}
+	}
 	STDL_Quit();
 }
 
 void SystemStub_030::setScreenSize(int w, int h) {
-	if (w > _frameW) {
-		w = _frameW;
+	if (w > kFrameW) {
+		w = kFrameW;
 	}
 	if (h > kFrameH) {
 		h = kFrameH;
@@ -299,18 +235,31 @@ void SystemStub_030::setScreenSize(int w, int h) {
 	if (w != _srcW || h != _srcH) {
 		_srcW = w;
 		_srcH = h;
+		_groups = w >> 4;
 		// whole groups: the picture's 16-pixel groups are the screen's
-		_xOff = ((_frameW - w) / 2) & ~15;
+		_xOff = ((kFrameW - w) / 2) & ~15;
 		_yOff = (kFrameH - h) / 2;
 		clearScreen();
 	}
 }
 
 // Register 0 everywhere: the frame round the picture, and the picture
-// until the engine sends it
+// until the engine sends it. The page up now goes at once, as the one
+// screen did; the others when next drawn on.
 void SystemStub_030::clearScreen() {
-	memset(_screen, 0, _frameW * (kFrameH << _dbl));
-	_numPending = 0;
+	for (int p = 0; p < kMaxPages; ++p) {
+		if (_page[p] && _page[p] == _shown) {
+			memset(_shown - _margin, 0, (long)_screen->stride * kFrameH);
+			_clear[p] = false;
+		} else {
+			_clear[p] = true;
+		}
+		memset(_owed[p], 0, sizeof(_owed[p]));
+	}
+	_pushed = false;
+	if (g_shadow) {
+		memset(g_shadow, kSwap, kFrameW * kFrameH);
+	}
 }
 
 void SystemStub_030::setPalette(const uint8_t *pal, int n) {
@@ -357,58 +306,159 @@ void SystemStub_030::copyRect(int x, int y, int w, int h, const uint8_t *buf, in
 	if (w <= 0 || h <= 0) {
 		return;
 	}
-	if (_numPending == kMaxRects) {
-		show();
+	// every box of a frame is from one picture, the one the owed boxes
+	// are converted from (every caller pushes from a whole picture)
+	if (_pushed && (buf != _buf || pitch != _pitch) && g_options.logging) {
+		warning("Screen: one frame pushed from two pictures");
 	}
+	_buf = buf;
+	_pitch = pitch;
+	_pushed = true;
 	// the groups the box touches: the picture's width is whole groups
-	// and its place in the frame is on one, so they are the source's too
-	const int x0 = x & ~15;
-	const int x1 = (x + w + 15) & ~15;
-	Pending &p = _pending[_numPending++];
-	p.src = buf + y * pitch + x0;
-	p.dst = _screen + ((_yOff + y) << _dbl) * _frameW + _xOff + x0;
-	p.pitch = pitch;
-	p.groups = (x1 - x0) >> 4;
-	p.h = h;
+	// and its place on the screen is on one, so they are the source's too
+	const int g0 = x >> 4, g1 = (x + w + 15) >> 4;
+	const uint32_t m = (g1 >= 32 ? ~0UL : ((1UL << g1) - 1)) & ~((1UL << g0) - 1);
+	for (int r = y; r < y + h; ++r) {
+		_owed[0][r] |= m;
+		_owed[1][r] |= m;
+		_owed[2][r] |= m;
+	}
+	if (g_shadow) {
+		for (int r = y; r < y + h; ++r) {
+			memcpy(g_shadow + (_yOff + r) * kFrameW + _xOff + g0 * 16, buf + r * pitch + g0 * 16, (g1 - g0) * 16);
+		}
+	}
 }
 
-// The colours, then what changed, so a new picture never goes up in
-// the old colours
-void SystemStub_030::show() {
+// the slot of the page drawn on, learnt as each comes round
+int SystemStub_030::pageIndex() {
+	uint8_t *pix = (uint8_t *)_screen->pixels;
+	for (int p = 0; p < kMaxPages; ++p) {
+		if (_page[p] == pix) {
+			return p;
+		}
+		if (!_page[p]) {
+			_page[p] = pix;
+			return p;
+		}
+	}
+	return 0;
+}
+
+// What page p owes, from this frame's picture: each run of rows with
+// the same groups owed, a run of groups at a time
+void SystemStub_030::convert(int p, uint8_t *pix) {
+	uint32_t *o = _owed[p];
+	const int stride = _screen->stride, dp = stride >> _dbl;
+	uint8_t *row0 = pix + _yOff * stride + _xOff;
+	for (int y = 0; y < _srcH; ) {
+		const uint32_t m = o[y];
+		if (m == 0) {
+			++y;
+			continue;
+		}
+		int y1 = y + 1;
+		while (y1 < _srcH && o[y1] == m) {
+			++y1;
+		}
+		for (int g = 0; g < _groups; ) {
+			if (!(m & (1UL << g))) {
+				++g;
+				continue;
+			}
+			int g1 = g + 1;
+			while (g1 < _groups && (m & (1UL << g1))) {
+				++g1;
+			}
+			c2p8(_buf + y * _pitch + g * 16, _pitch, row0 + y * stride + g * 16, dp, g1 - g, y1 - y, _dbl);
+			g = g1;
+		}
+		for (int k = y; k < y1; ++k) {
+			o[k] = 0;
+		}
+		y = y1;
+	}
+}
+
+// The engine's colours, staged for the next blank: permuted as the
+// pixels are (kSwap), register 0 black, scaled by step eighths. A TT's
+// registers take 4 bits a gun, a Falcon's 6.
+void SystemStub_030::setColours(int step) {
+	STDL_Colour c[256];
+	for (int i = 0; i < 256; ++i) {
+		const Color &s = _cols[i ^ kSwap];
+		c[i].r = (uint8_t)(s.r * step >> 3);
+		c[i].g = (uint8_t)(s.g * step >> 3);
+		c[i].b = (uint8_t)(s.b * step >> 3);
+		c[i].unused = 0;
+		if (_tt) {
+			_hw.tt[i] = (uint16_t)(((s.r * step >> 7) << 8) | ((s.g * step >> 7) << 4) | (s.b * step >> 7));
+		} else {
+			_hw.f30[i] = ((uint32_t)c[i].r << 16) | ((uint32_t)c[i].g << 8) | c[i].b;
+		}
+	}
+	c[0].r = c[0].g = c[0].b = 0;
+	if (_tt) {
+		_hw.tt[0] = 0;
+	} else {
+		_hw.f30[0] = 0;
+	}
+	STDL_SetColours(_screen, c, 0, 256);
+}
+
+// replay_hash: the page about to go up against the model of the screen
+void SystemStub_030::checkScreen(const uint8_t *pix) {
+	const int stride = _screen->stride;
+	memset(g_shadowPage, 0, (long)stride * kFrameH);
+	if (_dbl) {
+		c2p8rowsC<1>(g_shadow, kFrameW, g_shadowPage, stride >> 1, kFrameW >> 4, kFrameH);
+	} else {
+		c2p8rowsC<0>(g_shadow, kFrameW, g_shadowPage + _margin, stride, kFrameW >> 4, kFrameH);
+	}
+	const uint8_t *page = pix - _margin;
+	for (int y = 0; y < kFrameH; ++y) {
+		if (memcmp(page + (long)y * stride, g_shadowPage + (long)y * stride, stride) != 0) {
+			if (g_scrBad++ == 0) {
+				g_scrBadFlip = g_scrFlips;
+				g_scrBadRow = y;
+			}
+			break;
+		}
+	}
+	++g_scrFlips;
+}
+
+void SystemStub_030::updateScreen(int shakeOffset) {
+	if (!_pushed) {
+		// the colours alone, on the page up now: staged, the next blank
+		if (_colsDirty) {
+			setColours(8);
+			_colsDirty = false;
+		}
+		return;
+	}
+	const uint32_t t0 = STDL_GetHz38400();
+	const int p = pageIndex();
+	uint8_t *pix = (uint8_t *)_screen->pixels;
+	if (_clear[p]) {
+		memset(pix - _margin, 0, (long)_screen->stride * kFrameH);
+		_clear[p] = false;
+	}
+	convert(p, pix);
+	if (g_shadow) {
+		checkScreen(pix);
+	}
+	// set just before Flip, staged: shown with this page
 	if (_colsDirty) {
 		setColours(8);
 		_colsDirty = false;
 	}
-	for (int i = 0; i < _numPending; ++i) {
-		const Pending &p = _pending[i];
-		c2p8(p.src, p.pitch, p.dst, _frameW, p.groups, p.h, _dbl);
-	}
-	_numPending = 0;
-}
-
-// The engine's colours into the registers: permuted as the pixels are
-// (kSwap), register 0 black, scaled by step eighths. A TT's are 4 bits a
-// gun, a Falcon's 6, given to the XBIOS as 8.
-void SystemStub_030::setColours(int step) {
-	if (_tt) {
-		for (int i = 0; i < 256; ++i) {
-			const Color &c = _cols[i ^ kSwap];
-			_hw.tt[i] = (uint16_t)(((c.r * step >> 7) << 8) | ((c.g * step >> 7) << 4) | (c.b * step >> 7));
-		}
-		_hw.tt[0] = 0;
-		EsetPalette(0, 256, _hw.tt);
-	} else {
-		for (int i = 0; i < 256; ++i) {
-			const Color &c = _cols[i ^ kSwap];
-			_hw.f30[i] = ((uint32_t)(c.r * step >> 3) << 16) | ((c.g * step >> 3) << 8) | (c.b * step >> 3);
-		}
-		_hw.f30[0] = 0;
-		VsetRGB(0, 256, _hw.f30);
-	}
-}
-
-void SystemStub_030::updateScreen(int shakeOffset) {
-	show();
+	const uint32_t t1 = STDL_GetHz38400();
+	_pushed = false;
+	_shown = pix;
+	STDL_Flip();
+	g_convTicks += t1 - t0;
+	g_flipTicks += STDL_GetHz38400() - t1;
 }
 
 // Fade to black on the palette alone, as the ST does: the next
@@ -434,13 +484,17 @@ void ST_perfFormat(const STPerf &p, char *buf, int len) {
 		(unsigned)p.bankLoads, (unsigned)p.bankClears, (unsigned long)(p.bankBytes >> 10));
 }
 
-// What a cutscene frame put up (replay_hash, Cutscene::updateScreen):
-// the screen memory as converted, and the colours as the registers got
-// them, folded h * 33 + each long as the ST build's page hash is
+// What a frame put up (replay_hash, Cutscene::updateScreen and the
+// replays): the page Flip was last handed, the whole of its memory, and
+// the colours as the registers got them, folded h * 33 + each long as
+// the ST build's page hash is
 uint32_t ST_screenHash() {
-	const uint32_t *p = (const uint32_t *)g_stub->_screen;
+	if (!g_stub->_shown) {
+		return 0;
+	}
+	const uint32_t *p = (const uint32_t *)(g_stub->_shown - g_stub->_margin);
 	uint32_t h = 0x811C9DC5;
-	for (long n = (long)g_stub->_frameW * (kFrameH << g_stub->_dbl) / 4; --n >= 0; ) {
+	for (long n = (long)g_stub->_screen->stride * kFrameH / 4; --n >= 0; ) {
 		h = (h << 5) + h + *p++;
 	}
 	return h;
@@ -452,4 +506,12 @@ uint32_t ST_hwPaletteHash() {
 		h = (h << 5) + h + (g_stub->_tt ? g_stub->_hw.tt[i] : g_stub->_hw.f30[i]);
 	}
 	return h;
+}
+
+// the conversion's and Flip's time over a replay, in ms (game.cpp's
+// REPLAY push line)
+void ST_screenTimes(uint32_t *convMs, uint32_t *flipMs) {
+	*convMs = g_convTicks / 384 * 10;
+	*flipMs = g_flipTicks / 384 * 10;
+	g_convTicks = g_flipTicks = 0;
 }
