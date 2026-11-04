@@ -560,18 +560,6 @@ void SystemStub_030::fadeScreen() {
 	_colsDirty = true;
 }
 
-// The counters the ST build's log lines carry (video_st.cpp keeps them
-// there). Of its sprite path the 030 build has none, so what it counts
-// is the rooms decoded (video.cpp) and the banks and monsters loaded
-// (resource.cpp, game.cpp).
-STPerf g_stPerf;
-
-void ST_perfFormat(const STPerf &p, char *buf, int len) {
-	snprintf(buf, len, "room %u mon %u bank %u/%u/%luK",
-		(unsigned)p.roomDecodes, (unsigned)p.monsterLoads,
-		(unsigned)p.bankLoads, (unsigned)p.bankClears, (unsigned long)(p.bankBytes >> 10));
-}
-
 // What a frame put up (replay_hash, Cutscene::updateScreen and the
 // replays): the page Flip was last handed, the whole of its memory, and
 // the colours as the registers got them, folded h * 33 + each long as
