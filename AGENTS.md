@@ -714,6 +714,20 @@ stub on the same STDL, in Hatari as above):
   runs (52.8s of host time against 26.5s), which looks like the game in
   slow motion. The MMU core's timing also looks no truer: the start-up
   speed loop reads 506MHz with it and 102MHz without.
+- **TT-RAM needs `--addr24 off` too**: without it, TOS 3.06 with
+  `--ttram` never starts the program. The runners take it through
+  `LATE`, which `run.sh` puts after its own options:
+  `LATE="--memsize 2 --ttram 4 --addr24 off"` is Neil's TT, 2MB of
+  ST-RAM and 4MB of TT-RAM.
+  - The binary loads into alt-RAM and allocates from it (header flags
+    7), so only the pages and the sound ring are in ST-RAM. The game
+    counts both RAMs (2048K and 4096K) and takes the 4MB extras.
+  - Run that way (November 2026), every replay, the title and eight
+    cutscenes drew what the 4MB ST-RAM TT drew, frame for frame, and
+    `FLASHBAK.TOS` handed over as it does there.
+  - Play took 21.37ms a frame against 23.84, and cutscene work was 22%
+    less (25,160ms against 32,195). The largest free block at a level's
+    load was 1,731K against 1,304K.
 - `tmp/tos/` has TOS 4.04 for the Falcon but no TOS 3.06 (copy one
   in), and its EmuTOS image is the ST one, which Hatari will not run
   as a TT or Falcon. `tools/bench/` boots TOS 2.06 on an ST: a TT or
@@ -771,11 +785,6 @@ stub on the same STDL, in Hatari as above):
   part (0x39) shows 66% of them, voyage 86%. There everything moves,
   so the box is the band, and upstream's chunky polygons are the rest
   of the frame.
-- TT-RAM: under `run.sh`'s Hatari command line, TOS 3.06 with
-  `--ttram 16` never started a program, with the MMU on or off; Neil's
-  own Hatari TT ran the game with TT-RAM, so this is the emulator's
-  settings. The binary loads into alt-RAM and allocates from it (header
-  flags 7).
 - The music's pace on the machines. STDL measures the VBL rate after
   the mode set and holds the voices' tick, the music and the effects to
   50 a second by it (v1.19.0): Hatari gives 60 on a TT and a Falcon on
