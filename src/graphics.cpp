@@ -10,6 +10,32 @@
 #include "video_st.h"
 #ifdef ATARIST_030
 #include "pagetrack.h"
+
+// A polygon's span filled here rather than through memset: a polygon is
+// a call a row, 560 a frame in level 1's opening, and where the
+// library's memset fell in the 68030's instruction cache against
+// fillArea's loop moved a Falcon's frame 1.8ms from one build to the
+// next, as the screen code's size moved the library
+static inline void fillSpan030(uint8_t *p, uint8_t c, int n) {
+	if (n >= 8) {
+		while (((unsigned long)p & 3) != 0) {
+			*p++ = c;
+			--n;
+		}
+		uint32_t v = c;
+		v |= v << 8;
+		v |= v << 16;
+		uint32_t *q = (uint32_t *)p;
+		for (int k = n >> 2; --k >= 0; ) {
+			*q++ = v;
+		}
+		p = (uint8_t *)q;
+		n &= 3;
+	}
+	while (--n >= 0) {
+		*p++ = c;
+	}
+}
 #endif
 
 void Graphics::setLayer(uint8_t *layer, int pitch) {
@@ -384,7 +410,11 @@ void Graphics::fillArea(uint8_t color, bool hasAlpha) {
 				const int16_t x2 = MIN<int16_t>(_crw - 1, *pts++);
 				if (x1 <= x2) {
 					const int len = x2 - x1 + 1;
+#ifdef ATARIST_030
+					fillSpan030(dst + x1, color, len);
+#else
 					memset(dst + x1, color, len);
+#endif
 				}
 				dst += _layerPitch;
 				x1 = *pts++;

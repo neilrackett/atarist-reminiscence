@@ -20,7 +20,7 @@ Most of `src/` is upstream's engine, changed in place under
 | `main_atari.cpp` | `main`: reads `RS.CFG` into `g_options`, finds the data |
 | `systemstub_atari.cpp`, `.h` | the platform layer both Atari builds share, on STDL: keys, joystick and pads, the clock, the machine set-up and its log lines |
 | `systemstub_stdl.cpp` | the ST build's screen on top of it: screen modes and borders, the colour remap and its quantiser (256 logical colours to 16), the copy of the layer to the screen (`copyRectPlanar`) |
-| `systemstub_030.cpp` | the 030 build's screen on top of it: STDL's 256-colour responsive screen on a TT or a Falcon, the chunky frame converted into its pages, what each page still owes, the colours staged |
+| `systemstub_030.cpp` | the 030 build's screen on top of it: STDL's SDL2 add-on on its 256-colour responsive screen, a texture over each of the engine's buffers and a push a copy of its box |
 | `video_st.cpp`, `video_st.h` | the planar layer the engine draws into (4 planes plus a priority plane, 256x224), its drawing primitives, room tiles and SGD backgrounds, perf counters |
 | `pagetrack.cpp`, `.h` | cutscene page tracking for both builds: the band of rows a scene draws in, and a box per page around what differs from the background, so copies and pushes move only that; the 030 build's page copies |
 | `spritecache_st.cpp` | gameplay sprites baked to planar once and kept in a RAM-sized ring |
@@ -491,16 +491,21 @@ the ST quantises them to 16.
   playing, High adds 2.6-3.6% to a TT's cutscene work and 4.8% to a
   Falcon's. A Falcon is said to have no 6258Hz DMA sound at all (a
   Falcon FAQ: that rate is its pause), which is not checked.
-- **The screen is STDL's** (`STDL_UseResponsive(COLOUR | HEIGHT)`,
-  `stdl_responsive.h`), since November 2026: 320x240 in 8 interleaved
-  planes, the display's own layout. It does what the stub had done
-  itself through the XBIOS, and more:
+- **The screen is STDL's SDL2 add-on's** (`stdl/addons/sdl2`,
+  `stdl/docs/sdl2.md`), since November 2026, on STDL's responsive
+  screen (`STDL_UseResponsive(COLOUR | HEIGHT)`, `stdl_responsive.h`):
+  320x240 in 8 interleaved planes, the display's own layout. Only this
+  build links it (`STDL_SDL2_LIB` in the Makefile, its headers on the
+  030 objects' path alone); the stub is one of its programs, with
+  STDL's keyboard, pads, voices and clock beside it as the ST build has
+  them. STDL does what the stub had done itself through the XBIOS, and
+  more:
   - the mode: TT Low, 480 lines, on a TT; on a Falcon 8 bits on VGA
     (320x240, the VIDEL doubling the lines) or on RGB and a TV (240
     lines in overscan, a 384-pixel line with the picture centred, PAL
     or NTSC as the desktop had it). A mono monitor, TT High on a TT,
     is refused with a message;
-  - two or three pages in ST-RAM, the 256 colours, the VBL rate
+  - two or three pages in ST-RAM (`STDL_SDL2_HINT_PAGES`), the 256 colours, the VBL rate
     measured after the mode set, and the keyboard and pads with the
     mode (`STDL_OpenInput`, which STDL v1.18.0 added for this build, is
     no longer called);
@@ -509,9 +514,11 @@ the ST quantises them to 16.
     the last. Its colours are copied from the registers, as the stub
     did: `VgetRGB` read all black under TOS 4.04's desktop.
 
-  The stub kept the conversion and the picture's place: the screen's
-  memory is byte for byte what the stub's own screen held. Before
-  that, SDL 1.2 set the mode and the colours in the first version, and
+  The add-on is the conversion and the page keeping this stub had of
+  its own on STDL's screen, moved into STDL and made general for any
+  8-bit chunky program: the pages hold byte for byte what the stub's
+  own conversion put there, and what the XBIOS stub's screen held.
+  Before that, SDL 1.2 set the mode and the colours in the first version, and
   cost more than that was worth: 240K of code (699K against 442K), a
   75-150K chunky surface it never used, start-up traps (its `Super(0)`
   toggle, its input driver, its clock), updates wrong on two machines
@@ -519,16 +526,26 @@ the ST quantises them to 16.
   than 2y; a Falcon on RGB drew 32 pixels left of centre), and a chunky
   mode on a Falcon with a SuperVidel, where planes would be garbage.
 - **Each page owes what was pushed since it was last drawn on.** The
-  engine pushes boxes as if to one screen that keeps them all. The stub
-  keeps a mask of 16-pixel groups a row for each page and ORs every
-  pushed box into all of them. Of what the page drawn on owes, this
-  frame's boxes are converted from the engine's picture and the rest is
-  copied from the page last put up, which holds the screen as it stands.
-  So the stub is one screen to the engine whatever the engine does with
-  a picture between pushes, and a frame that pushes from two pictures
-  converts the first's boxes before the second's. A frame that pushes
+  engine pushes boxes as if to one screen that keeps them all, and the
+  add-on's screen keeps them: a texture lies over each of the engine's
+  buffers (`STDL_SDL2_CreateTextureFrom`, no copy), and `copyRect` is an
+  `SDL_RenderCopy` of its box rounded out to 16-pixel groups, the whole
+  groups the stub's own conversion converted. The add-on keeps a mask
+  of groups a row for each page and ORs every pushed box into all of
+  them. Of what the page drawn on owes, this frame's boxes are
+  converted from the textures and the rest is copied from the page last
+  put up, which holds the screen as it stands. So the stub is one
+  screen to the engine whatever the engine does with a picture between
+  pushes: a frame's boxes from one picture are converted before a box
+  from another, before that picture can change. A frame that pushes
   nothing does not flip.
-  - The first version converted everything a page owed from this
+  - Rows needing the same blocks go up as one box (`Video::updateScreen`,
+    this build's branch), as the ST build sends them: a copy through
+    the add-on costs a Falcon about 1,060 cycles (STDL `6274603`;
+    2,033 before it), mostly its code fetched from ST-RAM, where the
+    stub's own push had been an OR a row. Play's copies went from 16 a
+    frame to 9.5.
+  - The stub's first version converted everything a page owed from this
     frame's picture, which is right only if the engine's buffer holds
     what the screen shows outside this frame's boxes. The title breaks
     that: it pushes its buffer black, decodes the picture into it and
@@ -545,37 +562,55 @@ the ST quantises them to 16.
     the stride apart, and reports nothing, so Flip has nothing to copy:
     STDL's present copies one box a page round everything reported, and
     gameplay's scattered boxes would have made that most of the screen.
-- **The colours are staged** (`STDL_StagePalette`): set just before
-  Flip, they are written in the blank that shows that page, so a new
-  room's picture never goes up in the old colours or the old in the
-  new. STDL's 8-plane screen wrote them at once until this build asked
-  for that (STDL `1fc5843`), and its voices now write them before they
-  mix. A fade is colours alone: each step lands in the next blank.
+- **The colours are staged** (`STDL_StagePalette`): the stub's
+  palette is the renderer's (`STDL_SDL2_SetRenderPalette`), and what
+  `SDL_SetPaletteColors` changes in it is set just before Flip, written
+  in the blank that shows that page, so a new room's picture never goes
+  up in the old colours or the old in the new. STDL's 8-plane screen
+  wrote them at once until this build asked for that (STDL `1fc5843`),
+  and its voices now write them before they mix. A fade is colours
+  alone: each step is staged at once (`STDL_SDL2_StagePalette`) and
+  lands in the next blank. The stub hands the renderer the engine's
+  changes once, before the present: a cutscene sets 32 entries a
+  frame, and a call of the renderer's for each cost a Falcon's level 1
+  opening 1.8ms a frame.
 - **Register 0 is black everywhere.** It is also the colour of the
   border round the screen memory, which nothing drawn can reach (a
   Falcon's on RGB), and the game's colour 0 is a room's background, so
   the jungle had a teal border. Every pixel is XORed with `0x70` as it
-  is converted, and the palette goes to the registers permuted to match:
+  is converted (the add-on's border index, `STDL_SDL2_SetBorderIndex`),
+  and the palette goes to the registers permuted to match:
   colour 0 lands on register `0x70`, and register 0 gets slot 7, which
   the Amiga data never uses, held black.
-- **The conversion** (`c2p_030.h`) is ten merges a 16-pixel group, the
-  XOR done as the inversion of planes 4-6 at the end. Wide boxes go
-  through assembler that spreads its writes to ST-RAM among the next
+- **The conversion** is the add-on's (`stdl/addons/sdl2/src/c2p*.c`):
+  ten merges a 16-pixel group, the XOR done as the inversion of planes
+  4-6 at the end, in loops built for that one border index
+  (`c2px.c`), which cost what the stub's own routine did. Wide boxes
+  go through assembler that spreads its writes to ST-RAM among the next
   group's arithmetic; boxes narrower than 4 groups go through its C
-  twin, where the assembler's set-up costs more than it gains. The C was
-  checked on the host against a pixel-by-pixel reference
-  (`tmp/tt/c2ptest.cpp`, which fails on a one-bit change to a mask); with
-  logging on, the stub compares the assembler with the C on the machine
-  at start-up ("Planes: the assembler matches its C twin"). The loops
-  must fit the 68030's 256-byte instruction cache: a first C version
-  did not, and took twice the time SDL's own conversion took.
+  twin, where the assembler's set-up costs more than it gains. The
+  loops must fit the 68030's 256-byte instruction cache, and the build
+  fails if one outgrows it: a first C version did not fit, and took
+  twice the time SDL's own conversion took. STDL tests it: the C on
+  the host against a pixel-by-pixel reference (`test_c2p`), and the
+  assembler against the C on the machine (`SDL2CHK.TOS`), which the
+  stub had done at start-up ("Planes:" in `RS.LOG`, gone with it).
 - **Only what was drawn on goes back each frame.** Upstream copies the
   whole background layer over the front one before every gameplay frame,
   57K each way; this build puts back only the blocks with a dirty count
   (`Video::restoreFront`). The whole layer still comes back after a full
   refresh, or after anything but the game loop has updated the screen (a
   cutscene, a menu, the inventory). The replays' frame hashes are the
-  front layer's, and all ten matched before and after.
+  front layer's, and all ten matched before and after. Its rows are
+  copied a few longs at a time in the loop: a `memcpy` a row was 160
+  calls a frame, and where mintlib's `memmove` fell in the 68030's
+  instruction cache against the loop moved a Falcon's frame 0.4-0.8ms
+  from one build to the next, as the add-on's size moved the library.
+- **Polygon spans are filled in the loop** (`Graphics::fillArea`, this
+  build's branch), not through `memset`: a call a span was 560 a frame
+  in level 1's opening, and where `memset` fell against the loop in the
+  instruction cache moved a Falcon's frame 1.8ms between builds that
+  differed only in the add-on.
 - **Cutscenes move only what changed, tracked by the ST's code.** A
   scripted scene runs in the ST build's banded loop (`stBandedLoop`) on
   its page tracking, which both builds compile (`pagetrack.cpp`): the
@@ -709,6 +744,45 @@ stub on the same STDL, in Hatari as above):
   back after a crash, the display's rate measured, and the mode set,
   desktop and registers no longer the port's code.
 
+**On the SDL2 add-on** (November 2026, three pages; against the stub
+with its own conversion on STDL's screen, in Hatari as above):
+- **Correctness:** every replay put up what that stub put up, frame for
+  frame, the page and its colours, on a TT and on a Falcon on VGA and
+  RGB, with three pages and with two, on a TT with TT-RAM, and
+  `FLASHBAK.TOS` handing over; the screen check agreed at every flip.
+  So did every scene of the cutscene bench, the credits to their end,
+  on all three, and the title (65 flips). The ST build, relinked on the
+  new STDL (its `event.c`), drew what `ref` draws in every replay, in
+  the same time (320,185ms against 320,200).
+- **In play** (the ten replays): 24.44ms a frame against 24.79 on a TT
+  (-1.4%), 44.44 against 46.23 on a Falcon on VGA (-3.9%).
+- **Cutscenes** (eight scenes, the credits left out): work, music off
+  and every frame drawn, 30,055ms against 32,195 on a TT (-6.6%) and
+  60,040 against 63,575 on a Falcon (-5.6%); frames shown with the
+  player's settings, TT 98.9% to 99.2%, Falcon 89.0% to 90.4%.
+- **Memory:** 10K less free at a level's load (1,262K against 1,272K
+  on a TT, 1,579K against 1,589K on a Falcon); `FBACK030.TOS` 491,149
+  bytes against 481,510.
+- **How it got there.** On the add-on as it first stood, every picture
+  was right but a Falcon's frames were 8.3% slower in play and its
+  cutscene work 5.1% more. Profiled (symbols at TEXT `0x1efe4` on a
+  Falcon with TOS 4.04; `tmp/tt/p030.sh` and `pc030.sh` run one replay
+  or scene under the profiler, `tmp/tt/profdiff.py` compares two):
+  - a copy took 269 instructions and 2,033 cycles, and the catch-up
+    read the renderer's fields again for every long: fixed in the
+    add-on (STDL `6274603`), and play's boxes merged (above);
+  - a palette entry a call to the renderer: sent once a frame (above);
+  - mintlib's `memmove` and `memset`, which move with the add-on's
+    size, against `restoreFront`'s and `fillArea`'s loops in the
+    instruction cache: those loops copy and fill inline now (above).
+- **Tried and dropped:** the assembler for boxes narrower than 4 groups
+  too (the conversion 5.67ms a frame to 6.55 on a Falcon); the C loop
+  with post-increments (gcc 4.6 built the same code); the stub padded
+  so the layers sat where they had (no change: not their alignment).
+  The add-on's C conversion of narrow boxes is about 0.3ms a frame
+  slower than the stub's had been on a Falcon, with the same
+  instructions and more cache misses, and is left.
+
 **Testing it:**
 - Run Hatari's TT with `--mmu off`. With the MMU and the data cache
   both emulated, the emulator falls to half real time once the game
@@ -738,10 +812,11 @@ stub on the same STDL, in Hatari as above):
   page each frame put up, hashed with the colours as the registers got
   them, into `SHASH.BIN` (a pair of longs a frame), beside the layer's
   `FHASH.BIN`. The layer's hash cannot see a box the push left out, nor
-  a page a frame behind. The stub also keeps a chunky model of the one
-  screen the engine pushes to, and compares it, converted, with every
-  page before it goes up: "SCREEN check" in `RS.LOG` at exit, cutscenes
-  and menus included.
+  a page a frame behind. With it the stub also turns on the add-on's
+  check (`STDL_SDL2_HINT_CHECK`): a chunky model of the one screen the
+  engine pushes to, compared, converted, with every page before it goes
+  up, and the stub logs what it found ("SCREEN check" in `RS.LOG` at
+  exit, cutscenes and menus included).
   - `tmp/tt/r030.sh TAG tt|fv|fr PROG SCENARIO...` runs the replays (a
     Falcon on VGA or on RGB with a PAL desktop, through its NVRAM in a
     `HOME` of its own), and `tmp/tt/shcmp.py TAG REF MACH SCENARIO...`
@@ -749,6 +824,11 @@ stub on the same STDL, in Hatari as above):
     once (`MAXH`), every script's counted: dozens side by side made
     Neil's Mac unusable, and emulated time does not move with the
     host's load, so queueing costs only the wait.
+  - The runners pass `--confirm-quit false`. A `HOME` of its own gives
+    Hatari its defaults, which confirm a quit, so every finished
+    emulator waited on that dialog and kept its slot: two batches of 24
+    slots spent five hours on the six the finished ones left them
+    (November 2026).
   - Tested by breaking it: every page's owed boxes dropped after each
     conversion left 560 of l1r26's 638 frames unlike the reference, and
     the screen check flagged the same 560 flips; the copy from the page

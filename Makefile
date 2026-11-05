@@ -100,22 +100,35 @@ $(TARGET): $(OBJS) $(STDL_LIB) | dist
 # The 030 build, FBACK030.TOS: the same game for a TT or a Falcon in
 # 256 colours (make 030). Upstream's chunky layers stand in for the
 # ST's planar ones, so the planar files and the ST stub stay out, and
-# the 030 stub shows them (systemstub_030.cpp); STDL's keyboard,
-# joystick, sound and clock (systemstub_atari.cpp), RS.CFG and the
-# menus are the ST build's. Its objects build apart, for the 68020 and
-# up with no FPU instructions, and link against the 68000 libraries:
-# the toolchain's 68020-60 ones assume an FPU, which a stock Falcon and
-# some TTs lack, and their mintlib will not start without one.
+# the 030 stub shows them (systemstub_030.cpp) through STDL's SDL2
+# add-on (stdl/addons/sdl2, its archive libstdl-sdl2.a); STDL's
+# keyboard, joystick, sound and clock (systemstub_atari.cpp), RS.CFG and
+# the menus are the ST build's. Its objects build apart, for the 68020
+# and up with no FPU instructions, and link against the 68000
+# libraries: the toolchain's 68020-60 ones assume an FPU, which a stock
+# Falcon and some TTs lack, and their mintlib will not start without
+# one.
 SRCS_030 = $(filter-out systemstub_stdl.cpp video_st.cpp spritecache_st.cpp displaylist_st.cpp palette_st.cpp,$(SRCS)) \
 	systemstub_030.cpp
 OBJS_030 = $(SRCS_030:%.cpp=build030/%.o)
 TARGET_030 = dist/FBACK030.TOS
 CXXFLAGS_030 = $(CXXFLAGS) -DATARIST_030 -m68020-60 -msoft-float
 
+# The add-on's headers for the stub alone: its SDL.h is SDL2's, and no
+# other file of the port should find it.
+STDL_SDL2_LIB = $(STDL)/libstdl-sdl2.a
+STDL_SDL2_SRCS = $(wildcard $(STDL)/addons/sdl2/src/*.c) \
+                 $(wildcard $(STDL)/addons/sdl2/src/*.h) \
+                 $(wildcard $(STDL)/addons/sdl2/include/SDL2/*.h)
+build030/systemstub_030.o: CXXFLAGS_030 += -I$(STDL)/addons/sdl2/include/SDL2
+
+$(STDL_SDL2_LIB): $(STDL_SDL2_SRCS) $(STDL_SRCS)
+	$(MAKE) -C $(STDL) libstdl-sdl2.a
+
 030: $(TARGET_030)
 
-$(TARGET_030): $(OBJS_030) $(STDL_LIB) | dist
-	$(CXX) $(CXXFLAGS) -m68000 -Wl,-e,__st_entry -o build030/fback030.elf $(OBJS_030) $(LIBS)
+$(TARGET_030): $(OBJS_030) $(STDL_SDL2_LIB) $(STDL_LIB) | dist
+	$(CXX) $(CXXFLAGS) -m68000 -Wl,-e,__st_entry -o build030/fback030.elf $(OBJS_030) $(STDL_SDL2_LIB) $(LIBS)
 	cp build030/fback030.elf $@
 	$(STRIP) $@
 	@test -f dist/RS.CFG || cp RS.CFG.template dist/RS.CFG

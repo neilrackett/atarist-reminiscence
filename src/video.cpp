@@ -501,6 +501,59 @@ void Video::updateScreen() {
 			_stub->updateScreen(_shakeOffset);
 		}
 	}
+#elif defined(ATARIST_030)
+	// Rows needing the same blocks go up in one box, as the ST build
+	// sends them: a sprite spans several eight-pixel bands, and each box
+	// is a copy through STDL's SDL2 add-on, some 1,060 cycles of a
+	// Falcon's (mostly its code fetched from ST-RAM), where the stub's
+	// own push had been an OR a row: 16 copies a frame became 9.5. A
+	// band's 32 blocks are one long:
+	// the Atari builds read the Amiga data, whose layers are 256x224
+	// (main_atari.cpp).
+	} else {
+		const int cols = GAMESCREEN_W / SCREENBLOCK_W, rows = GAMESCREEN_H / SCREENBLOCK_H;
+		uint32_t band[GAMESCREEN_H / SCREENBLOCK_H];
+		int count = 0;
+		uint8_t *p = _screenBlocks;
+		for (int j = 0; j < rows; ++j, p += cols) {
+			uint32_t m = 0;
+			for (int i = 0; i < cols; ++i) {
+				if (p[i] != 0) {
+					--p[i];
+					m |= 1UL << i;
+				}
+			}
+			band[j] = m;
+		}
+		for (int j = 0; j < rows; ) {
+			const uint32_t m = band[j];
+			if (m == 0) {
+				++j;
+				continue;
+			}
+			int j2 = j + 1;
+			while (j2 < rows && band[j2] == m) {
+				++j2;
+			}
+			for (int i = 0; i < cols; ) {
+				if (!(m & (1UL << i))) {
+					++i;
+					continue;
+				}
+				int i2 = i + 1;
+				while (i2 < cols && (m & (1UL << i2))) {
+					++i2;
+				}
+				VIDEO_BLIT(i * SCREENBLOCK_W, j * SCREENBLOCK_H, (i2 - i) * SCREENBLOCK_W, (j2 - j) * SCREENBLOCK_H);
+				++count;
+				i = i2;
+			}
+			j = j2;
+		}
+		if (count != 0) {
+			_stub->updateScreen(_shakeOffset);
+		}
+	}
 #else
 	} else {
 		int i, j;
@@ -602,9 +655,18 @@ void Video::restoreFront() {
 			while (i + n < cols && p[i + n] != 0) {
 				++n;
 			}
+			// a few longs a row, here: a call to memcpy a row was most
+			// of a run's cost, 160 a frame, and where the library's
+			// memmove fell in the 68030's instruction cache against this
+			// loop moved a Falcon's frame 0.4ms from one build to the next
 			const int offset = j * SCREENBLOCK_H * _w + i * SCREENBLOCK_W;
-			for (int y = 0; y < SCREENBLOCK_H; ++y) {
-				memcpy(_frontLayer + offset + y * _w, _backLayer + offset + y * _w, n * SCREENBLOCK_W);
+			uint32_t *d = (uint32_t *)(_frontLayer + offset);
+			const uint32_t *s = (const uint32_t *)(_backLayer + offset);
+			const int longs = n * (SCREENBLOCK_W / 4), skip = _w / 4 - longs;
+			for (int y = SCREENBLOCK_H; --y >= 0; d += skip, s += skip) {
+				for (int k = longs; --k >= 0; ) {
+					*d++ = *s++;
+				}
 			}
 			i += n;
 		}
