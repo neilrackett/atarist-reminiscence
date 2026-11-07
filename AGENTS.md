@@ -803,11 +803,11 @@ with its own conversion on STDL's screen, in Hatari as above):
   - Play took 21.37ms a frame against 23.84, and cutscene work was 22%
     less (25,160ms against 32,195). The largest free block at a level's
     load was 1,731K against 1,304K.
-- `tmp/tos/` has TOS 4.04 for the Falcon but no TOS 3.06 (copy one
-  in), and its EmuTOS image is the ST one, which Hatari will not run
-  as a TT or Falcon. `tools/bench/` boots TOS 2.06 on an ST: a TT or
-  Falcon run needs its TOS, `MACHINE=tt` or `falcon`, and the 030
-  binary.
+- `tmp/tos/` has TOS 3.06 for the TT (`TOS 3.06 - UK.rom`, which
+  every TT run above used) and TOS 4.04 for the Falcon; its EmuTOS
+  image is the ST one, which Hatari will not run as a TT or Falcon.
+  `tools/bench/` boots TOS 2.06 on an ST: a TT or Falcon run needs its
+  TOS, `MACHINE=tt` or `falcon`, and the 030 binary.
 - **Pictures in play:** with `replay_hash=true` a replay writes the
   page each frame put up, hashed with the colours as the registers got
   them, into `SHASH.BIN` (a pair of longs a frame), beside the layer's
