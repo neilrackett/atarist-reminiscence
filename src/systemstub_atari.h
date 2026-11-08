@@ -28,7 +28,7 @@ struct SystemStub_Atari : SystemStub {
 	void initJoystick();
 
 	virtual bool hasWidescreen() const { return false; }
-	virtual void rumble(int low, int high, int ms) { STDL_PadRumble(low, high, ms); }
+	virtual void rumble(int low, int high, int ms) { STDL_PadRumble(0, low, high, ms); }
 	virtual void setOverscanColor(int i) {}
 	virtual void copyRectRgb24(int x, int y, int w, int h, const uint8_t *rgb) {}
 	virtual void zoomRect(int x, int y, int w, int h) {}

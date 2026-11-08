@@ -82,11 +82,16 @@ and the port moves to it in a commit of its own ("STDL v1.15.3: ..."),
 measured like any other change. A release is an annotated `v*` tag on
 STDL's `main`: its workflow rebuilds the rolling `latest` release's
 files, and the port pins the submodule to the tag and builds the
-library itself. It is on v1.22.0 (November 2026), the release of
+library itself. It is on v1.23.2 (November 2026). v1.22.0 released
 STDL's SDL2 add-on (`stdl/addons/sdl2`, `stdl/docs/sdl2.md`), which
 the 030 build draws through; until then it had been pinned to the
 add-on's branch, untagged, so that what the move found could be fixed
-there before a release. `git -C stdl fetch --tags` exits
+there before a release. v1.23.0 renamed the joystick calls
+(`STDL_JoystickKeyBind`, `STDL_PadRumble(0, ...)`: the stdl skill's
+"Moving to a newer STDL"), and its check for a blit onto its own
+memory ran for every sprite this game draws, from a borrowed view of
+the sprite cache onto a borrowed layer: play 1.6% slower on a plain ST
+until v1.23.2 asked first whether the two surfaces' bytes meet. `git -C stdl fetch --tags` exits
 non-zero once `latest` has moved ("would clobber"); add `--force`. To
 measure a library change before its release, copy the changed files
 into `stdl/` for one build and put them back with `git -C stdl
@@ -582,14 +587,19 @@ the ST quantises them to 16.
   colour 0 lands on register `0x70`, and register 0 gets slot 7, which
   the Amiga data never uses, held black.
 - **The conversion** is the add-on's (`stdl/addons/sdl2/src/c2p*.c`):
-  ten merges a 16-pixel group, the XOR done as the inversion of planes
-  4-6 at the end, in loops built for that one border index
-  (`c2px.c`), which cost what the stub's own routine did. Wide boxes
-  go through assembler that spreads its writes to ST-RAM among the next
-  group's arithmetic; boxes narrower than 4 groups go through its C
-  twin, where the assembler's set-up costs more than it gains. The
-  loops must fit the 68030's 256-byte instruction cache, and the build
-  fails if one outgrows it: a first C version did not fit, and took
+  ten merges a 16-pixel group, the planes coming out in screen order,
+  and the XOR done as the inversion of planes 4-6 at the end, in loops
+  built for that one border index (`c2px.c`). Every box goes through
+  assembler that spreads its writes to ST-RAM among the next group's
+  arithmetic (on a TT, one store a merge) and carries its pipeline from
+  row to row, a box one call. Each loop must fit the 68030's 256-byte
+  instruction cache, 240 bytes at any alignment, and STDL's build
+  measures them and fails past that. Until STDL v1.23.0 a copy of the
+  group before each loop made it 428 bytes, refetched in part every
+  row, and boxes under 4 groups went through the C twin; with the new
+  loops play took 8.0% less on a TT (23.29 to 21.43ms a frame) and 3.3%
+  on a Falcon (44.23 to 42.75), cutscene work 7.7% and 5.2% less, every
+  frame as before. A first C version had not fitted at all, and took
   twice the time SDL's own conversion took. STDL tests it: the C on
   the host against a pixel-by-pixel reference (`test_c2p`), and the
   assembler against the C on the machine (`SDL2CHK.TOS`), which the
@@ -775,12 +785,11 @@ with its own conversion on STDL's screen, in Hatari as above):
     size, against `restoreFront`'s and `fillArea`'s loops in the
     instruction cache: those loops copy and fill inline now (above).
 - **Tried and dropped:** the assembler for boxes narrower than 4 groups
-  too (the conversion 5.67ms a frame to 6.55 on a Falcon); the C loop
-  with post-increments (gcc 4.6 built the same code); the stub padded
-  so the layers sat where they had (no change: not their alignment).
-  The add-on's C conversion of narrow boxes is about 0.3ms a frame
-  slower than the stub's had been on a Falcon, with the same
-  instructions and more cache misses, and is left.
+  too, while its loops were 428 bytes (the conversion 5.67ms a frame to
+  6.55 on a Falcon; STDL v1.23.0's loops, which fit the cache, take
+  every box); the C loop with post-increments (gcc 4.6 built the same
+  code); the stub padded so the layers sat where they had (no change:
+  not their alignment).
 
 **Testing it:**
 - Run Hatari's TT with `--mmu off`. With the MMU and the data cache

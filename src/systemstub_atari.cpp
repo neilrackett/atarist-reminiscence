@@ -77,20 +77,20 @@ void SystemStub_Atari::initJoystick() {
 	// Save, load, quit and the state-slot keys are deliberately absent:
 	// they are Ctrl combinations, and emulation synthesises one key per
 	// input, so they stay on the keyboard where they belong.
-	STDL_JoyKeyMapping(STDLK_UP, STDLK_DOWN, STDLK_LEFT, STDLK_RIGHT, STDLK_RSHIFT);
+	STDL_JoystickKeyMapping(STDLK_UP, STDLK_DOWN, STDLK_LEFT, STDLK_RIGHT, STDLK_RSHIFT);
 
-	STDL_JoyKeyBind(STDL_JOYKEY_EAST,   STDLK_RETURN);     // use item
-	STDL_JoyKeyBind(STDL_JOYKEY_NORTH,  STDLK_BACKSPACE);  // inventory
-	STDL_JoyKeyBind(STDL_JOYKEY_WEST,   STDLK_SPACE);
-	STDL_JoyKeyBind(STDL_JOYKEY_START,  STDLK_ESCAPE);     // options
-	STDL_JoyKeyBind(STDL_JOYKEY_SELECT, STDLK_BACKSPACE);  // inventory
+	STDL_JoystickKeyBind(STDL_JOYSTICK_EAST,   STDLK_RETURN);     // use item
+	STDL_JoystickKeyBind(STDL_JOYSTICK_NORTH,  STDLK_BACKSPACE);  // inventory
+	STDL_JoystickKeyBind(STDL_JOYSTICK_WEST,   STDLK_SPACE);
+	STDL_JoystickKeyBind(STDL_JOYSTICK_START,  STDLK_ESCAPE);     // options
+	STDL_JoystickKeyBind(STDL_JOYSTICK_SELECT, STDLK_BACKSPACE);  // inventory
 
 	// The two you reach for constantly, put where a thumb is not
 	// needed: inventory and use, on the shoulders.
-	STDL_JoyKeyBind(STDL_JOYKEY_TL, STDLK_BACKSPACE);
-	STDL_JoyKeyBind(STDL_JOYKEY_TR, STDLK_RETURN);
+	STDL_JoystickKeyBind(STDL_JOYSTICK_TL, STDLK_BACKSPACE);
+	STDL_JoystickKeyBind(STDL_JOYSTICK_TR, STDLK_RETURN);
 
-	STDL_JoyKeyEmulation(1);
+	STDL_JoystickKeyEmulation(1);
 }
 
 static int g_ramK = -1;           // ST RAM and alt-RAM, in K, once looked at
