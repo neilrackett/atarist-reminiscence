@@ -44,7 +44,21 @@ jobs:
         # container. The installer picks the image for the runner's
         # architecture, so this is the x86_64 image here and an arm64 one
         # on a developer's Mac; both carry m68k-atari-mint-g++.
-        run: curl -sL https://github.com/sidecartridge/atarist-toolkit-docker/releases/latest/download/install_atarist_toolkit_docker.sh | bash
+        # The installer comes through GitHub's API (gh), with the plain
+        # download as the fallback, to a file and then run: on
+        # 2026-11-08 the plain download answered with error pages for
+        # over an hour while the API served the file, and piped to bash,
+        # an error page went in as a script (STDL's and Koules' releases
+        # failed on it).
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download latest -R sidecartridge/atarist-toolkit-docker \
+              -p install_atarist_toolkit_docker.sh -D "$RUNNER_TEMP" \
+            || curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 \
+              -o "$RUNNER_TEMP/install_atarist_toolkit_docker.sh" \
+              https://github.com/sidecartridge/atarist-toolkit-docker/releases/latest/download/install_atarist_toolkit_docker.sh
+          bash "$RUNNER_TEMP/install_atarist_toolkit_docker.sh"
 
       - name: Build
         # The command the README documents, unchanged: libstdl.a and the
