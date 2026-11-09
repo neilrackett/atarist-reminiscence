@@ -82,7 +82,7 @@ and the port moves to it in a commit of its own ("STDL v1.15.3: ..."),
 measured like any other change. A release is an annotated `v*` tag on
 STDL's `main`: its workflow rebuilds the rolling `latest` release's
 files, and the port pins the submodule to the tag and builds the
-library itself. It is on v1.23.2 (November 2026). v1.22.0 released
+library itself. It is on v1.23.3 (November 2026). v1.22.0 released
 STDL's SDL2 add-on (`stdl/addons/sdl2`, `stdl/docs/sdl2.md`), which
 the 030 build draws through; until then it had been pinned to the
 add-on's branch, untagged, so that what the move found could be fixed
@@ -91,7 +91,11 @@ there before a release. v1.23.0 renamed the joystick calls
 "Moving to a newer STDL"), and its check for a blit onto its own
 memory ran for every sprite this game draws, from a borrowed view of
 the sprite cache onto a borrowed layer: play 1.6% slower on a plain ST
-until v1.23.2 asked first whether the two surfaces' bytes meet. `git -C stdl fetch --tags` exits
+until v1.23.2 asked first whether the two surfaces' bytes meet.
+v1.23.3 decides DMA sound from the `_SND` cookie alone, so an ST
+whose cookie says it has DMA sound (an emulator of it) gets the
+modules: `Mixer` asks `STDL_OpenVoices` and plays on the YM only when
+it fails. `git -C stdl fetch --tags` exits
 non-zero once `latest` has moved ("would clobber"); add `--force`. To
 measure a library change before its release, copy the changed files
 into `stdl/` for one build and put them back with `git -C stdl
