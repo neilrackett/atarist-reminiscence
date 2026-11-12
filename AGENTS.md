@@ -165,7 +165,8 @@ Everything runs in Hatari, always cycle-exact
 (`EXTRA="--cpu-exact on --compatible on"`), through
 `stdl/tests/hatari/run.sh` (its header documents the commands). A 2.5MB
 machine is `--memsize 2560`: `2.5` there means 2MB. Neil tests on
-hardware (a 4MB Mega STE) before anything is released.
+hardware (a 4MB Mega STE, and for the 030 build a TT with 2MB of ST-RAM
+and 4MB of TT-RAM) before anything is released.
 
 **A change must draw exactly what the reference draws, and the game must
 end every replay where its recording did.** The bench replays
@@ -311,8 +312,9 @@ Investigations that ended, so nobody starts them again without a reason:
   second on every machine); locking a Mega STE to 60Hz is deferred.
 - **A mono (SM124) build: parked**; neither prototype made a seamless
   mono picture at colour speed on every machine.
-- **A TT and Falcon build: a prototype** on branch `tt`,
-  `FBACK030.TOS`; its own section at the end.
+- **A TT and Falcon build: released** (November 2026), `FBACK030.TOS`,
+  played on Neil's TT; a Falcon only in Hatari. Its own section at the
+  end.
 - **2MB machines: dropped** (2.5MB minimum since September 2026). Real
   hardware has less free than Hatari, by 70K or a lot more depending on
   what is resident (see "RAM" above).
@@ -448,7 +450,10 @@ Measured and rejected, so not worth trying again as they were:
 
 ## The 030 build: a TT or a Falcon in 256 colours
 
-A prototype on branch `tt` (October 2026). `make 030` builds
+Begun on branch `tt` in October 2026, on `main` and released since
+November 2026, where `release.yml` publishes it beside `FLASHBAK.TOS`.
+It has played well on Neil's TT (2MB of ST-RAM, 4MB of TT-RAM); no
+Falcon has run it. `make 030` builds
 `dist/FBACK030.TOS` for a 68020 or better, which sits beside
 `FLASHBAK.TOS` and reads the same Amiga data. What it is for is colour:
 TT Low and the Falcon's 8-bit modes hold the Amiga's palette exactly, 12
@@ -868,10 +873,10 @@ with its own conversion on STDL's screen, in Hatari as above):
     band's out-of-band versions never moved, and frames in every scene tried
     differed; a glyph that did not touch its page, and voyage's text
     frame differed.
-- Hatari's 68030 timing is approximate: the figures above are
-  estimates until a TT and a Falcon run it. Neil is setting up a TT
-  (November 2026) and has no Falcon, so a Falcon's figures stay
-  Hatari's.
+- Hatari's 68030 timing is approximate, and every figure above is
+  Hatari's. The game has played well on Neil's TT (November 2026), but
+  no `RS.LOG` from it has been set against Hatari's figures yet. Neil
+  has no Falcon, so a Falcon's figures stay Hatari's.
 
 **Not done, or not known yet:**
 - The Falcon's heaviest cutscenes still drop frames: level 4's second
@@ -881,8 +886,8 @@ with its own conversion on STDL's screen, in Hatari as above):
 - The music's pace on the machines. STDL measures the VBL rate after
   the mode set and holds the voices' tick, the music and the effects to
   50 a second by it (v1.19.0): Hatari gives 60 on a TT and a Falcon on
-  VGA, and RGB at the desktop's PAL or NTSC. A real TT is to say what
-  its TT Low runs at.
+  VGA, and RGB at the desktop's PAL or NTSC. What Neil's TT measured
+  for TT Low is to be read from its `RS.LOG`.
 - Left out with the planar picture: `palette_custom`, and the screen
   modes and refresh rate (Options offers neither). The splash is the same picture,
   decoded to chunky pixels and shown through the stub. The `log_fps` and

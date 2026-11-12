@@ -23,7 +23,8 @@ So, just three decades after the original was released...
 - 3.5MB of hard disk space.
 - Sound effects are original Amiga samples on STE, YM versions on regular ST.
 - Music is original ProTracker MODs on STE, YM versions on regular ST.
-- TT & Falcon now get more colours and high quality sound by default.
+- TT & Falcon now get more colours and high quality sound by default
+  (played on a real TT; the Falcon so far only in an emulator).
 
 ## Installing
 
@@ -32,9 +33,9 @@ So, just three decades after the original was released...
 3. Copy the `DATA`, `MUSIC` and `UNPACKED` folders into the same folder as `FLASHBAK.TOS`.
 4. Run `FLASHBAK.TOS`.
 
-On a TT or a Falcon, copy `FBACK030.TOS` into the same folder as well:
-`FLASHBAK.TOS` starts it for you, and it shows the game in the Amiga's
-own colours.
+On a TT or a Falcon, `FLASHBAK.TOS` starts `FBACK030.TOS` for you when
+it is in the same folder, and it shows the game in the Amiga's own
+colours.
 
 If you would prefer to extract the data manually, see
 [Extracting the files manually](docs/extracting-files.md).
@@ -80,7 +81,9 @@ from the in-game menu.
 the music and its volume, and on an STE the sound quality: left, right
 or fire changes a setting, and Back (or Escape) returns to the menu.
 Changes last for the current run; `RS.CFG` sets where they start (see
-[Configuration](docs/configuration.md)).
+[Configuration](docs/configuration.md)). On a TT or a Falcon the game
+picks the screen itself and always uses the higher sound quality, so
+Options has none of those three.
 
 At 60Hz most monitors draw the picture taller, so Fit comes close to the
 height the overscan modes give. The overscan modes themselves always run at
@@ -169,7 +172,7 @@ if you find anything that doesn't work or if you'd like to contribute to make it
 Please ensure that you include as much information as possible in your submission,
 including:
 
-- The Atari ST model and TOS version (ST, STE, Mega ST, Mega STE)
+- The Atari model and TOS version (ST, STE, Mega ST, Mega STE, TT, Falcon)
 - Whether you are using an emulator (e.g. [Hatari](https://www.hatari-emu.org/)) or real hardware
 - The amount of RAM you have installed
 - Any devices you have connected
@@ -188,9 +191,11 @@ installed:
 ```
 git submodule update --init
 stcmd make
+stcmd make 030
 ```
 
-This produces `dist/FLASHBAK.TOS` and `dist/FBACK030.TOS`.
+The first produces `dist/FLASHBAK.TOS`, the second the TT and Falcon
+version, `dist/FBACK030.TOS`.
 
 The desktop SDL2 build is still available via `make -f Makefile.sdl`.
 
