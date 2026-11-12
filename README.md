@@ -23,10 +23,11 @@ So, just three decades after the original was released...
 - 3.5MB of hard disk space.
 - Sound effects are original Amiga samples on STE, YM versions on regular ST.
 - Music is original ProTracker MODs on STE, YM versions on regular ST.
+- TT & Falcon now get more colours and high quality sound by default.
 
 ## Installing
 
-1. Copy `FLASHBAK.TOS` (and optionally `RS.CFG`) to your ST's hard disk.
+1. Copy `FLASHBAK.TOS` and `RS.CFG` to your ST's hard disk, plus `FBACK030.TOS` if you have a TT or Falcon.
 2. Extract the data files from your Amiga installation disks using the [RExtract online tool](https://labs.neilrackett.com/web-rextract/).
 3. Copy the `DATA`, `MUSIC` and `UNPACKED` folders into the same folder as `FLASHBAK.TOS`.
 4. Run `FLASHBAK.TOS`.
@@ -189,7 +190,7 @@ git submodule update --init
 stcmd make
 ```
 
-This produces `dist/FLASHBAK.TOS`.
+This produces `dist/FLASHBAK.TOS` and `dist/FBACK030.TOS`.
 
 The desktop SDL2 build is still available via `make -f Makefile.sdl`.
 
