@@ -83,7 +83,7 @@ and the port moves to it in a commit of its own ("STDL v1.15.3: ..."),
 measured like any other change. A release is an annotated `v*` tag on
 STDL's `main`: its workflow rebuilds the rolling `latest` release's
 files, and the port pins the submodule to the tag and builds the
-library itself. It is on v1.24.0 (November 2026). v1.22.0 released
+library itself. It is on v1.25.0 (November 2026). v1.22.0 released
 STDL's SDL2 add-on (`stdl/addons/sdl2`, `stdl/docs/sdl2.md`), which
 the 030 build draws through; until then it had been pinned to the
 add-on's branch, untagged, so that what the move found could be fixed
@@ -98,7 +98,8 @@ whose cookie says it has DMA sound (an emulator of it) gets the
 modules: `Mixer` asks `STDL_OpenVoices` and plays on the YM only when
 it fails. v1.24.0 added the add-on's experimental 68000 build, which
 only `make experimental` links: `FLASHBAK.TOS` and `FBACK030.TOS` came
-out byte for byte the same on it as on v1.23.3. `git -C stdl fetch --tags` exits
+out byte for byte the same on it as on v1.23.3, and on v1.25.0, which
+made that build's ST screen faster, as on v1.24.0. `git -C stdl fetch --tags` exits
 non-zero once `latest` has moved ("would clobber"); add `--force`. To
 measure a library change before its release, copy the changed files
 into `stdl/` for one build and put them back with `git -C stdl
@@ -462,7 +463,8 @@ build of the SDL2 add-on (`stdl/docs/sdl2.md`, "An experimental build
 for every machine"): one program for every machine. `ATARIST_030_ST`,
 which only this build defines, takes the machine check and the
 hand-over out of `__st_entry` and gives the stub's log line an ST's
-screen; the 030 stub's object is the same code without it.
+screen; without it the 030 stub, `video.cpp` and `game.cpp` build to
+the same code as before, in the ST build and the 030 build.
 
 - **On a TT or a Falcon** it is the 256-colour game. In Hatari it put
   up the same page and colours as `FBACK030.TOS` at every one of
@@ -474,11 +476,42 @@ screen; the 030 stub's object is the same code without it.
 - **On an ST, an STE or a Mega STE** the add-on cuts the palette to 15
   colours and black and shows the 256x224 picture on STDL's tall
   screen, 240 rows with the bottom border open
-  (`Screen: ST, 8 bits (emulated), 240 rows` in `RS.LOG`). It is for
-  trying the 030 build's game where there is no TT or Falcon, not for
-  playing: l1r26 took 225ms a frame on an STE in Hatari, the push 84ms
-  of it, and a room 4-6s to enter. The replay ended where its
-  recording did and the add-on's screen check agreed at every flip.
+  (`Screen: ST, 8 bits (emulated), 240 rows` in `RS.LOG`), or with
+  `crop_screen=true` on ST Low, the picture's middle 200 rows, whose
+  three pages need no wait for the blank. It is for trying the 030
+  build's game where there is no TT or Falcon, not for playing.
+- **What a frame costs there** (l1r26 in Hatari, music off, ms):
+
+  | | STE | Mega STE |
+  |---|---|---|
+  | As first built | 225 | 122 |
+  | Now, 240 rows | 111 | 65 |
+  | Now, `crop_screen=true` | 99 | 54 |
+
+  So 18.5 frames a second on a Mega STE where there were 8.2. Where it
+  went, a Mega STE's frame:
+  - 27% was `AMIGA_planar16`, upstream's bit loop decoding a
+    character's frame to chunky, twice a frame; this build takes the ST
+    build's table decoders (`ST_SPREAD_DECODE` in `video.cpp`) and
+    keeps the frames it decoded (`stChunkyFrame` in `game.cpp`, named
+    by their bytes' address and the two epochs, as the bakes are;
+    162K from the heap): 122 to 84, then 59 to 54;
+  - the add-on converts only the groups of a pushed box that differ
+    from what the screen has, as the engine pushes every block it drew
+    on, changed or not: its conversion went from 20ms a frame to 6
+    (84 to 70);
+  - the tall screen's two pages make every present wait for the blank,
+    10ms a frame: `crop_screen=true`.
+
+  Every replay ended where its recording did; with the add-on's check
+  on, every flip agreed; and the front layer's hash at every frame of
+  l1r26, l1r45fight, l2start, l3start and l5start is the 030 build's
+  (`FHASH.BIN`, on a TT, where this build's pages and colours are the
+  030 build's too, flip for flip).
+- The game still decodes planar sprites to chunky, draws them and
+  converts the result back to planes, which the ST build's bakes never
+  do: the ST build runs the bench replays at 23-55ms a frame on a
+  plain ST, where this build takes 99 on an STE.
 - Not run: cutscenes, the title, music, a plain ST (no DMA sound, so
   no sound device there), a Falcon on RGB, any real machine. The
   border has its usual trouble on hardware ("Overscan on hardware:

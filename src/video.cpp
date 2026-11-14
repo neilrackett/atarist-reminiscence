@@ -896,7 +896,16 @@ void Video::DOS_decodeSpm(const uint8_t *dataPtr, uint8_t *dst) {
 	} while (src < end);
 }
 
-#ifdef ST_PLANAR
+// The table decoders below are the ST build's, and the experimental
+// build's (make experimental), which decodes a character's frame and
+// its objects' pieces to chunky every frame as the 030 build does, on a
+// 68000: AMIGA_planar16's bit loop was 27% of a Mega STE's frame there
+// and 33% of an STE's.
+#if defined(ST_PLANAR) || defined(ATARIST_030_ST)
+#define ST_SPREAD_DECODE
+#endif
+
+#ifdef ST_SPREAD_DECODE
 // Planes to chunky four pixels at a time: g_spread[p][n] puts the four
 // bits of nibble n at bit p of four bytes, leftmost pixel in the
 // first, so a plane's share of four pixels is one lookup. Testing a
@@ -983,7 +992,7 @@ static void AMIGA_planar16(uint8_t *dst, int w, int h, int depth, const uint8_t 
 }
 #endif
 
-#ifdef ST_PLANAR
+#ifdef ST_SPREAD_DECODE
 // Eight pixels from four interleaved plane bytes, by the same table as
 // AMIGA_planar16: two lookups a plane where the bit loop below tested
 // every bit, ~320 cycles a pixel. Object pieces 8 and 24 pixels wide
@@ -1001,7 +1010,9 @@ static void AMIGA_planar8(uint8_t *dst, int w, int h, const uint8_t *src) {
 		src += 4;
 		dst += 8;
 	}
+#ifdef ST_PLANAR
 	g_stPerf.planar8Px += (uint32_t)(w >> 3) * (uint32_t)(h << 3);
+#endif
 }
 
 #else

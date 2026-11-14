@@ -117,6 +117,15 @@ void SystemStub_030::init(const char *title, int w, int h, bool fullscreen, int 
 	// gives two where the third page does not fit.
 	const bool three = g_options.screen_pages != 2;
 	SDL_SetHint(STDL_SDL2_HINT_PAGES, three ? "3" : "2");
+#ifdef ATARIST_030_ST
+	// The experimental build on an ST: crop_screen=true is ST Low, the
+	// picture's middle 200 rows of 224, on three pages, where the tall
+	// screen's two make every frame wait for the blank (about 10ms a
+	// frame on a Mega STE). Nothing on a TT or a Falcon.
+	if (g_options.crop_screen) {
+		SDL_SetHint(STDL_SDL2_HINT_ST_TALL, "0");
+	}
+#endif
 	// replay_hash: every page, before it goes up, against a chunky model
 	// of the screen the engine pushed to
 	if (g_options.replay_hash) {

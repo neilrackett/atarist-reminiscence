@@ -37,6 +37,68 @@ static void setKeymask(PlayerInput &pi, int keymask) {
 #define GAME_COPYRECT_FRONT() _stub->copyRect(0, 0, _vid._w, _vid._h, _vid._frontLayer, _vid._w)
 #endif
 
+#ifdef ATARIST_030_ST
+// The experimental build (make experimental) keeps the last frames it
+// decoded to chunky, where the 030 build decodes a character's frame and
+// every object piece again each time it draws one: on a 68000 that was
+// 8ms of a Mega STE's 59ms frame with the table decoders, and a walk
+// cycle is a dozen frames. A frame is named as the ST build's bakes
+// name theirs, by its bytes' address and the epochs that move when
+// those bytes are replaced (Resource::_stBankEpoch, _stMonsterEpoch).
+// 162K from the heap at the first frame; without it, every frame is
+// decoded into the scratch buffer as before.
+namespace {
+enum { kCfSpmN = 24, kCfSpmSize = 4096, kCfSpcN = 64, kCfSpcSize = 1024 };
+struct CfEntry {
+	const uint8_t *src;
+	uint32_t epoch;
+	uint16_t w, h;
+};
+CfEntry g_cfSpm[kCfSpmN], g_cfSpc[kCfSpcN];
+uint8_t *g_cfMem;
+bool g_cfTried;
+uint8_t g_cfNextSpm, g_cfNextSpc;
+}
+
+// a character's frame (spm) or an object's piece, w by h, decoded: from
+// the frames kept, or decoded now
+static const uint8_t *stChunkyFrame(Game *g, bool spm, const uint8_t *src, int w, int h) {
+	if (!g_cfTried) {
+		g_cfTried = true;
+		g_cfMem = (uint8_t *)malloc(kCfSpmN * kCfSpmSize + kCfSpcN * kCfSpcSize);
+	}
+	uint8_t *dst = g->_res._scratchBuffer;
+	// a character's frame is at most 32 by 127, so it always fits
+	const bool fits = g_cfMem && (spm || w * h <= kCfSpcSize);
+	if (fits) {
+		CfEntry *e = spm ? g_cfSpm : g_cfSpc;
+		const int n = spm ? kCfSpmN : kCfSpcN;
+		const uint32_t epoch = (g->_res._stMonsterEpoch << 16) | (g->_res._stBankEpoch & 0xFFFF);
+		uint8_t *mem = spm ? g_cfMem : g_cfMem + kCfSpmN * kCfSpmSize;
+		const int size = spm ? kCfSpmSize : kCfSpcSize;
+		for (int i = 0; i < n; ++i) {
+			if (e[i].src == src && e[i].epoch == epoch && e[i].w == w && e[i].h == h) {
+				return mem + i * size;
+			}
+		}
+		uint8_t &next = spm ? g_cfNextSpm : g_cfNextSpc;
+		const int i = next;
+		next = (uint8_t)((i + 1) % n);
+		e[i].src = src;
+		e[i].epoch = epoch;
+		e[i].w = (uint16_t)w;
+		e[i].h = (uint16_t)h;
+		dst = mem + i * size;
+	}
+	if (spm) {
+		g->_vid.AMIGA_decodeSpm(src, dst);
+	} else {
+		g->_vid.AMIGA_decodeSpc(src, w, h, dst);
+	}
+	return dst;
+}
+#endif
+
 #ifdef ST_PLANAR
 // The sprite decoder the planar bakes call on a miss (ST_sprDraw): a
 // frame is only decoded when it has to be baked, into the bakes'
@@ -2744,6 +2806,8 @@ void Game::drawAnimBuffer(uint8_t stateNum, AnimBufferState *state) {
 					{
 #ifdef ST_PLANAR
 						ST_drawCharacterBaked(state->dataPtr, state->x, state->y, state->h, state->w, pge->flags);
+#elif defined(ATARIST_030_ST)
+						drawCharacter(stChunkyFrame(this, true, state->dataPtr, 0, 0), state->x, state->y, state->h, state->w, pge->flags);
 #else
 						_vid.AMIGA_decodeSpm(state->dataPtr, _res._scratchBuffer);
 						drawCharacter(_res._scratchBuffer, state->x, state->y, state->h, state->w, pge->flags);
@@ -2875,9 +2939,16 @@ void Game::drawObjectFrame(const uint8_t *bankDataPtr, const uint8_t *dataPtr, i
 		return;
 	}
 #endif
+#ifdef ATARIST_030_ST
+	const uint8_t *kept = 0;
+#endif
 	switch (_res._type) {
 	case kResourceTypeAmiga:
+#ifdef ATARIST_030_ST
+		kept = stChunkyFrame(this, false, src, sprite_w, sprite_h);
+#else
 		_vid.AMIGA_decodeSpc(src, sprite_w, sprite_h, _res._scratchBuffer);
+#endif
 		break;
 	case kResourceTypeDOS:
 	case kResourceTypePC98:
@@ -2892,6 +2963,11 @@ void Game::drawObjectFrame(const uint8_t *bankDataPtr, const uint8_t *dataPtr, i
 	}
 
 	src = _res._scratchBuffer;
+#ifdef ATARIST_030_ST
+	if (kept) {
+		src = kept;
+	}
+#endif
 	bool sprite_mirror_x = false;
 	int16_t sprite_clipped_w;
 	if (sprite_x >= 0) {
