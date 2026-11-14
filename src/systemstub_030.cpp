@@ -147,6 +147,16 @@ void SystemStub_030::init(const char *title, int w, int h, bool fullscreen, int 
 		warning("Screen: two pages, %s", STDL_GetError());
 	}
 	if (g_options.logging) {
+#ifdef ATARIST_030_ST
+		// the experimental build on an ST: the add-on reduces the 8-bit
+		// picture to the ST's 16 colours, on 240 rows with the bottom
+		// border open or ST Low's 200. An open border flips its own
+		// two pages whatever the flags say.
+		if (s->format->BitsPerPixel == 4) {
+			info("Screen: ST, 8 bits (emulated), %d rows, %d bytes a line, %d pages", s->h, s->stride,
+				(s->h == 200 && (s->flags & STDL_TRIPLEBUF)) ? 3 : 2);
+		} else
+#endif
 		info("Screen: %s, %d bytes a line, %d pages%s", _tt ? "TT Low" : "Falcon, 8 bits", s->stride >> dbl,
 			(s->flags & STDL_TRIPLEBUF) ? 3 : 2, dbl ? ", rows doubled" : "");
 	}

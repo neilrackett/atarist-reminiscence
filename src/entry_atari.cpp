@@ -11,7 +11,11 @@
 
 #ifdef ATARIST
 
-#ifdef ATARIST_030
+// ATARIST_030_ST: the experimental build (make experimental), the 030
+// build's chunky game compiled for the 68000 on STDL's 68000 build of
+// the SDL2 add-on. It runs on whatever started it: no message for an
+// ST, no hand-over on a TT.
+#if defined(ATARIST_030) && !defined(ATARIST_030_ST)
 // What __st_entry shows on any machine but a TT or a Falcon, in the
 // 40 columns of an ST's console
 extern "C" const char st_need030[];
@@ -60,7 +64,8 @@ __asm__(
 "	swap	%d0\n"
 "	subq.w	#2,%d0\n"                 // _MCH's high word: 2 a TT, 3 a Falcon
 "	cmp.w	#1,%d0\n"
-#ifdef ATARIST_030
+#if defined(ATARIST_030_ST)
+#elif defined(ATARIST_030)
 "	bls.s	5f\n"
 "	pea	_st_need030\n"
 "	move.w	#9,-(%sp)\n"              // Cconws

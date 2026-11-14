@@ -143,6 +143,44 @@ build030:
 
 -include $(OBJS_030:.o=.d)
 
+# Experiments (make experimental): builds to try things with, which
+# `make`, `make 030` and the release workflow never build or publish.
+#
+# FBACKEXP.TOS is the 030 build's game compiled for the 68000 on
+# STDL's experimental 68000 build of the SDL2 add-on (stdl/docs/sdl2.md,
+# "An experimental build for every machine"): one program for every
+# machine. A TT or a Falcon shows what FBACK030.TOS shows, frame for
+# frame; an ST, an STE or a Mega STE shows the chunky picture reduced to
+# 16 colours, about 5 frames a second at 8MHz, to try the 030 build's
+# game where there is no TT or Falcon. ATARIST_030_ST takes the machine
+# check and the hand-over out of __st_entry (entry_atari.cpp).
+OBJS_EXP = $(SRCS_030:%.cpp=buildexp/%.o)
+TARGET_EXP = dist/FBACKEXP.TOS
+CXXFLAGS_EXP = $(CXXFLAGS) -DATARIST_030 -DATARIST_030_ST -m68000
+STDL_SDL2ST_LIB = $(STDL)/libstdl-sdl2-st.a
+buildexp/systemstub_030.o: CXXFLAGS_EXP += -I$(STDL)/addons/sdl2/include/SDL2
+
+$(STDL_SDL2ST_LIB): $(STDL_SDL2_SRCS) $(STDL_SRCS)
+	$(MAKE) -C $(STDL) libstdl-sdl2-st.a
+
+experimental: $(TARGET_EXP)
+
+$(TARGET_EXP): $(OBJS_EXP) $(STDL_SDL2ST_LIB) $(STDL_LIB) | dist
+	$(CXX) $(CXXFLAGS) -m68000 -Wl,-e,__st_entry -o buildexp/fbackexp.elf $(OBJS_EXP) $(STDL_SDL2ST_LIB) $(LIBS)
+	cp buildexp/fbackexp.elf $@
+	$(STRIP) $@
+	@test -f dist/RS.CFG || cp RS.CFG.template dist/RS.CFG
+
+buildexp/main_atari.o: build/version.h
+
+buildexp/%.o: src/%.cpp | buildexp build
+	$(CXX) $(CXXFLAGS_EXP) -c -o $@ $<
+
+buildexp:
+	mkdir -p $@
+
+-include $(OBJS_EXP:.o=.d)
+
 build/version.h: FORCE | build
 	@printf '#define PORT_VERSION "%s"\n#define PORT_RELEASE "%s"\n' '$(PORT_VERSION)' '$(PORT_RELEASE)' > $@.tmp; \
 	cmp -s $@.tmp $@ || mv $@.tmp $@; rm -f $@.tmp
@@ -157,8 +195,8 @@ build dist:
 	mkdir -p $@
 
 clean:
-	rm -rf build build030 $(TARGET) $(TARGET_030)
+	rm -rf build build030 buildexp $(TARGET) $(TARGET_030) $(TARGET_EXP)
 
 -include $(DEPS)
 
-.PHONY: all clean 030
+.PHONY: all clean 030 experimental

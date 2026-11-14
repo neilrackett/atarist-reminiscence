@@ -7,6 +7,7 @@ tmp/
 *.d
 build/
 build030/
+buildexp/
 rs
 
 # extraction working files

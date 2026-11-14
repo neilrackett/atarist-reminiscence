@@ -65,6 +65,7 @@ are in `src/intern.h`.
 STCMD_NO_TTY=1 stcmd make        # non-interactive shells (agents, CI)
 stcmd make                        # interactive terminal
 STCMD_NO_TTY=1 stcmd make 030    # the 030 build, dist/FBACK030.TOS
+STCMD_NO_TTY=1 stcmd make experimental   # experiments, never released
 ```
 
 m68k-atari-mint-gcc 4.6.4 in a container
@@ -82,7 +83,7 @@ and the port moves to it in a commit of its own ("STDL v1.15.3: ..."),
 measured like any other change. A release is an annotated `v*` tag on
 STDL's `main`: its workflow rebuilds the rolling `latest` release's
 files, and the port pins the submodule to the tag and builds the
-library itself. It is on v1.23.3 (November 2026). v1.22.0 released
+library itself. It is on v1.24.0 (November 2026). v1.22.0 released
 STDL's SDL2 add-on (`stdl/addons/sdl2`, `stdl/docs/sdl2.md`), which
 the 030 build draws through; until then it had been pinned to the
 add-on's branch, untagged, so that what the move found could be fixed
@@ -95,7 +96,9 @@ until v1.23.2 asked first whether the two surfaces' bytes meet.
 v1.23.3 decides DMA sound from the `_SND` cookie alone, so an ST
 whose cookie says it has DMA sound (an emulator of it) gets the
 modules: `Mixer` asks `STDL_OpenVoices` and plays on the YM only when
-it fails. `git -C stdl fetch --tags` exits
+it fails. v1.24.0 added the add-on's experimental 68000 build, which
+only `make experimental` links: `FLASHBAK.TOS` and `FBACK030.TOS` came
+out byte for byte the same on it as on v1.23.3. `git -C stdl fetch --tags` exits
 non-zero once `latest` has moved ("would clobber"); add `--force`. To
 measure a library change before its release, copy the changed files
 into `stdl/` for one build and put them back with `git -C stdl
@@ -447,6 +450,41 @@ Measured and rejected, so not worth trying again as they were:
   `drawShapeScaleRotate`'s state kept in locals (-0.3%); a new polygon's
   parse and record in one pass (-0.1%).
 - STDL's mixer: two voices a pass (~1%).
+
+## Experiments (`make experimental`)
+
+Builds to try things with. `make`, `make 030` and `release.yml` never
+build or publish them, and nothing here is in the player's docs.
+
+**`dist/FBACKEXP.TOS`** (November 2026) is the 030 build's game
+compiled for the 68000 and linked against STDL's experimental 68000
+build of the SDL2 add-on (`stdl/docs/sdl2.md`, "An experimental build
+for every machine"): one program for every machine. `ATARIST_030_ST`,
+which only this build defines, takes the machine check and the
+hand-over out of `__st_entry` and gives the stub's log line an ST's
+screen; the 030 stub's object is the same code without it.
+
+- **On a TT or a Falcon** it is the 256-colour game. In Hatari it put
+  up the same page and colours as `FBACK030.TOS` at every one of
+  l1r26's 640 flips, on a TT and on a Falcon on VGA. Its frames took
+  18.67ms against 18.69 (l1r26) and 21.87 against 20.76 (l3start) on a
+  TT, 32.90 against 30.97 and 43.01 against 40.33 on a Falcon: the
+  game and the add-on's compositor are 68000 code, the conversion's
+  assembler the same.
+- **On an ST, an STE or a Mega STE** the add-on cuts the palette to 15
+  colours and black and shows the 256x224 picture on STDL's tall
+  screen, 240 rows with the bottom border open
+  (`Screen: ST, 8 bits (emulated), 240 rows` in `RS.LOG`). It is for
+  trying the 030 build's game where there is no TT or Falcon, not for
+  playing: l1r26 took 225ms a frame on an STE in Hatari, the push 84ms
+  of it, and a room 4-6s to enter. The replay ended where its
+  recording did and the add-on's screen check agreed at every flip.
+- Not run: cutscenes, the title, music, a plain ST (no DMA sound, so
+  no sound device there), a Falcon on RGB, any real machine. The
+  border has its usual trouble on hardware ("Overscan on hardware:
+  parked").
+- Run it as the 030 build is run (`tmp/tt/r030.sh` takes the binary),
+  or on an ST with `stdl/tests/hatari/run.sh` and an ST's TOS.
 
 ## The 030 build: a TT or a Falcon in 256 colours
 
