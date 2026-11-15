@@ -83,7 +83,7 @@ and the port moves to it in a commit of its own ("STDL v1.15.3: ..."),
 measured like any other change. A release is an annotated `v*` tag on
 STDL's `main`: its workflow rebuilds the rolling `latest` release's
 files, and the port pins the submodule to the tag and builds the
-library itself. It is on v1.25.1 (November 2026). v1.22.0 released
+library itself. It is on v1.26.0 (November 2026). v1.22.0 released
 STDL's SDL2 add-on (`stdl/addons/sdl2`, `stdl/docs/sdl2.md`), which
 the 030 build draws through; until then it had been pinned to the
 add-on's branch, untagged, so that what the move found could be fixed
@@ -100,7 +100,9 @@ it fails. v1.24.0 added the add-on's experimental 68000 build, which
 only `make experimental` links: `FLASHBAK.TOS` and `FBACK030.TOS` came
 out byte for byte the same on it as on v1.23.3, and on v1.25.0, which
 made that build's ST screen faster, as on v1.24.0, and on v1.25.1,
-which made its 16 colours from those on screen, with a checkerboard. `git -C stdl fetch --tags` exits
+which made its 16 colours from those on screen, with a checkerboard,
+and on v1.26.0, which takes a program's own 16
+(`STDL_SDL2_SetSTColours`). `git -C stdl fetch --tags` exits
 non-zero once `latest` has moved ("would clobber"); add `--force`. To
 measure a library change before its release, copy the changed files
 into `stdl/` for one build and put them back with `git -C stdl
