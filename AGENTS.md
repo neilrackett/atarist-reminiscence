@@ -982,6 +982,16 @@ with its own conversion on STDL's screen, in Hatari as above):
   1.8% off a TT's (the intro's push 3% and 13%): the push is not bound
   by its writes to ST-RAM. The guards and the layout cost more than
   that, and the binary came out 2% slower than without it.
+- The add-on converting only the groups of a pushed box that changed,
+  as its experimental build does on an ST (November 2026; STDL's
+  `AGENTS.md`, "The SDL2 add-on", has the write-up). Behind a hint in
+  the 030 build, every flip of l1r26 and l3start as before: the
+  conversion about halved (TT 3.1 to 1.7ms a frame, Falcon 6.1 to
+  3.3), but play went only from 31.28 to 29.99 and 40.69 to 39.72ms a
+  frame on a Falcon, and not at all on a TT (18.67 to 18.71, 20.77 to
+  20.43); cutscene work on a Falcon 3% less over 0x00, 0x34 and 0x39,
+  voyage 1.5% more. The conversion is 15-20% of a frame there, and the
+  compare cost 76.8K and most of the add-on's size budget.
 - The engine built with `ATARIST` off, with STDL only for input and
   sound: it would have lost the menus, the port's sound, record and
   replay, and the pacing.
