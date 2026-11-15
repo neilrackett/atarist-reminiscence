@@ -194,6 +194,9 @@ struct Options {
 	int replay_dump;       // ST port, hidden: replayed frame to write out as DMP.BIN, 0 none
 	int cutscene;          // ST port, hidden: play this one cutscene (cutscene=0x34) and quit, -1 none
 	int screen_pages;      // ST port, hidden: the 030 build's display pages, 2 or 3 (0: 3)
+#ifdef ATARIST_030_ST
+	bool checkerboard;     // experimental build on an ST: colours between two of the 16 as both
+#endif
 };
 
 // ST port: ab= in RS.CFG, for measuring an optimisation against what it

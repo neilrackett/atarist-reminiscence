@@ -106,6 +106,9 @@ static void initOptions() {
 	g_options.fix_fmopl_e0_reg = false;
 	g_options.skip_intro = false;
 	g_options.crop_screen = false;
+#ifdef ATARIST_030_ST
+	g_options.checkerboard = true;
+#endif
 	// on by default: it shows the whole picture, and since the line
 	// mapping is then one-to-one it is also the fastest of the three
 	// ways of fitting 224 lines on the screen
@@ -190,6 +193,9 @@ static void initOptions() {
 		{ "order_inventory_original", &g_options.order_inventory_original },
 		{ "skip_intro", &g_options.skip_intro },
 		{ "crop_screen", &g_options.crop_screen },
+#ifdef ATARIST_030_ST
+		{ "checkerboard", &g_options.checkerboard },
+#endif
 		{ "overscan", &g_options.overscan },
 		{ "music", &g_options.music },
 		{ "log_fps", &g_options.log_fps },

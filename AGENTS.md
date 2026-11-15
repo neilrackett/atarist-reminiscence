@@ -83,7 +83,7 @@ and the port moves to it in a commit of its own ("STDL v1.15.3: ..."),
 measured like any other change. A release is an annotated `v*` tag on
 STDL's `main`: its workflow rebuilds the rolling `latest` release's
 files, and the port pins the submodule to the tag and builds the
-library itself. It is on v1.25.0 (November 2026). v1.22.0 released
+library itself. It is on v1.25.1 (November 2026). v1.22.0 released
 STDL's SDL2 add-on (`stdl/addons/sdl2`, `stdl/docs/sdl2.md`), which
 the 030 build draws through; until then it had been pinned to the
 add-on's branch, untagged, so that what the move found could be fixed
@@ -99,7 +99,8 @@ modules: `Mixer` asks `STDL_OpenVoices` and plays on the YM only when
 it fails. v1.24.0 added the add-on's experimental 68000 build, which
 only `make experimental` links: `FLASHBAK.TOS` and `FBACK030.TOS` came
 out byte for byte the same on it as on v1.23.3, and on v1.25.0, which
-made that build's ST screen faster, as on v1.24.0. `git -C stdl fetch --tags` exits
+made that build's ST screen faster, as on v1.24.0, and on v1.25.1,
+which made its 16 colours from those on screen, with a checkerboard. `git -C stdl fetch --tags` exits
 non-zero once `latest` has moved ("would clobber"); add `--force`. To
 measure a library change before its release, copy the changed files
 into `stdl/` for one build and put them back with `git -C stdl
@@ -485,10 +486,12 @@ the same code as before, in the ST build and the 030 build.
   | | STE | Mega STE |
   |---|---|---|
   | As first built | 225 | 122 |
-  | Now, 240 rows | 111 | 65 |
-  | Now, `crop_screen=true` | 99 | 54 |
+  | STDL v1.25.0, 240 rows | 111 | 65 |
+  | STDL v1.25.0, `crop_screen=true` | 99 | 54 |
+  | Colours from the screen, 240 rows | 119 | 69 |
+  | Colours from the screen, `crop_screen=true` | 106 | 58 |
 
-  So 18.5 frames a second on a Mega STE where there were 8.2. Where it
+  So 17 frames a second on a Mega STE where there were 8.2. Where it
   went, a Mega STE's frame:
   - 27% was `AMIGA_planar16`, upstream's bit loop decoding a
     character's frame to chunky, twice a frame; this build takes the ST
@@ -508,11 +511,35 @@ the same code as before, in the ST build and the 030 build.
   l1r26, l1r45fight, l2start, l3start and l5start is the 030 build's
   (`FHASH.BIN`, on a TT, where this build's pages and colours are the
   030 build's too, flip for flip).
+- **The 16 colours** (November 2026): the add-on makes them from the
+  colours on screen, not the whole palette, with a checkerboard of two
+  slots for a colour between them (`checkerboard=false` in `RS.CFG`,
+  read by this build alone, turns it off). Scored on the host over 15
+  frames of the bench replays against what a TT showed, the error a
+  pixel after a 2x2 average went from 84 to 38 on an ST and from 83 to
+  23 on an STE: the jungle's far foliage is green where it was purple,
+  level 2's walls teal where they were bright green. It costs 4ms a
+  frame on a Mega STE (54 to 58, cropped): 3 checking each changed
+  block for colours not seen, the rest the maps made again 3 times in
+  l1r26 as colours came. The frames came from a temporary
+  `replay_dump` that wrote the 256 colours too, scored by a host
+  program over STDL's `st.c`, whose comment has the figures.
+- **Cutscenes' colours, tried and dropped** (November 2026): the
+  cutscenes switched to the add-on's colours from the palette as a
+  whole, the cheaper way, and back after. On a Mega STE, every frame
+  drawn, the intro's work went from 12.1s to 11.3s and level 4's second
+  part (0x39) from 32.8s to 29.3s, but voyage's (0x34) from 49.4s to
+  51.3s, 3% less over the three, and their colours went flat and muddy
+  (screenshots of 0x39). The colour work in those scenes was at most a
+  fifth of the push: a count after a palette change (0x39 counted 11
+  times, 228ms each then; the count is assembler and twice as fast
+  now), maps made again, the screen converted after each. The rest is
+  converting what changes. STDL's `AGENTS.md` has the add-on's side.
 - The game still decodes planar sprites to chunky, draws them and
   converts the result back to planes, which the ST build's bakes never
   do: the ST build runs the bench replays at 23-55ms a frame on a
-  plain ST, where this build takes 99 on an STE.
-- Not run: cutscenes, the title, music, a plain ST (no DMA sound, so
+  plain ST, where this build takes 106 on an STE (cropped).
+- Not run: the title, music, a plain ST (no DMA sound, so
   no sound device there), a Falcon on RGB, any real machine. The
   border has its usual trouble on hardware ("Overscan on hardware:
   parked").

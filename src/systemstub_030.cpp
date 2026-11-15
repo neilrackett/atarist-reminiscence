@@ -125,6 +125,12 @@ void SystemStub_030::init(const char *title, int w, int h, bool fullscreen, int 
 	if (g_options.crop_screen) {
 		SDL_SetHint(STDL_SDL2_HINT_ST_TALL, "0");
 	}
+	// checkerboard=false: each of the palette's colours as one of the 16,
+	// where by default a colour between two of them is shown as both,
+	// pixel about (the add-on's STDL_SDL2_HINT_ST_DITHER)
+	if (!g_options.checkerboard) {
+		SDL_SetHint(STDL_SDL2_HINT_ST_DITHER, "0");
+	}
 #endif
 	// replay_hash: every page, before it goes up, against a chunky model
 	// of the screen the engine pushed to
