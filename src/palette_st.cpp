@@ -42,10 +42,7 @@
 #include "intern.h"
 #include "util.h"
 #include "video_st.h"
-
-void ST_setCustomPalette(const Color *cols, const uint8_t *map32);
-void ST_getHwColours(Color *cols);
-void ST_getAmigaColours(Color *cols, uint8_t *slots, bool *have);
+#include "st_palette.h"
 
 // what PALETTE\ holds, from one scan at startup: a bit per level file
 // (L1..L7) and per room of each level part

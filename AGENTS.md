@@ -19,7 +19,8 @@ Most of `src/` is upstream's engine, changed in place under
 | `entry_atari.cpp` | where the program starts, ahead of mintlib: clears the BSS, and on a TT or a Falcon the ST build hands over to `FBACK030.TOS` |
 | `main_atari.cpp` | `main`: reads `RS.CFG` into `g_options`, finds the data |
 | `systemstub_atari.cpp`, `.h` | the platform layer both Atari builds share, on STDL: keys, joystick and pads, the clock, the machine set-up and its log lines |
-| `systemstub_stdl.cpp` | the ST build's screen on top of it: screen modes and borders, the colour remap and its quantiser (256 logical colours to 16), the copy of the layer to the screen (`copyRectPlanar`) |
+| `systemstub_stdl.cpp` | the ST build's screen on top of it: screen modes and borders, the colours to the registers, the copy of the layer to the screen (`copyRectPlanar`) |
+| `st_palette.cpp`, `.h` | the ST's 16 colours from the engine's 256: the quantiser, the map from logical colours to slots, the fade that rides on it, the cutscene lock, custom palettes' slots; the ST build's, and the experimental build's on an ST (`ST_COLOURS`) |
 | `systemstub_030.cpp` | the 030 build's screen on top of it: STDL's SDL2 add-on on its 256-colour responsive screen, a texture over each of the engine's buffers and a push a copy of its box |
 | `video_st.cpp`, `video_st.h` | the planar layer the engine draws into (4 planes plus a priority plane, 256x224), its drawing primitives, room tiles and SGD backgrounds, perf counters |
 | `pagetrack.cpp`, `.h` | cutscene page tracking for both builds: the band of rows a scene draws in, and a box per page around what differs from the background, so copies and pushes move only that; the 030 build's page copies |
@@ -465,9 +466,10 @@ compiled for the 68000 and linked against STDL's experimental 68000
 build of the SDL2 add-on (`stdl/docs/sdl2.md`, "An experimental build
 for every machine"): one program for every machine. `ATARIST_030_ST`,
 which only this build defines, takes the machine check and the
-hand-over out of `__st_entry` and gives the stub's log line an ST's
-screen; without it the 030 stub, `video.cpp` and `game.cpp` build to
-the same code as before, in the ST build and the 030 build.
+hand-over out of `__st_entry`, gives the stub's log line an ST's
+screen and on an ST makes the ST build's 16 colours (`ST_COLOURS`);
+without it the 030 stub, `video.cpp`, `game.cpp` and `cutscene.cpp`
+build to the same code as before, in the ST build and the 030 build.
 
 - **On a TT or a Falcon** it is the 256-colour game. In Hatari it put
   up the same page and colours as `FBACK030.TOS` at every one of
@@ -492,8 +494,10 @@ the same code as before, in the ST build and the 030 build.
   | STDL v1.25.0, `crop_screen=true` | 99 | 54 |
   | Colours from the screen, 240 rows | 119 | 69 |
   | Colours from the screen, `crop_screen=true` | 106 | 58 |
+  | The ST build's colours, 240 rows | 113 | 66 |
+  | The ST build's colours, `crop_screen=true` | 101 | 55 |
 
-  So 17 frames a second on a Mega STE where there were 8.2. Where it
+  So 18 frames a second on a Mega STE where there were 8.2. Where it
   went, a Mega STE's frame:
   - 27% was `AMIGA_planar16`, upstream's bit loop decoding a
     character's frame to chunky, twice a frame; this build takes the ST
@@ -513,19 +517,47 @@ the same code as before, in the ST build and the 030 build.
   l1r26, l1r45fight, l2start, l3start and l5start is the 030 build's
   (`FHASH.BIN`, on a TT, where this build's pages and colours are the
   030 build's too, flip for flip).
-- **The 16 colours** (November 2026): the add-on makes them from the
-  colours on screen, not the whole palette, with a checkerboard of two
-  slots for a colour between them (`checkerboard=false` in `RS.CFG`,
-  read by this build alone, turns it off). Scored on the host over 15
-  frames of the bench replays against what a TT showed, the error a
-  pixel after a 2x2 average went from 84 to 38 on an ST and from 83 to
-  23 on an STE: the jungle's far foliage is green where it was purple,
-  level 2's walls teal where they were bright green. It costs 4ms a
-  frame on a Mega STE (54 to 58, cropped): 3 checking each changed
-  block for colours not seen, the rest the maps made again 3 times in
-  l1r26 as colours came. The frames came from a temporary
-  `replay_dump` that wrote the 256 colours too, scored by a host
-  program over STDL's `st.c`, whose comment has the figures.
+- **The 16 colours are the ST build's** (November 2026). On an ST this
+  build runs `st_palette.cpp`, the ST build's quantiser, map and
+  cutscene lock, fed by the same calls in `video.cpp`, `game.cpp` and
+  `cutscene.cpp` (`ST_COLOURS`), on the engine's colours kept where
+  the ST build keeps them (the stub's `_cols` is `STPalette`'s `_pal`
+  in this build). At each present it hands the add-on the map and the
+  16 colours when they changed (`giveColours`,
+  `STDL_SDL2_SetSTColours`), and a fade is the 16 dimmed under the same
+  map, which the add-on writes to the registers alone, as the ST build
+  does. A new map is a screen converted again, with the add-on's
+  checkerboard of two slots for a colour between them
+  (`checkerboard=false` in `RS.CFG`, read by this build alone, turns
+  it off). On a TT or a Falcon none of it runs: `g_stpal` is null and
+  every call that feeds it returns at once.
+  - Before, the add-on made them from the colours on screen, so they
+    moved with what each screen showed ("the palette is different on
+    every screen", Neil, on a Mega STE). Scored on the host over 15
+    frames of the bench replays against what a TT showed, those had
+    taken the error a pixel after a 2x2 average from 84 to 38 on an ST
+    and from 83 to 23 on an STE, against the palette as a whole (STDL's
+    `st.c` has the figures); the ST build's colours were not scored so.
+  - Checked against `FLASHBAK.TOS`: with `replay_dump` this build
+    writes its map and 16 colours after the layer, and frame 300 of
+    l1r26 on an STE showed the same colour on every pixel but a 16x18
+    box where the two builds draw the inventory icon a step apart.
+    Every frame of eight cutscenes (1,157 on an STE) had the same 16
+    colours as the ST build's. The slots' order differs: the quantiser
+    and the cutscene lock keep colours in the slots they already hold,
+    and the two builds come to a screen with other colours up (the ST
+    build writes its splash to the screen itself).
+  - It is faster: the add-on no longer checks each changed block for
+    colours it has not seen or makes its maps again, and the ST
+    build's quantiser runs at a palette change, remembering its last
+    four merges, where a cutscene's colour changes are 16 registers.
+    l1r26 and l3start took 2.2-4.4% less a frame on an STE and a Mega
+    STE, cropped and on 240 rows (Mega STE cropped, l1r26: 57.39 to
+    55.24ms), and the work of 0x00, 0x34 and 0x39 on a Mega STE, every
+    frame drawn, 7.8% less (87.9s to 81.1s).
+  - On a TT, l1r26 and l3start put up what `FBACK030.TOS` puts up at
+    every flip, and the intro, level 1's opening and 0x39 every frame,
+    screen and colours.
 - **Cutscenes' colours, tried and dropped** (November 2026): the
   cutscenes switched to the add-on's colours from the palette as a
   whole, the cheaper way, and back after. On a Mega STE, every frame
@@ -566,8 +598,11 @@ the ST quantises them to 16.
   pacing, `UNPACKED\`. `ST_PLANAR` (defined in `intern.h` for an
   `ATARIST` build without `ATARIST_030`) is the ST build's planar picture:
   `video_st.cpp`, the bakes, the display list, the cutscene caches and
-  frame skipper, the quantiser. The 030 build leaves the planar files out
+  frame skipper. The 030 build leaves the planar files out
   and draws with upstream's chunky code, as the desktop build does.
+  `ST_COLOURS`, the ST's 16 colours (`st_palette.cpp`), is the ST
+  build's and the experimental build's ("Experiments", above), not
+  the 030 build's.
 - **Two stubs on one base.** `systemstub_atari.cpp` is the shared
   platform layer. It has no data members, so the ST stub kept its
   layout when it was split out of it.

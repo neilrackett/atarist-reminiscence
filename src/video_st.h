@@ -124,7 +124,7 @@ enum {
 };
 
 // current logical->hardware colour map, rebuilt if the palette
-// changed (owned by systemstub_stdl.cpp)
+// changed (owned by st_palette.cpp)
 const uint8_t *ST_getRemap();
 
 // changes whenever ST_getRemap()'s contents change; anything holding

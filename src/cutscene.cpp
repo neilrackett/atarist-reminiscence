@@ -993,12 +993,14 @@ void Cutscene::op_refreshScreen() {
 		// while nothing drawn depends on the old mapping
 		++_stPart;
 		if (_stPrescan) {
-#ifdef ST_PLANAR
+#ifdef ST_COLOURS
 			ST_cutscenePalPart(_stPart);
 #endif
 		} else {
-#ifdef ST_PLANAR
+#ifdef ST_COLOURS
 			ST_cutscenePalLock(_stPart);
+#endif
+#ifdef ST_PLANAR
 			ST_shpColoursChanged(); // sprites are baked in colour
 #endif
 			if (!(g_options.ab & kAbCutHideAlways)) {
@@ -1470,7 +1472,7 @@ void Cutscene::op_setPalette() {
 	uint16_t off = READ_BE_UINT16(_polPtr + 6);
 	const uint8_t *p = _polPtr + off + num * 32;
 	copyPalette(p, palNum ^ 1);
-#ifdef ST_PLANAR
+#ifdef ST_COLOURS
 	if (_stPrescan) {
 		// the colours as AMIGA_convertColor reads them, kept at four
 		// bits a channel
@@ -2252,14 +2254,14 @@ void Cutscene::stPrescanPalette(uint16_t num) {
 	const int savedTextIndex = _creditsTextIndex;
 	const int savedTextLen = _creditsTextLen;
 
-#ifdef ST_PLANAR
+#ifdef ST_COLOURS
 	ST_cutscenePalReset();
 #endif
 	_stCopyParts = 0;
 	_stPrescan = true;
 	_stPrescanOps = 0;
 	_stPart = 0;
-#ifdef ST_PLANAR
+#ifdef ST_COLOURS
 	ST_cutscenePalPart(0);
 #endif
 	mainLoop(num);
@@ -2279,7 +2281,7 @@ void Cutscene::stPrescanPalette(uint16_t num) {
 	_stop = false;
 	_stPart = 0;
 	_stUsesCopyScreen = (g_options.ab & kAbCutHideAlways) ? _stCopyParts != 0 : (_stCopyParts & stPartBit(0)) != 0;
-#ifdef ST_PLANAR
+#ifdef ST_COLOURS
 	ST_cutscenePalLock(0);
 #endif
 }
@@ -2507,7 +2509,7 @@ void Cutscene::prepare() {
 }
 
 void Cutscene::playCredits() {
-#ifdef ST_PLANAR
+#ifdef ST_COLOURS
 	ST_setCutscenePalMode(true);
 #endif
 	if (_res->isMac()) {
@@ -2551,9 +2553,11 @@ void Cutscene::playCredits() {
 		}
 	}
 	_creditsSequence = false;
-#ifdef ST_PLANAR
+#ifdef ST_COLOURS
 	ST_cutscenePalUnlock();
 	ST_setCutscenePalMode(false);
+#endif
+#ifdef ST_PLANAR
 	_vid->ST_rebakeRoom();
 #endif
 }
@@ -2607,8 +2611,10 @@ void Cutscene::play() {
 		_statFrames = _statLate = _statSkipped = _statNoShow = 0;
 		_statWork = _statBudget = _statCopy = 0;
 		prepare();
-#ifdef ST_PLANAR
+#ifdef ST_COLOURS
 		ST_setCutscenePalMode(true);
+#endif
+#ifdef ST_PLANAR
 		// A cutscene is a half-height picture centred in the frame,
 		// with its captions on the middle line. Fit would squash it
 		// for nothing - the 12 rows Fill hides at each end are blank
@@ -2689,9 +2695,11 @@ void Cutscene::play() {
 		} else if (_id == 8 && g_options.play_caillou_cutscene) {
 			playSet(_caillouSetData, 0x5E4);
 		}
-#ifdef ST_PLANAR
+#ifdef ST_COLOURS
 		ST_cutscenePalUnlock();
 		ST_setCutscenePalMode(false);
+#endif
+#ifdef ST_PLANAR
 		if (fillForCutscene) {
 			_stub->setScreenMode(kScreenFit);
 		}

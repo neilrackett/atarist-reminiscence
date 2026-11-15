@@ -41,7 +41,7 @@ SRCS = entry_atari.cpp collision.cpp cutscene.cpp file.cpp \
 	piege.cpp \
 	protection.cpp resource.cpp sfx_player.cpp \
 	staticres.cpp splash_data.cpp unpack.cpp util.cpp video.cpp \
-	main_atari.cpp systemstub_atari.cpp systemstub_stdl.cpp video_st.cpp pagetrack.cpp st_stubs.cpp \
+	main_atari.cpp systemstub_atari.cpp systemstub_stdl.cpp st_palette.cpp video_st.cpp pagetrack.cpp st_stubs.cpp \
 	palette_st.cpp mod_player.cpp ym_sfx_st.cpp spritecache_st.cpp displaylist_st.cpp
 
 OBJS = $(SRCS:%.cpp=build/%.o)
@@ -108,7 +108,7 @@ $(TARGET): $(OBJS) $(STDL_LIB) | dist
 # libraries: the toolchain's 68020-60 ones assume an FPU, which a stock
 # Falcon and some TTs lack, and their mintlib will not start without
 # one.
-SRCS_030 = $(filter-out systemstub_stdl.cpp video_st.cpp spritecache_st.cpp displaylist_st.cpp palette_st.cpp,$(SRCS)) \
+SRCS_030 = $(filter-out systemstub_stdl.cpp st_palette.cpp video_st.cpp spritecache_st.cpp displaylist_st.cpp palette_st.cpp,$(SRCS)) \
 	systemstub_030.cpp
 OBJS_030 = $(SRCS_030:%.cpp=build030/%.o)
 TARGET_030 = dist/FBACK030.TOS
@@ -153,8 +153,9 @@ build030:
 # frame; an ST, an STE or a Mega STE shows the chunky picture reduced to
 # 16 colours, about 5 frames a second at 8MHz, to try the 030 build's
 # game where there is no TT or Falcon. ATARIST_030_ST takes the machine
-# check and the hand-over out of __st_entry (entry_atari.cpp).
-OBJS_EXP = $(SRCS_030:%.cpp=buildexp/%.o)
+# check and the hand-over out of __st_entry (entry_atari.cpp), and on an
+# ST makes the 16 colours as the ST build does (st_palette.cpp).
+OBJS_EXP = $(SRCS_030:%.cpp=buildexp/%.o) buildexp/st_palette.o
 TARGET_EXP = dist/FBACKEXP.TOS
 CXXFLAGS_EXP = $(CXXFLAGS) -DATARIST_030 -DATARIST_030_ST -m68000
 STDL_SDL2ST_LIB = $(STDL)/libstdl-sdl2-st.a

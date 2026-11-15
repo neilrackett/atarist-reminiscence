@@ -38,6 +38,8 @@ static void setKeymask(PlayerInput &pi, int keymask) {
 #endif
 
 #ifdef ATARIST_030_ST
+#include "st_palette.h"
+
 // The experimental build (make experimental) keeps the last frames it
 // decoded to chunky, where the 030 build decodes a character's frame and
 // every object piece again each time it draws one: on a 68000 that was
@@ -215,6 +217,19 @@ static void ST_replayHashFrame(const uint8_t *layer) {
 			fwrite((const void *)0xFFFF8240UL, 2, 16, fp);   // the colours on screen
 #endif
 			fwrite(layer, 1, kDump, fp);
+#ifdef ATARIST_030_ST
+			// on an ST the map and the 16 colours for the add-on, to set
+			// beside the ST build's slots and registers
+			if (g_stpal) {
+				fwrite(ST_getRemap(), 1, 256, fp);
+				Color hw[16];
+				ST_getHwColours(hw);
+				for (int i = 0; i < 16; ++i) {
+					const uint8_t rgb[3] = { hw[i].r, hw[i].g, hw[i].b };
+					fwrite(rgb, 1, 3, fp);
+				}
+			}
+#endif
 			fclose(fp);
 		}
 	}
@@ -349,7 +364,7 @@ static int ST_scanSaves(STSave *out, int max, int *newest) {
 	return n;
 }
 
-#ifdef ST_PLANAR
+#ifdef ST_COLOURS
 // On the Amiga data a monster has no palette of its own: its slot is
 // loaded with half of the object palette, entries (monster & 1) * 8
 // on (loadMonsterSprites).
@@ -840,6 +855,8 @@ void Game::displayTitleScreenAmiga() {
 #endif
 #ifdef ST_PLANAR
 	ST_paletteForRoom(0, 0, -1);        // the title chooses its own colours
+#endif
+#ifdef ST_COLOURS
 	ST_setColourWeights(0);
 #endif
 	_stub->useFillWindow(false);

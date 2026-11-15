@@ -27,6 +27,12 @@
 #if defined(ATARIST) && !defined(ATARIST_030)
 #define ST_PLANAR
 #endif
+// The ST's 16 colours made from the engine's 256 (st_palette.cpp): the
+// ST build's, and the experimental build's (ATARIST_030_ST), which on
+// an ST hands them to STDL's SDL2 add-on so both show the same colours.
+#if defined(ST_PLANAR) || defined(ATARIST_030_ST)
+#define ST_COLOURS
+#endif
 
 // gcc 4.6 will not inline into a function it considers large, and
 // the engine's per-frame workers are exactly that: the profile found

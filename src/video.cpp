@@ -2092,7 +2092,7 @@ void Video::AMIGA_setLevelPalettes(int level, const uint8_t *tmp) {
 	setPaletteSlotBE(0x9, (level == 0) ? _mapPalSlot1 : _mapPalSlot3);
 	// inventory
 	setPaletteSlotBE(0xA, _mapPalSlot3);
-#ifdef ST_PLANAR
+#ifdef ST_COLOURS
 	// Which logical entries are the Amiga's 32 colours: the background
 	// palette is colours 0-15 wherever it is loaded, the object palette
 	// (Conrad, items, the inventory) 16-31. Level 2's extra object

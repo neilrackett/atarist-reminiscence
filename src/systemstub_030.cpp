@@ -44,6 +44,17 @@
 #include "systemstub_atari.h"
 #include "util.h"
 #include "video_st.h"
+#ifdef ATARIST_030_ST
+#include "st_palette.h"
+extern "C" {
+#include <stdl/stdl_math.h>
+}
+// a channel at step eighths of its strength: on the 68000 a 16-bit
+// multiply, where an int's is a library call (768 for the palette)
+#define STEP_SCALE(v, step) (uint8_t)(STDL_MulU16((v), (step)) >> 3)
+#else
+#define STEP_SCALE(v, step) (uint8_t)((v) * (step) >> 3)
+#endif
 
 enum {
 	kFrameW = 320,
@@ -56,12 +67,28 @@ enum {
 	kSwap = 0x70
 };
 
+#ifdef ATARIST_030_ST
+// The experimental build on an ST (g_stpal set) makes its 16 colours as
+// the ST build does (st_palette.h), from the engine's colours, which it
+// keeps where the ST build does, and hands the add-on its map and
+// colours: the same colours as FLASHBAK.TOS shows, where the add-on's
+// own would make them again from what each screen shows.
+struct SystemStub_030 : SystemStub_Atari, STPalette {
+	int _stStep;               // the strength the 16 were last given at
+	bool _stCut;               // and the cutscene mode they were given in
+	SystemStub_030() : _cols(_pal) {}
+#else
 struct SystemStub_030 : SystemStub_Atari {
+#endif
 	int _srcW, _srcH;          // the picture the engine sends
 	SDL_Window *_win;
 	SDL_Renderer *_ren;
-	SDL_Palette *_pal;         // the renderer's: what the engine asked for
+	SDL_Palette *_renPal;      // the renderer's: what the engine asked for
+#ifdef ATARIST_030_ST
+	Color (&_cols)[256];       // the same, full strength: STPalette's
+#else
 	Color _cols[256];          // the same, full strength
+#endif
 	// the colours changed since the renderer last had them, sent once
 	// before the present: a cutscene sets 32 entries a frame, and a call
 	// of the renderer's each cost a Falcon's intro 1.8ms a frame
@@ -97,6 +124,9 @@ struct SystemStub_030 : SystemStub_Atari {
 	SDL_Texture *texture(const uint8_t *buf, int pitch);
 	void setColours(int first, int n, int step);
 	void sendColours();
+#ifdef ATARIST_030_ST
+	void giveColours(int step);
+#endif
 };
 
 static SystemStub_030 *g_stub;
@@ -146,16 +176,24 @@ void SystemStub_030::init(const char *title, int w, int h, bool fullscreen, int 
 		!(_ren = SDL_CreateRenderer(_win, -1, 0))) {
 		error("FBACK030.TOS needs a TT or a Falcon with a colour monitor: %s", SDL_GetError());
 	}
+#ifdef ATARIST_030_ST
+	if (STDL_GetVideoSurface()->format->BitsPerPixel == 4) {
+		resetColours();
+		g_stpal = this;
+		_stStep = 8;
+		_stCut = false;
+	}
+#endif
 	STDL_SDL2_SetBorderIndex(_ren, kSwap);
-	_pal = SDL_AllocPalette(256);
-	if (!_pal) {
+	_renPal = SDL_AllocPalette(256);
+	if (!_renPal) {
 		error("No memory for the palette");
 	}
 	memset(_cols, 0, sizeof(_cols));
 	setColours(0, 256, 8);
 	_palLo = 256;
 	_palHi = -1;
-	STDL_SDL2_SetRenderPalette(_ren, _pal);
+	STDL_SDL2_SetRenderPalette(_ren, _renPal);
 	const STDL_Surface *s = STDL_GetVideoSurface();
 	const int dbl = (s->stride == 2 * kFrameW) ? 1 : 0;
 	if (three && !(s->flags & STDL_TRIPLEBUF)) {
@@ -167,7 +205,7 @@ void SystemStub_030::init(const char *title, int w, int h, bool fullscreen, int 
 		// picture to the ST's 16 colours, on 240 rows with the bottom
 		// border open or ST Low's 200. An open border flips its own
 		// two pages whatever the flags say.
-		if (s->format->BitsPerPixel == 4) {
+		if (g_stpal) {
 			info("Screen: ST, 8 bits (emulated), %d rows, %d bytes a line, %d pages", s->h, s->stride,
 				(s->h == 200 && (s->flags & STDL_TRIPLEBUF)) ? 3 : 2);
 		} else
@@ -238,12 +276,12 @@ void SystemStub_030::setColours(int first, int n, int step) {
 	SDL_Color c[256];
 	for (int i = 0; i < n; ++i) {
 		const Color &s = _cols[first + i];
-		c[i].r = (uint8_t)(s.r * step >> 3);
-		c[i].g = (uint8_t)(s.g * step >> 3);
-		c[i].b = (uint8_t)(s.b * step >> 3);
+		c[i].r = STEP_SCALE(s.r, step);
+		c[i].g = STEP_SCALE(s.g, step);
+		c[i].b = STEP_SCALE(s.b, step);
 		c[i].a = 255;
 	}
-	SDL_SetPaletteColors(_pal, c, first, n);
+	SDL_SetPaletteColors(_renPal, c, first, n);
 }
 
 void SystemStub_030::sendColours() {
@@ -269,6 +307,9 @@ void SystemStub_030::setPalette(const uint8_t *pal, int n) {
 			_palHi = n - 1;
 		}
 	}
+#ifdef ATARIST_030_ST
+	_palDirty = true;                  // read on an ST alone
+#endif
 }
 
 void SystemStub_030::getPalette(uint8_t *pal, int n) {
@@ -280,6 +321,16 @@ void SystemStub_030::getPalette(uint8_t *pal, int n) {
 }
 
 void SystemStub_030::setPaletteEntry(int i, const Color *c) {
+#ifdef ATARIST_030_ST
+	// on an ST, as the ST build: an entry set to what it was changes
+	// nothing
+	if (g_stpal) {
+		if (_cols[i].r == c->r && _cols[i].g == c->g && _cols[i].b == c->b) {
+			return;
+		}
+		_palDirty = true;
+	}
+#endif
 	_cols[i] = *c;
 	if (i < _palLo) {
 		_palLo = i;
@@ -352,20 +403,71 @@ void SystemStub_030::copyRect(int x, int y, int w, int h, const uint8_t *buf, in
 }
 
 void SystemStub_030::updateScreen(int shakeOffset) {
+#ifdef ATARIST_030_ST
+	if (g_stpal) {
+		// a cutscene's end puts the room's colours back in _cols
+		// (ST_setCutscenePalMode) with no call here: all of them again
+		if (ST_cutscenePalMode() != _stCut) {
+			_stCut = !_stCut;
+			_palLo = 0;
+			_palHi = 255;
+		}
+		giveColours(8);
+	}
+#endif
 	sendColours();
 	SDL_RenderPresent(_ren);
 }
+
+#ifdef ATARIST_030_ST
+// On an ST: the ST build's map and 16 colours to the add-on at step
+// eighths of their strength, when they or the step changed
+// (STDL_SDL2_SetSTColours). The engine's colours go to the renderer at
+// full strength, as on a TT: a new map's second slots are made from
+// them, and under the same map the 16 are only the registers, so a fade
+// is the 16 dimmed, as on the ST build.
+void SystemStub_030::giveColours(int step) {
+	if (_palDirty) {
+		buildRemap();
+	}
+	if (!_hwDirty && step == _stStep) {
+		return;
+	}
+	STDL_Colour hw[16];
+	fadedColours(hw);
+	SDL_Color c[16];
+	for (int i = 0; i < 16; ++i) {
+		c[i].r = STEP_SCALE(hw[i].r, step);
+		c[i].g = STEP_SCALE(hw[i].g, step);
+		c[i].b = STEP_SCALE(hw[i].b, step);
+		c[i].a = 255;
+	}
+	STDL_SDL2_SetSTColours(_ren, _remap, c);
+	_hwDirty = false;
+	_stStep = step;
+}
+#endif
 
 // Fade to black on the palette alone, as the ST does: each step staged
 // for the next blank, and the colours back at the next present, which
 // the engine redraws for first.
 void SystemStub_030::fadeScreen() {
 	for (int step = 7; step >= 0; --step) {
+#ifdef ATARIST_030_ST
+		if (g_stpal) {
+			giveColours(step);
+		} else
+#endif
 		setColours(0, 256, step);
 		STDL_SDL2_StagePalette(_ren);
 		STDL_Delay(40);
 	}
 	clearScreen();
+#ifdef ATARIST_030_ST
+	if (g_stpal) {
+		return;                        // the renderer's were never dimmed
+	}
+#endif
 	setColours(0, 256, 8);
 	_palLo = 256;
 	_palHi = -1;
