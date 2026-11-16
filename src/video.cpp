@@ -41,8 +41,9 @@ Video::Video(Resource *res, SystemStub *stub, WidescreenMode widescreenMode)
 	_dlBackGen = 0;
 	memset(_prioDirty, 0xFF, sizeof(_prioDirty));
 #endif
-#ifndef ST_PLANAR
-	// the ST tracks block state in _blkDirty/_blkShown/_blkOwed instead
+#ifndef ATARIST
+	// the ST tracks block state in _blkDirty/_blkShown/_blkOwed instead,
+	// the 030 build in _blkTwo/_blkOne
 	_screenBlocks = (uint8_t *)calloc(1, (_w / SCREENBLOCK_W) * (_h / SCREENBLOCK_H));
 #endif
 #ifdef ST_PLANAR
@@ -56,6 +57,8 @@ Video::Video(Resource *res, SystemStub *stub, WidescreenMode widescreenMode)
 	_updates = 0;
 	_playUpdates = 0;
 	_restoreAll = true;
+	memset(_blkTwo, 0, sizeof(_blkTwo));
+	memset(_blkOne, 0, sizeof(_blkOne));
 #endif
 	_charFrontColor = 0;
 	_charTransparentColor = 0;
@@ -81,7 +84,7 @@ Video::~Video() {
 	free(_backLayer);
 	free(_tempLayer);
 	free(_tempLayer2);
-#ifndef ST_PLANAR
+#ifndef ATARIST
 	free(_screenBlocks);
 #endif
 }
@@ -372,6 +375,30 @@ bool Video::ST_blocksDirty(int x, int y, int w, int h) const {
 }
 #endif
 
+#ifdef ATARIST_030
+// The next run of set blocks in a band's mask. k is the mask from block
+// *i up, shifted down as it is read, so a walk ends at the band's last
+// set block: the run is [*i, *i + *n), and k what is above it.
+static inline bool nextRun32(uint32_t &k, int *i, int *n) {
+	if (k == 0) {
+		return false;
+	}
+	int first = *i;
+	while (!(k & 1)) {
+		k >>= 1;
+		++first;
+	}
+	int len = 0;
+	do {
+		k >>= 1;
+		++len;
+	} while (k & 1);
+	*i = first;
+	*n = len;
+	return true;
+}
+#endif
+
 void Video::markBlockAsDirty(int16_t x, int16_t y, uint16_t w, uint16_t h, int scale) {
 	debug(DBG_VIDEO, "Video::markBlockAsDirty(%d, %d, %d, %d)", x, y, w, h);
 #ifdef ST_PLANAR
@@ -414,6 +441,11 @@ void Video::markBlockAsDirty(int16_t x, int16_t y, uint16_t w, uint16_t h, int s
 	}
 	for (; by1 <= by2; ++by1) {
 		_blkDirty[by1] |= m;
+	}
+#elif defined(ATARIST_030)
+	const uint32_t m = (0xFFFFFFFFUL << bx1) & (0xFFFFFFFFUL >> (31 - bx2));
+	for (; by1 <= by2; ++by1) {
+		_blkTwo[by1] |= m;
 	}
 #else
 	uint8_t *row = _screenBlocks + (int16_t)by1 * (int16_t)cols;
@@ -511,19 +543,13 @@ void Video::updateScreen() {
 	// the Atari builds read the Amiga data, whose layers are 256x224
 	// (main_atari.cpp).
 	} else {
-		const int cols = GAMESCREEN_W / SCREENBLOCK_W, rows = GAMESCREEN_H / SCREENBLOCK_H;
-		uint32_t band[GAMESCREEN_H / SCREENBLOCK_H];
+		const int rows = kBlockRows;
+		uint32_t band[kBlockRows];
 		int count = 0;
-		uint8_t *p = _screenBlocks;
-		for (int j = 0; j < rows; ++j, p += cols) {
-			uint32_t m = 0;
-			for (int i = 0; i < cols; ++i) {
-				if (p[i] != 0) {
-					--p[i];
-					m |= 1UL << i;
-				}
-			}
-			band[j] = m;
+		for (int j = 0; j < rows; ++j) {
+			band[j] = _blkTwo[j] | _blkOne[j];
+			_blkOne[j] = _blkTwo[j];
+			_blkTwo[j] = 0;
 		}
 		for (int j = 0; j < rows; ) {
 			const uint32_t m = band[j];
@@ -535,18 +561,10 @@ void Video::updateScreen() {
 			while (j2 < rows && band[j2] == m) {
 				++j2;
 			}
-			for (int i = 0; i < cols; ) {
-				if (!(m & (1UL << i))) {
-					++i;
-					continue;
-				}
-				int i2 = i + 1;
-				while (i2 < cols && (m & (1UL << i2))) {
-					++i2;
-				}
-				VIDEO_BLIT(i * SCREENBLOCK_W, j * SCREENBLOCK_H, (i2 - i) * SCREENBLOCK_W, (j2 - j) * SCREENBLOCK_H);
+			uint32_t k = m;
+			for (int i = 0, n; nextRun32(k, &i, &n); i += n) {
+				VIDEO_BLIT(i * SCREENBLOCK_W, j * SCREENBLOCK_H, n * SCREENBLOCK_W, (j2 - j) * SCREENBLOCK_H);
 				++count;
-				i = i2;
 			}
 			j = j2;
 		}
@@ -614,17 +632,17 @@ void Video::updateWidescreen() {
 void Video::fullRefresh() {
 	debug(DBG_VIDEO, "Video::fullRefresh()");
 	_fullRefresh = true;
-#ifdef ATARIST_030
-	_restoreAll = true;
-#endif
-#ifndef ST_PLANAR
-	memset(_screenBlocks, 0, (_w / SCREENBLOCK_W) * (_h / SCREENBLOCK_H));
-#endif
 #ifdef ST_PLANAR
 	memset(_blkDirty, 0, sizeof(_blkDirty));
 	memset(_blkShown, 0, sizeof(_blkShown));
 	memset(_blkOwed, 0, sizeof(_blkOwed));
 	ST_dlInvalidate();
+#elif defined(ATARIST_030)
+	_restoreAll = true;
+	memset(_blkTwo, 0, sizeof(_blkTwo));
+	memset(_blkOne, 0, sizeof(_blkOne));
+#else
+	memset(_screenBlocks, 0, (_w / SCREENBLOCK_W) * (_h / SCREENBLOCK_H));
 #endif
 }
 
@@ -643,32 +661,22 @@ void Video::restoreFront() {
 		_restoreAll = false;
 		return;
 	}
-	const int cols = _w / SCREENBLOCK_W;
-	const uint8_t *p = _screenBlocks;
-	for (int j = 0; j < _h / SCREENBLOCK_H; ++j, p += cols) {
-		for (int i = 0; i < cols; ) {
-			if (p[i] == 0) {
-				++i;
-				continue;
-			}
-			int n = 1;
-			while (i + n < cols && p[i + n] != 0) {
-				++n;
-			}
+	for (int j = 0; j < kBlockRows; ++j) {
+		uint32_t k = _blkTwo[j] | _blkOne[j];
+		for (int i = 0, n; nextRun32(k, &i, &n); i += n) {
 			// a few longs a row, here: a call to memcpy a row was most
 			// of a run's cost, 160 a frame, and where the library's
 			// memmove fell in the 68030's instruction cache against this
 			// loop moved a Falcon's frame 0.4ms from one build to the next
-			const int offset = j * SCREENBLOCK_H * _w + i * SCREENBLOCK_W;
+			const int offset = j * (SCREENBLOCK_H * GAMESCREEN_W) + i * SCREENBLOCK_W;
 			uint32_t *d = (uint32_t *)(_frontLayer + offset);
 			const uint32_t *s = (const uint32_t *)(_backLayer + offset);
-			const int longs = n * (SCREENBLOCK_W / 4), skip = _w / 4 - longs;
+			const int longs = n * (SCREENBLOCK_W / 4), skip = GAMESCREEN_W / 4 - longs;
 			for (int y = SCREENBLOCK_H; --y >= 0; d += skip, s += skip) {
-				for (int k = longs; --k >= 0; ) {
+				for (int l = longs; --l >= 0; ) {
 					*d++ = *s++;
 				}
 			}
-			i += n;
 		}
 	}
 }
@@ -896,16 +904,12 @@ void Video::DOS_decodeSpm(const uint8_t *dataPtr, uint8_t *dst) {
 	} while (src < end);
 }
 
-// The table decoders below are the ST build's, and the experimental
-// build's (make experimental), which decodes a character's frame and
-// its objects' pieces to chunky every frame as the 030 build does, on a
-// 68000: AMIGA_planar16's bit loop was 27% of a Mega STE's frame there
-// and 33% of an STE's.
-#if defined(ST_PLANAR) || defined(ATARIST_030_ST)
-#define ST_SPREAD_DECODE
-#endif
-
-#ifdef ST_SPREAD_DECODE
+// The table decoders below are every Atari build's. The ST build bakes
+// from them; the 030 build decodes a character's frame and its objects'
+// pieces to chunky with them, where upstream's bit loop
+// (AMIGA_planar16) was 8.1ms of a Falcon's 28ms frame in play and, on
+// a 68000 (make experimental), 27% of a Mega STE's and 33% of an STE's.
+#ifdef ATARIST
 // Planes to chunky four pixels at a time: g_spread[p][n] puts the four
 // bits of nibble n at bit p of four bytes, leftmost pixel in the
 // first, so a plane's share of four pixels is one lookup. Testing a
@@ -992,7 +996,7 @@ static void AMIGA_planar16(uint8_t *dst, int w, int h, int depth, const uint8_t 
 }
 #endif
 
-#ifdef ST_SPREAD_DECODE
+#ifdef ATARIST
 // Eight pixels from four interleaved plane bytes, by the same table as
 // AMIGA_planar16: two lookups a plane where the bit loop below tested
 // every bit, ~320 cycles a pixel. Object pieces 8 and 24 pixels wide

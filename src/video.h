@@ -27,6 +27,7 @@ struct Video {
 		SCREENBLOCK_W = 8,
 #endif
 		SCREENBLOCK_H = 8,
+		kBlockRows = GAMESCREEN_H / SCREENBLOCK_H,
 		// dirty-block lifecycle: mark -> blit -> shown -> restore ->
 		// owed (one more blit) -> blit -> clean
 		kBlockClean = 0,
@@ -63,7 +64,6 @@ struct Video {
 	// and owes the screen one more blit. The same states used to be
 	// a byte a block, which meant walking all 448 of them twice a
 	// frame to find the handful that were set.
-	enum { kBlockRows = GAMESCREEN_H / SCREENBLOCK_H };
 	uint16_t _blkDirty[kBlockRows];
 	uint16_t _blkShown[kBlockRows];
 	uint16_t _blkOwed[kBlockRows];
@@ -109,13 +109,21 @@ struct Video {
 	uint32_t _playUpdates;      // ... as they stood after the last gameplay frame
 	bool _restoreAll;           // a full refresh since: the whole layer comes back
 	void restoreFront();
+	// Upstream's count a block (2 when drawn on, down one a push) as two
+	// bits a block, a band's 32 blocks a long: the push and the restore
+	// each read 28 longs where they went through 896 bytes, 4.7% of a
+	// Falcon's frame in play.
+	uint32_t _blkTwo[kBlockRows];   // drawn on since the last push
+	uint32_t _blkOne[kBlockRows];   // pushed once, one more to come
 #endif
 	uint8_t _unkPalSlot1, _unkPalSlot2;
 	uint8_t _mapPalSlot1, _mapPalSlot2, _mapPalSlot3, _mapPalSlot4;
 	uint8_t _charFrontColor;
 	uint8_t _charTransparentColor;
 	uint8_t _charShadowColor;
+#ifndef ATARIST_030
 	uint8_t *_screenBlocks;
+#endif
 	bool _fullRefresh;
 	uint8_t _shakeOffset;
 	drawCharFunc _drawChar;

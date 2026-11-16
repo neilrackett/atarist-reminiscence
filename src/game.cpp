@@ -39,18 +39,24 @@ static void setKeymask(PlayerInput &pi, int keymask) {
 
 #ifdef ATARIST_030_ST
 #include "st_palette.h"
+#endif
+#ifdef ATARIST_030
 
-// The experimental build (make experimental) keeps the last frames it
-// decoded to chunky, where the 030 build decodes a character's frame and
-// every object piece again each time it draws one: on a 68000 that was
-// 8ms of a Mega STE's 59ms frame with the table decoders, and a walk
-// cycle is a dozen frames. A frame is named as the ST build's bakes
-// name theirs, by its bytes' address and the epochs that move when
-// those bytes are replaced (Resource::_stBankEpoch, _stMonsterEpoch).
-// 162K from the heap at the first frame; without it, every frame is
-// decoded into the scratch buffer as before.
+// The 030 build keeps the last frames it decoded to chunky, where
+// upstream decodes a character's frame and every object piece again
+// each time it draws one: with video.cpp's table decoders that was
+// still 3.2ms of a Falcon's 26ms frame in play, as a walk cycle is a
+// dozen frames, and on a 68000 (make experimental) 8ms of a Mega STE's
+// 59ms frame. A frame is named as the ST build's bakes name theirs, by
+// its bytes' address and the epochs that move when those bytes are
+// replaced (Resource::_stBankEpoch, _stMonsterEpoch). 162K from the
+// heap, taken before any level's data so that it never sits between
+// one level's and the next; without it, every frame is decoded into
+// the scratch buffer as before.
 namespace {
-enum { kCfSpmN = 24, kCfSpmSize = 4096, kCfSpcN = 64, kCfSpcSize = 1024 };
+// a character's frame is at most 32 by 127 and an object's piece 32 by
+// 32, so each fits its slot
+enum { kCfSpmN = 24, kCfSpmShift = 12, kCfSpcN = 64, kCfSpcShift = 10 };
 struct CfEntry {
 	const uint8_t *src;
 	uint32_t epoch;
@@ -58,39 +64,38 @@ struct CfEntry {
 };
 CfEntry g_cfSpm[kCfSpmN], g_cfSpc[kCfSpcN];
 uint8_t *g_cfMem;
-bool g_cfTried;
 uint8_t g_cfNextSpm, g_cfNextSpc;
+}
+
+static void stChunkyFramesInit() {
+	if (!(g_options.ab & kAb030NoKeptFrames)) {
+		g_cfMem = (uint8_t *)malloc((kCfSpmN << kCfSpmShift) + (kCfSpcN << kCfSpcShift));
+	}
 }
 
 // a character's frame (spm) or an object's piece, w by h, decoded: from
 // the frames kept, or decoded now
 static const uint8_t *stChunkyFrame(Game *g, bool spm, const uint8_t *src, int w, int h) {
-	if (!g_cfTried) {
-		g_cfTried = true;
-		g_cfMem = (uint8_t *)malloc(kCfSpmN * kCfSpmSize + kCfSpcN * kCfSpcSize);
-	}
 	uint8_t *dst = g->_res._scratchBuffer;
-	// a character's frame is at most 32 by 127, so it always fits
-	const bool fits = g_cfMem && (spm || w * h <= kCfSpcSize);
-	if (fits) {
+	if (g_cfMem) {
 		CfEntry *e = spm ? g_cfSpm : g_cfSpc;
 		const int n = spm ? kCfSpmN : kCfSpcN;
 		const uint32_t epoch = (g->_res._stMonsterEpoch << 16) | (g->_res._stBankEpoch & 0xFFFF);
-		uint8_t *mem = spm ? g_cfMem : g_cfMem + kCfSpmN * kCfSpmSize;
-		const int size = spm ? kCfSpmSize : kCfSpcSize;
+		uint8_t *mem = spm ? g_cfMem : g_cfMem + (kCfSpmN << kCfSpmShift);
+		const int shift = spm ? kCfSpmShift : kCfSpcShift;
 		for (int i = 0; i < n; ++i) {
 			if (e[i].src == src && e[i].epoch == epoch && e[i].w == w && e[i].h == h) {
-				return mem + i * size;
+				return mem + (i << shift);
 			}
 		}
 		uint8_t &next = spm ? g_cfNextSpm : g_cfNextSpc;
 		const int i = next;
-		next = (uint8_t)((i + 1) % n);
+		next = (uint8_t)(i + 1 == n ? 0 : i + 1);
 		e[i].src = src;
 		e[i].epoch = epoch;
 		e[i].w = (uint16_t)w;
 		e[i].h = (uint16_t)h;
-		dst = mem + i * size;
+		dst = mem + (i << shift);
 	}
 	if (spm) {
 		g->_vid.AMIGA_decodeSpm(src, dst);
@@ -561,6 +566,9 @@ void Game::run() {
 
 	_res.init();
 	_res.load_TEXT();
+#ifdef ATARIST_030
+	stChunkyFramesInit();
+#endif
 #ifdef ST_PLANAR
 	ST_sprSetDecoder(stDecode, this, _res._scratchBuffer, Resource::kScratchBufferSize);
 #endif
@@ -2823,7 +2831,7 @@ void Game::drawAnimBuffer(uint8_t stateNum, AnimBufferState *state) {
 					{
 #ifdef ST_PLANAR
 						ST_drawCharacterBaked(state->dataPtr, state->x, state->y, state->h, state->w, pge->flags);
-#elif defined(ATARIST_030_ST)
+#elif defined(ATARIST_030)
 						drawCharacter(stChunkyFrame(this, true, state->dataPtr, 0, 0), state->x, state->y, state->h, state->w, pge->flags);
 #else
 						_vid.AMIGA_decodeSpm(state->dataPtr, _res._scratchBuffer);
@@ -2956,12 +2964,12 @@ void Game::drawObjectFrame(const uint8_t *bankDataPtr, const uint8_t *dataPtr, i
 		return;
 	}
 #endif
-#ifdef ATARIST_030_ST
+#ifdef ATARIST_030
 	const uint8_t *kept = 0;
 #endif
 	switch (_res._type) {
 	case kResourceTypeAmiga:
-#ifdef ATARIST_030_ST
+#ifdef ATARIST_030
 		kept = stChunkyFrame(this, false, src, sprite_w, sprite_h);
 #else
 		_vid.AMIGA_decodeSpc(src, sprite_w, sprite_h, _res._scratchBuffer);
@@ -2980,7 +2988,7 @@ void Game::drawObjectFrame(const uint8_t *bankDataPtr, const uint8_t *dataPtr, i
 	}
 
 	src = _res._scratchBuffer;
-#ifdef ATARIST_030_ST
+#ifdef ATARIST_030
 	if (kept) {
 		src = kept;
 	}

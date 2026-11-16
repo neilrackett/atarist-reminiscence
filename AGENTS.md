@@ -501,10 +501,11 @@ build to the same code as before, in the ST build and the 030 build.
   went, a Mega STE's frame:
   - 27% was `AMIGA_planar16`, upstream's bit loop decoding a
     character's frame to chunky, twice a frame; this build takes the ST
-    build's table decoders (`ST_SPREAD_DECODE` in `video.cpp`) and
-    keeps the frames it decoded (`stChunkyFrame` in `game.cpp`, named
-    by their bytes' address and the two epochs, as the bakes are;
-    162K from the heap): 122 to 84, then 59 to 54;
+    build's table decoders (`video.cpp`) and keeps the frames it
+    decoded (`stChunkyFrame` in `game.cpp`, named by their bytes'
+    address and the two epochs, as the bakes are; 162K from the heap):
+    122 to 84, then 59 to 54. The 030 build has had both since ("The
+    speed round" in its section);
   - the add-on converts only the groups of a pushed box that differ
     from what the screen has, as the engine pushes every block it drew
     on, changed or not: its conversion went from 20ms a frame to 6
@@ -844,7 +845,8 @@ Falcon.
   - the band in cutscenes: another -29%;
   - only what changed, inside the band: another -21%.
 - **The TT has room to spare, and the Falcon keeps up.**
-  - In play, 31.5ms a frame is just inside a 30Hz step.
+  - In play, 31.5ms a frame is just inside a 30Hz step (20ms since
+    the speed round, below).
   - Its cutscenes are within their budget on average, and the frame
     skipper keeps them at their scripted pace. Before this they ran up
     to 48% slow (level 1's opening, music on).
@@ -934,6 +936,57 @@ with its own conversion on STDL's screen, in Hatari as above):
   every box); the C loop with post-increments (gcc 4.6 built the same
   code); the stub padded so the layers sat where they had (no change:
   not their alignment).
+
+**The speed round** (November 2026; Hatari as above, three pages,
+against the build as released). A frame's work in play fell 46% on
+both machines, every picture as it was. Work is a frame's time less
+Flip's wait for the blank: on a TT what is saved becomes a longer
+wait, and a replay's frames went only from 23.15ms to 18.37 (a
+Falcon's from 43.00 to 23.75).
+
+| The ten replays, ms of work a frame | TT | Falcon on VGA |
+|---|---|---|
+| As released | 21.50 | 42.79 |
+| The table decoders and the block masks | 13.10 | 25.89 |
+| Decoded frames kept | 11.51 | 22.65 |
+
+- **Sprites are decoded by the ST build's table decoders**
+  (`video.cpp`, every Atari build's now). Upstream's `AMIGA_planar16`
+  tests a bit at a time, and this build ran it for a character's frame
+  and every object piece at every draw: 8.1ms of a Falcon's 28ms frame
+  in a profile of l1r26, and `AMIGA_decodeSpc` 1.6 more. Voyage (0x34)
+  decodes with it too: 67% of its budget to 50 on a Falcon.
+- **Decoded frames are kept** (`stChunkyFrame` in `game.cpp`, first the
+  experimental build's): the last 24 character frames and 64 object
+  pieces, named by their bytes' address and the two epochs, as the
+  bakes are. 162K, taken at start-up so that it never sits between one
+  level's data and the next. `ab=0x800000` turns it off. Trying the
+  slot after the last one found before the search, as a frame draws
+  its pieces in the order they were kept, gained nothing (19.62ms
+  against 19.57, with the add-on's compare in STDL besides).
+- **Dirty blocks are two masks a band** (`_blkTwo`, `_blkOne`):
+  upstream's count a block, 2 when drawn on and down one a push, as
+  two bits, a band's 32 blocks a long. The push and the restore each
+  read 28 longs where they went through 896 bytes, twice a frame, and
+  a mark is an OR a band: 4.7% of a Falcon's frame and 4.8% of a TT's
+  (21.39ms to 20.38 and 10.82 to 10.30, measured on a later STDL).
+- **Memory:** 170K less free at a level's load, the kept frames:
+  1,366-1,478K on a 4MB Falcon (it was 1,536-1,648K) and 1,049-1,161K
+  on a 4MB TT with no TT-RAM (1,219-1,331K). The bank arena keeps its
+  384K.
+- **Correctness:**
+  - Every replay ends where its recording did, and puts up the page
+    and colours at every flip that the code before the round put up:
+    the ten on a TT and three on a Falcon on VGA. The add-on's screen
+    check agreed at every flip, and at the title's 65.
+  - Eight cutscenes drew every frame as the released binary draws it,
+    screen and colours, on a TT (1,157 frames), and three of them on a
+    Falcon on VGA.
+  - The ST build's objects are as they were (`objdump -d -r`).
+- **Not run:** any real machine. A real TT takes 2.3 times as long as
+  Hatari's over the same code (STDL's CPUCHK), so its frames in busy
+  rooms are likely past the 30Hz step as released, and this is where
+  it should show.
 
 **Testing it:**
 - Run Hatari's TT with `--mmu off`. With the MMU and the data cache
