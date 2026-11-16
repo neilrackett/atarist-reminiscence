@@ -147,6 +147,16 @@ void SystemStub_030::init(const char *title, int w, int h, bool fullscreen, int 
 	// gives two where the third page does not fit.
 	const bool three = g_options.screen_pages != 2;
 	SDL_SetHint(STDL_SDL2_HINT_PAGES, three ? "3" : "2");
+	// The engine pushes every block it drew on, and a character drawn
+	// again as he stood is most of them: three groups in four of a
+	// replay's pushes were on screen already (l1r26: 217 pushed a frame,
+	// 57 changed). The add-on compares each with a chunky copy of the
+	// screen it keeps, 76.8K, and converts the ones that differ: 14%
+	// less work a frame in play on a TT and on a Falcon (11.60ms to 9.90
+	// and 22.84 to 19.57 over the ten replays).
+	if (!(g_options.ab & kAb030NoCompare)) {
+		SDL_SetHint(STDL_SDL2_HINT_COMPARE, "1");
+	}
 #ifdef ATARIST_030_ST
 	// The experimental build on an ST: crop_screen=true is ST Low, the
 	// picture's middle 200 rows of 224, on three pages, where the tall

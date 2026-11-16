@@ -231,7 +231,7 @@ static void initOptions() {
 		// replay=N plays it back untimed and logs what it cost.
 		{ "record", &g_options.record, 0, 99 },
 		{ "replay", &g_options.replay, 0, 99 },
-		{ "ab", &g_options.ab, 0, 0xFFFFFF },
+		{ "ab", &g_options.ab, 0, 0x1FFFFFF },
 		{ "replay_dump", &g_options.replay_dump, 0, 32767 },
 		// cutscene=N plays scene N (hex as 0x34) and quits: the
 		// cutscene benchmark

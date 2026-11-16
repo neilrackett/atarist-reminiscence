@@ -855,7 +855,7 @@ Falcon.
   - the band in cutscenes: another -29%;
   - only what changed, inside the band: another -21%.
 - **The TT has room to spare, and the Falcon keeps up.**
-  - In play, 31.5ms a frame is just inside a 30Hz step (20ms since
+  - In play, 31.5ms a frame is just inside a 30Hz step (17ms since
     the speed round, below).
   - Its cutscenes are within their budget on average, and the frame
     skipper keeps them at their scripted pace. Before this they ran up
@@ -948,17 +948,19 @@ with its own conversion on STDL's screen, in Hatari as above):
   not their alignment).
 
 **The speed round** (November 2026; Hatari as above, three pages,
-against the build as released). A frame's work in play fell 46% on
-both machines, every picture as it was. Work is a frame's time less
-Flip's wait for the blank: on a TT what is saved becomes a longer
-wait, and a replay's frames went only from 23.15ms to 18.37 (a
-Falcon's from 43.00 to 23.75).
+against the build as released, on STDL v1.26.0; the last step is on
+v1.30.0). A frame's work in play
+fell 54% on both machines, every picture as it was. Work is a frame's
+time less Flip's wait for the blank: on a TT what is saved becomes a
+longer wait, and a replay's frames went only from 23.15ms to 18.36
+(a Falcon's from 43.00 to 22.08).
 
 | The ten replays, ms of work a frame | TT | Falcon on VGA |
 |---|---|---|
 | As released | 21.50 | 42.79 |
 | The table decoders and the block masks | 13.10 | 25.89 |
 | Decoded frames kept | 11.51 | 22.65 |
+| The newer STDL and its compare | 9.90 | 19.57 |
 
 - **Sprites are decoded by the ST build's table decoders**
   (`video.cpp`, every Atari build's now). Upstream's `AMIGA_planar16`
@@ -973,30 +975,67 @@ Falcon's from 43.00 to 23.75).
   level's data and the next. `ab=0x800000` turns it off. Trying the
   slot after the last one found before the search, as a frame draws
   its pieces in the order they were kept, gained nothing (19.62ms
-  against 19.57, with the add-on's compare in STDL besides).
+  against 19.57).
 - **Dirty blocks are two masks a band** (`_blkTwo`, `_blkOne`):
   upstream's count a block, 2 when drawn on and down one a push, as
   two bits, a band's 32 blocks a long. The push and the restore each
   read 28 longs where they went through 896 bytes, twice a frame, and
   a mark is an OR a band: 4.7% of a Falcon's frame and 4.8% of a TT's
-  (21.39ms to 20.38 and 10.82 to 10.30, measured on a later STDL).
-- **Memory:** 170K less free at a level's load, the kept frames:
-  1,366-1,478K on a 4MB Falcon (it was 1,536-1,648K) and 1,049-1,161K
-  on a 4MB TT with no TT-RAM (1,219-1,331K). The bank arena keeps its
-  384K.
+  (21.39ms to 20.38 and 10.82 to 10.30, before the rest was tidied).
+- **The add-on compares what the engine pushes**
+  (`STDL_SDL2_HINT_COMPARE`). The engine pushes every block it drew
+  on, and a character drawn again as he stood is most of them: l1r26
+  pushes 217 groups a frame, of which 57 changed. The add-on keeps a
+  chunky copy of the screen, 76.8K, compares each pushed group with it
+  and converts the ones that differ, about 70 cycles for a group the
+  screen has. `ab=0x1000000` turns it off.
+  - Play: 14% less work on both machines, off and on in one binary
+    (11.60ms to 9.90 on a TT, 22.84 to 19.57 on a Falcon). The push
+    less its flip went from 4.38ms to 2.72 on a TT and from 8.70
+    to 5.49 on a Falcon. l2start, where 202 of 350 groups pushed had
+    changed, gained nothing (a Falcon's 27.38ms to 27.54).
+  - Cutscenes (eight scenes, music off, every frame drawn): 3.9% less
+    work on a TT and 3.2% on a Falcon. Level 4's second part (0x39),
+    the Falcon's heaviest, 13% less; 0x41, 22 frames, 6% more; voyage
+    1.8% more.
+  - It had been tried earlier in the month and set aside at 1.3ms of a
+    Falcon's 31ms frame, where this saves 3.3, and nothing on a TT,
+    whose frames were timed with the wait. That code was not kept; its
+    compare was C, about 110 cycles a group against the assembler's
+    70. STDL's `AGENTS.md`, "The SDL2 add-on", has the add-on's side.
+- **Cutscenes** as a whole (the same eight scenes): 27.7s of work to
+  23.5 on a TT and 56.8s to 48.8 on a Falcon. Voyage 26% less, from the
+  decoders; 0x39 18% less; 0x41 5% more on a Falcon. With the player's
+  settings a Falcon showed 93.2% of their frames against 92.3%, and
+  132 of the 154 in 0x39's first part against 117.
+- **The experimental build** got the masks with this build's code and
+  the compare's assembler from STDL, where its ST screen had compared
+  in C: l1r26 and l3start, cropped, 89.56 and 106.60ms a frame to 85.81
+  and 102.45 on an STE, 49.63 and 59.40 to 47.81 and 57.37 on a Mega
+  STE (the new STDL against v1.29.0, the game the same), every replay
+  ending where its recording did.
+- **Memory:** 250K less free at a level's load, the kept frames, the
+  chunky copy and its bookkeeping: 1,285-1,397K on a 4MB Falcon (it was
+  1,536-1,648K) and 968-1,080K on a 4MB TT with no TT-RAM (1,219-
+  1,331K). The bank arena keeps its 384K. With TT-RAM both are there:
+  1,476K against 1,615K at level 5's load on 2MB and 4MB.
 - **Correctness:**
   - Every replay ends where its recording did, and puts up the page
     and colours at every flip that the code before the round put up:
-    the ten on a TT and three on a Falcon on VGA. The add-on's screen
-    check agreed at every flip, and at the title's 65.
+    the ten on a TT and three on a Falcon on VGA, and against the
+    released binary itself three on RGB and four on a TT with 2MB of
+    ST-RAM and 4MB of TT-RAM. The add-on's screen check agreed at
+    every flip, and at the title's 65.
   - Eight cutscenes drew every frame as the released binary draws it,
-    screen and colours, on a TT (1,157 frames), and three of them on a
-    Falcon on VGA.
-  - The ST build's objects are as they were (`objdump -d -r`).
-- **Not run:** any real machine. A real TT takes 2.3 times as long as
-  Hatari's over the same code (STDL's CPUCHK), so its frames in busy
-  rooms are likely past the 30Hz step as released, and this is where
-  it should show.
+    screen and colours, on a TT and on a Falcon on VGA (1,157 frames
+    each), and three of them on RGB.
+  - The ST build's objects are as they were (`objdump -d -r`), but for
+    `main_atari.o`, which has `ab=`'s range.
+- **On Neil's TT** (16 November 2026) it "feels really smooth". A
+  real TT takes 2.3 times as long as Hatari's over the same code
+  (STDL's CPUCHK), so its frames in busy rooms were likely past the
+  30Hz step as released. No `RS.LOG` from it has been set against
+  these figures, and no Falcon has run it.
 
 **Testing it:**
 - Run Hatari's TT with `--mmu off`. With the MMU and the data cache
@@ -1109,16 +1148,6 @@ Falcon's from 43.00 to 23.75).
   1.8% off a TT's (the intro's push 3% and 13%): the push is not bound
   by its writes to ST-RAM. The guards and the layout cost more than
   that, and the binary came out 2% slower than without it.
-- The add-on converting only the groups of a pushed box that changed,
-  as its experimental build does on an ST (November 2026; STDL's
-  `AGENTS.md`, "The SDL2 add-on", has the write-up). Behind a hint in
-  the 030 build, every flip of l1r26 and l3start as before: the
-  conversion about halved (TT 3.1 to 1.7ms a frame, Falcon 6.1 to
-  3.3), but play went only from 31.28 to 29.99 and 40.69 to 39.72ms a
-  frame on a Falcon, and not at all on a TT (18.67 to 18.71, 20.77 to
-  20.43); cutscene work on a Falcon 3% less over 0x00, 0x34 and 0x39,
-  voyage 1.5% more. The conversion is 15-20% of a frame there, and the
-  compare cost 76.8K and most of the add-on's size budget.
 - The engine built with `ATARIST` off, with STDL only for input and
   sound: it would have lost the menus, the port's sound, record and
   replay, and the pacing.

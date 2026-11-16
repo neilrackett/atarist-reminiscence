@@ -238,7 +238,8 @@ enum {
 	kAbCutSmallArenas = 1 << 21,   // a 4MB machine's cutscene caches at the 2.5MB sizes
 	kAbCutNoBand = 1 << 22,        // cutscene pages untracked: every copy, clear and push the whole page
 	// the 030 build's
-	kAb030NoKeptFrames = 1 << 23   // every character's frame and object piece decoded at every draw
+	kAb030NoKeptFrames = 1 << 23,  // every character's frame and object piece decoded at every draw
+	kAb030NoCompare = 1 << 24      // STDL converts every group pushed, changed or not
 };
 
 // ST port: the four screen modes, in the order the menu cycles them
