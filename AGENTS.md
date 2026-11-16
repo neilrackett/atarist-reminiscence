@@ -84,7 +84,7 @@ and the port moves to it in a commit of its own ("STDL v1.15.3: ..."),
 measured like any other change. A release is an annotated `v*` tag on
 STDL's `main`: its workflow rebuilds the rolling `latest` release's
 files, and the port pins the submodule to the tag and builds the
-library itself. It is on v1.30.0 (November 2026). v1.22.0 released
+library itself. It is on v1.31.0 (November 2026). v1.22.0 released
 STDL's SDL2 add-on (`stdl/addons/sdl2`, `stdl/docs/sdl2.md`), which
 the 030 build draws through; until then it had been pinned to the
 add-on's branch, untagged, so that what the move found could be fixed
@@ -113,7 +113,11 @@ splash. On it the ST build drew what `ref` draws in every replay in
 the same time (321,965ms against 321,995 on v1.26.0), and the 030
 build put up every page of three replays as before on a TT and a
 Falcon, its frames' work 11.60ms against 11.51 on a TT and 22.84
-against 22.65 on a Falcon. `git -C stdl fetch --tags` exits
+against 22.65 on a Falcon. v1.31.0 added names to STDL's SDL 1.2
+shim, which no build of the game links: `FLASHBAK.TOS`,
+`FBACK030.TOS` and `FBACKEXP.TOS` came out byte for byte as on
+v1.30.0 but for the version in the start-up line, so nothing was
+measured again. `git -C stdl fetch --tags` exits
 non-zero once `latest` has moved ("would clobber"); add `--force`. To
 measure a library change before its release, copy the changed files
 into `stdl/` for one build and put them back with `git -C stdl
