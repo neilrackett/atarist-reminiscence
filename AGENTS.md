@@ -84,7 +84,7 @@ and the port moves to it in a commit of its own ("STDL v1.15.3: ..."),
 measured like any other change. A release is an annotated `v*` tag on
 STDL's `main`: its workflow rebuilds the rolling `latest` release's
 files, and the port pins the submodule to the tag and builds the
-library itself. It is on v1.26.0 (November 2026). v1.22.0 released
+library itself. It is on v1.30.0 (November 2026). v1.22.0 released
 STDL's SDL2 add-on (`stdl/addons/sdl2`, `stdl/docs/sdl2.md`), which
 the 030 build draws through; until then it had been pinned to the
 add-on's branch, untagged, so that what the move found could be fixed
@@ -103,7 +103,17 @@ out byte for byte the same on it as on v1.23.3, and on v1.25.0, which
 made that build's ST screen faster, as on v1.24.0, and on v1.25.1,
 which made its 16 colours from those on screen, with a checkerboard,
 and on v1.26.0, which takes a program's own 16
-(`STDL_SDL2_SetSTColours`). `git -C stdl fetch --tags` exits
+(`STDL_SDL2_SetSTColours`). v1.26.1 to v1.29.0 added nothing this game
+calls (pixel pairs, the SDL2 calls a PC program's port meets, the SDL1
+add-on, rasters on a TT). v1.30.0 has the add-on's compare
+(`STDL_SDL2_HINT_COMPARE`, "The speed round" in the 030 build's
+section) and writes a line at start-up saying whose library it is
+(`STDL_UseBanner`), which every build of the game shows before its
+splash. On it the ST build drew what `ref` draws in every replay in
+the same time (321,965ms against 321,995 on v1.26.0), and the 030
+build put up every page of three replays as before on a TT and a
+Falcon, its frames' work 11.60ms against 11.51 on a TT and 22.84
+against 22.65 on a Falcon. `git -C stdl fetch --tags` exits
 non-zero once `latest` has moved ("would clobber"); add `--force`. To
 measure a library change before its release, copy the changed files
 into `stdl/` for one build and put them back with `git -C stdl
